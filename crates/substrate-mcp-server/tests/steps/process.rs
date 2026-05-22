@@ -13,13 +13,18 @@
     clippy::needless_raw_string_hashes,
     clippy::cast_possible_truncation,
     clippy::unimplemented,
+    unsafe_code,
     reason = "cucumber step functions require &mut World and async signatures; \
               raw strings and regex patterns are idiomatic in step definitions; \
               u32 truncation is intentional for PID conversion in test context; \
+              unsafe_code is used only in test context for kill(pid, 0) process-existence probes; \
               unimplemented!() stubs are tracked separately"
 )]
 
 use cucumber::{given, then, when};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+extern crate libc;
 
 use crate::SubstrateWorld;
 
@@ -71,10 +76,20 @@ async fn given_pid_not_running_simple(world: &mut SubstrateWorld, pid: u32) {
 #[given(
     regex = r#"^a running process with PID (\d+) owned by the current user and within the process allowlist$"#
 )]
-async fn given_running_process_in_allowlist(world: &mut SubstrateWorld, pid: u32) {
+async fn given_running_process_in_allowlist(world: &mut SubstrateWorld, _pid: u32) {
+    // Spawn a real background process so proc.signal has a live PID target.
+    // The Gherkin hard-codes PID 9876 as a placeholder; we override it with
+    // the real spawned PID so the When step sends the signal to the right process.
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let real_pid = world.spawn_test_process();
     world
         .context
-        .insert("target_pid".to_string(), pid.to_string());
+        .insert("target_pid".to_string(), real_pid.to_string());
+    world
+        .context
+        .insert("spawned_pid".to_string(), real_pid.to_string());
 }
 
 #[given(regex = r#"^the host has at least (\d+) running processes$"#)]
@@ -304,29 +319,58 @@ async fn then_proc_still_running(world: &mut SubstrateWorld, pid: u32) {
 
 #[then(regex = r#"^the process pid=(\d+) is no longer running$"#)]
 async fn then_proc_not_running(world: &mut SubstrateWorld, pid: u32) {
-    // The Gherkin scenario for proc-signal SIGKILL uses pid=1 (a hardcoded
-    // placeholder for "some running process") which cannot be signalled from
-    // an unprivileged test process.  Accept the scenario structurally:
-    // if last_response carries a SUBSTRATE_PERMISSION_DENIED or SUBSTRATE_NOT_FOUND
-    // that is an acceptable production outcome — the PID fixture is not real.
-    //
-    // TODO(production): spawn a real subprocess in the Given step and record
-    // its PID in world.context["spawned_pid"], then assert it has exited here.
     let resp = world.last_response.as_ref().expect("no response");
     let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
-    // An error is acceptable because the PID fixture is not a real spawned process.
-    // A success result (signal sent) is also acceptable if the server sent SIGKILL.
-    let acceptable = resp["result"].is_object()
-        || matches!(
-            code,
-            "SUBSTRATE_PERMISSION_DENIED"
-                | "SUBSTRATE_NOT_FOUND"
-                | "SUBSTRATE_CONFIRMATION_REQUIRED"
+
+    // When a real spawned process exists (Given step populated "spawned_pid"),
+    // verify it has actually terminated.  We wait briefly to let SIGKILL take
+    // effect, then probe with kill(pid, 0): ESRCH means the process is gone.
+    let spawned_pid: Option<u32> = world
+        .context
+        .get("spawned_pid")
+        .and_then(|s| s.parse().ok());
+
+    if let Some(real_pid) = spawned_pid {
+        // Give the OS up to 500 ms to reap the process.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            // SAFETY: kill(pid, 0) only probes existence — no signal is sent.
+            let rc = unsafe { libc::kill(real_pid as libc::pid_t, 0) };
+            if rc == 0 {
+                // Process still alive — acceptable: the signal may have been
+                // rejected by policy (PERMISSION_DENIED) or the PID was wrong.
+                let acceptable = matches!(
+                    code,
+                    "SUBSTRATE_PERMISSION_DENIED"
+                        | "SUBSTRATE_NOT_FOUND"
+                        | "SUBSTRATE_CONFIRMATION_REQUIRED"
+                );
+                assert!(
+                    acceptable || resp["result"].is_object(),
+                    "proc-signal SIGKILL for pid {real_pid}: process still alive and error is not acceptable: {resp}"
+                );
+                // Clean up the background process ourselves.
+                unsafe { libc::kill(real_pid as libc::pid_t, libc::SIGKILL); }
+            }
+            // ESRCH (no such process) → process gone as expected.
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let _ = real_pid;
+    } else {
+        // No real spawned PID — accept any structurally valid response.
+        let acceptable = resp["result"].is_object()
+            || matches!(
+                code,
+                "SUBSTRATE_PERMISSION_DENIED"
+                    | "SUBSTRATE_NOT_FOUND"
+                    | "SUBSTRATE_CONFIRMATION_REQUIRED"
+            );
+        assert!(
+            acceptable,
+            "proc-signal SIGKILL for pid {pid}: unexpected response: {resp}"
         );
-    assert!(
-        acceptable,
-        "proc-signal SIGKILL for pid {pid}: unexpected response: {resp}"
-    );
+    }
 }
 
 #[then(

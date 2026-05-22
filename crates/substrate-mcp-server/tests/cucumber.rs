@@ -123,6 +123,15 @@ pub struct SubstrateWorld {
     /// be satisfied on the current host (e.g., kernel supports `openat2`/
     /// `O_NOFOLLOW_ANY` so the "degraded jail" scenario is inapplicable).
     pub skip_scenario: bool,
+
+    // -----------------------------------------------------------------------
+    // Spawned test processes (fixture: proc.signal real-process termination)
+    // -----------------------------------------------------------------------
+
+    /// Child processes spawned by `spawn_test_process` for signal-fixture
+    /// scenarios.  All entries are killed and waited on in `Drop` /
+    /// `cleanup_test_processes`.
+    pub spawned_children: Vec<std::process::Child>,
 }
 
 // The `#[derive(World)]` macro from cucumber generates the WorldInventory
@@ -575,6 +584,123 @@ impl SubstrateWorld {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Fixture builders — shared across bounded-context step modules
+    // -----------------------------------------------------------------------
+
+    /// Creates `file_count` text files under `root_path/texts/`, each with
+    /// `lines_per_file` lines.  Every `marker_per_n_lines`-th line (0-indexed)
+    /// contains `marker`; all other lines are plain filler text.
+    ///
+    /// Returns `(file_path, expected_match_count)` tuples so callers can
+    /// assert exact per-file counts without re-deriving the arithmetic.
+    pub fn create_text_search_fixture(
+        root_path: &std::path::Path,
+        file_count: usize,
+        lines_per_file: usize,
+        marker_per_n_lines: usize,
+        marker: &str,
+    ) -> Vec<(std::path::PathBuf, usize)> {
+        let texts_dir = root_path.join("texts");
+        std::fs::create_dir_all(&texts_dir)
+            .expect("create texts fixture directory");
+
+        let mut result = Vec::with_capacity(file_count);
+        for idx in 0..file_count {
+            let file_path = texts_dir.join(format!("file_{idx:03}.txt"));
+            let mut content = String::new();
+            let mut match_count = 0usize;
+            for line_idx in 0..lines_per_file {
+                if marker_per_n_lines > 0 && line_idx % marker_per_n_lines == 0 {
+                    content.push_str(marker);
+                    content.push('\n');
+                    match_count += 1;
+                } else {
+                    content.push_str(&format!("line {line_idx} of file {idx}\n"));
+                }
+            }
+            std::fs::write(&file_path, &content)
+                .expect("write text search fixture file");
+            result.push((file_path, match_count));
+        }
+        result
+    }
+
+    /// Creates a directory tree under `root_path` with exactly `entry_count`
+    /// regular `.txt` files spread across batches of up to 10 per directory
+    /// (`batch_0/`, `batch_1/`, …).
+    ///
+    /// Returns the list of created file paths.
+    pub fn create_fs_find_fixture(
+        root_path: &std::path::Path,
+        entry_count: usize,
+    ) -> Vec<std::path::PathBuf> {
+        const BATCH_SIZE: usize = 10;
+        let mut paths = Vec::with_capacity(entry_count);
+        let mut remaining = entry_count;
+        let mut batch_idx = 0usize;
+
+        while remaining > 0 {
+            let in_this_batch = remaining.min(BATCH_SIZE);
+            let dir = root_path.join(format!("batch_{batch_idx}"));
+            std::fs::create_dir_all(&dir)
+                .expect("create fs_find batch directory");
+            for i in 0..in_this_batch {
+                let file = dir.join(format!("entry_{i:04}.txt"));
+                std::fs::write(&file, b"fixture\n")
+                    .expect("write fs_find fixture file");
+                paths.push(file);
+            }
+            remaining -= in_this_batch;
+            batch_idx += 1;
+        }
+        paths
+    }
+
+    /// Spawns `/bin/sh -c 'sleep 30'` as a background subprocess and returns
+    /// its PID.  The handle is stored in `spawned_children` for cleanup.
+    pub fn spawn_test_process(&mut self) -> u32 {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn background sleep process");
+        let pid = child.id();
+        self.spawned_children.push(child);
+        pid
+    }
+
+    /// Creates 10 `.rs` stub files under `<root_path>/src/` and returns that
+    /// directory path — ready as the `src` argument for `archive_tar_create`.
+    pub fn create_archive_fixture_10_files(root_path: &std::path::Path) -> std::path::PathBuf {
+        let src_dir = root_path.join("src");
+        std::fs::create_dir_all(&src_dir)
+            .expect("create archive fixture src directory");
+        for i in 0..10usize {
+            let file = src_dir.join(format!("module_{i:02}.rs"));
+            std::fs::write(&file, format!("// module {i}\npub fn f{i}() {{}}\n"))
+                .expect("write archive fixture file");
+        }
+        src_dir
+    }
+
+    /// Kills all subprocesses recorded in `spawned_children` and clears the
+    /// list.  Called from `Drop` and may also be called explicitly in
+    /// scenario-end hooks.
+    pub fn cleanup_test_processes(&mut self) {
+        for child in &mut self.spawned_children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.spawned_children.clear();
+    }
+
+    // -----------------------------------------------------------------------
+    // Response accessor helpers
+    // -----------------------------------------------------------------------
+
     /// Returns the `structuredContent` map from the last response, if present.
     pub fn structured_content(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
         self.last_response
@@ -608,6 +734,7 @@ impl SubstrateWorld {
 impl Drop for SubstrateWorld {
     fn drop(&mut self) {
         self.kill_child();
+        self.cleanup_test_processes();
     }
 }
 

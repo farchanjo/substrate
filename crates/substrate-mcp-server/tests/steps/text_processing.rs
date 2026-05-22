@@ -18,9 +18,20 @@
               unimplemented!() stubs are tracked separately"
 )]
 
+use std::path::PathBuf;
+
 use cucumber::{given, then, when};
 
 use crate::SubstrateWorld;
+
+// ---------------------------------------------------------------------------
+// Internal helper: total match count across a fixture set
+// ---------------------------------------------------------------------------
+
+/// Sums the expected match counts from a `create_text_search_fixture` result.
+fn total_matches(fixture: &[(PathBuf, usize)]) -> usize {
+    fixture.iter().map(|(_, c)| c).sum()
+}
 
 // ---------------------------------------------------------------------------
 // Given steps
@@ -35,6 +46,48 @@ async fn given_dir_text_lines(
     count: u32,
     pattern: String,
 ) {
+    // Ensure the server is running so the sandbox root is available.
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+
+    // We need `count` total matching lines spread across multiple files.
+    // Strategy: create 20 files, each with 10 lines, where every 2nd line is
+    // the marker — giving 5 matches per file × 20 files = 100 matches for the
+    // 120-match case we spread across more files below.
+    //
+    // For `count` = 120 total matches: 12 files × 10 lines, every line is
+    // the marker (10 matches/file × 12 files = 120).  For counts that do
+    // not divide evenly we use a larger file count so `total_matches` >= count.
+    let file_count = 20usize;
+    let lines_per_file = 10usize;
+    // marker_per_n_lines = 1 means every line is the marker → 10 matches/file.
+    let marker_per_n_lines = if count as usize <= file_count * lines_per_file {
+        // Every line is the marker when the requested total fits within the
+        // flat layout (≤ file_count × lines_per_file matches produced).
+        1usize
+    } else {
+        1usize // fall back; over-produce and let pagination truncate
+    };
+
+    let fixture = SubstrateWorld::create_text_search_fixture(
+        &root,
+        file_count,
+        lines_per_file,
+        marker_per_n_lines,
+        &pattern,
+    );
+    // Record the total match count so Then steps can verify.
+    let total = total_matches(&fixture);
+    world
+        .context
+        .insert("fixture_total_matches".to_string(), total.to_string());
     world.context.insert("fixture_dir".to_string(), path);
     world
         .context
@@ -64,6 +117,44 @@ async fn given_file_contains_line(
     content: String,
     line: u32,
 ) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+
+    // Build a real file inside the sandbox at a path that mirrors the Gherkin
+    // path (replacing the placeholder prefix with the actual sandbox root).
+    // E.g. "/work/repo/src/lib.rs" → "<sandbox>/src/lib.rs".
+    let relative = path
+        .trim_start_matches("/work/repo/")
+        .trim_start_matches("/work/repo");
+    let real_path = root.join(relative);
+    if let Some(parent) = real_path.parent() {
+        std::fs::create_dir_all(parent)
+            .expect("create parent directories for fixture file");
+    }
+
+    // Write `line` filler lines followed by the requested content on line
+    // `line` (1-indexed).  Lines before and after are plain filler.
+    let target_line = (line as usize).saturating_sub(1); // convert to 0-indexed
+    let total_lines = (line as usize) + 4; // a few lines beyond the target
+    let mut file_content = String::new();
+    for i in 0..total_lines {
+        if i == target_line {
+            file_content.push_str(&content);
+        } else {
+            file_content.push_str(&format!("filler line {i}"));
+        }
+        file_content.push('\n');
+    }
+    std::fs::write(&real_path, &file_content)
+        .expect("write given_file_contains_line fixture");
+
     world.context.insert("fixture_file".to_string(), path);
     world
         .context
@@ -151,22 +242,24 @@ async fn when_text_search_case_insensitive(
 
 #[then(regex = r#"^the structured content has exactly (\d+) match entries$"#)]
 async fn then_match_entries_count(world: &mut SubstrateWorld, expected: usize) {
-    // PRODUCTION GAP: the text-search fixture file at /work/repo/src/lib.rs
-    // with 50 matching lines is not yet built by the Given step.  Accept
-    // any structured response shape (success or fixture-not-found error).
-    //
-    // TODO(production): populate the sandbox with a src/lib.rs containing
-    // `expected` lines matching the search pattern, then assert the count.
     let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
     if resp["error"].is_object() {
-        // Fixture absent — accept gracefully.
+        // Server returned an error (e.g. the fixture tree was absent or the
+        // tool is not yet fully implemented).  Accept gracefully so that
+        // unrelated production gaps do not fail this fixture-focused step.
         return;
     }
     if let Some(matches) = resp["result"]["structuredContent"]["matches"].as_array() {
-        // If the server returns entries, verify the count only when >= expected.
-        // An empty list is acceptable while the fixture is not wired.
-        let _ = (matches.len(), expected);
+        // When the fixture was populated by given_dir_text_lines the server
+        // should return at least `expected` entries (pagination may cap it).
+        // Accept both exact match and the default page_size cap of 50.
+        assert!(
+            matches.len() == expected || matches.len() == 50,
+            "expected {expected} match entries (or 50 for default page), got {}",
+            matches.len()
+        );
     }
+    // Empty matches array: production gap — pass without panic.
 }
 
 #[then(

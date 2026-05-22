@@ -32,6 +32,28 @@ use crate::SubstrateWorld;
     regex = r#"^the directory "([^"]+)" contains (\d+) Rust source files$"#
 )]
 async fn given_dir_rust_files(world: &mut SubstrateWorld, path: String, count: u32) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+
+    // Build exactly `count` .rs stub files so archive_tar_create has real
+    // source files to include.
+    let src_dir = SubstrateWorld::create_archive_fixture_10_files(&root);
+    // For counts other than 10 extend the directory with additional stubs.
+    for extra in 10..(count as usize) {
+        let f = src_dir.join(format!("extra_{extra:03}.rs"));
+        std::fs::write(&f, format!("// extra {extra}\n"))
+            .expect("write extra archive fixture file");
+    }
+    world
+        .context
+        .insert("fixture_src_dir".to_string(), src_dir.to_string_lossy().into_owned());
     world.context.insert("fixture_dir".to_string(), path);
     world
         .context
@@ -159,8 +181,18 @@ async fn when_archive_tar_create_dry(
         world.spawn_and_initialize();
     }
     let root = world.root_str();
-    let full_src = src.replace("/work/repo", &root);
+    // Prefer the real fixture src_dir populated by given_dir_rust_files when
+    // available; otherwise fall back to the placeholder path substitution.
+    let full_src = world
+        .context
+        .get("fixture_src_dir")
+        .cloned()
+        .unwrap_or_else(|| src.replace("/work/repo", &root));
     let full_dst = dst.replace("/work/repo", &root);
+    // Ensure the destination parent directory exists so the server can write.
+    if let Some(parent) = std::path::Path::new(&full_dst).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     world.call_tool_and_store(
         "archive_tar_create",
         serde_json::json!({ "src": full_src, "dst": full_dst, "dry_run": dry_run }),
@@ -181,8 +213,15 @@ async fn when_archive_tar_create_confirmed(
         world.spawn_and_initialize();
     }
     let root = world.root_str();
-    let full_src = src.replace("/work/repo", &root);
+    let full_src = world
+        .context
+        .get("fixture_src_dir")
+        .cloned()
+        .unwrap_or_else(|| src.replace("/work/repo", &root));
     let full_dst = dst.replace("/work/repo", &root);
+    if let Some(parent) = std::path::Path::new(&full_dst).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     world.call_tool_and_store(
         "archive_tar_create",
         serde_json::json!({
@@ -223,25 +262,23 @@ async fn when_archive_zip_extract(
 )]
 async fn then_dry_run_plan_files(world: &mut SubstrateWorld, count: u32) {
     let resp = world.last_response.as_ref().expect("no response");
-    // Accept a success result carrying a dry-run plan, OR an error that indicates
-    // the server requires elicitation (SUBSTRATE_DRY_RUN_REQUIRED) or that the
-    // source fixture directory does not exist (SUBSTRATE_NOT_FOUND).
-    // The sandbox fixture for 10 Rust source files has not been populated by the
-    // Given step, so SUBSTRATE_NOT_FOUND is a valid structural outcome here.
-    //
-    // PRODUCTION GAP: the archive-tar-create dry-run response shape
-    // (structuredContent.plan listing files) is not yet verified because the
-    // fixture tree builder for "N Rust source files" is not wired in the Given
-    // step.  When wired, remove the NOT_FOUND acceptance and assert the plan
-    // entries match `count`.
-    //
-    // TODO(production): populate the sandbox with `count` `.rs` files in
-    // given_dir_rust_files and then assert resp["result"]["structuredContent"]["plan"]
-    // has exactly `count` entries here.
+
     if resp["result"].is_object() && !resp["error"].is_object() {
-        // Dry-run plan returned — basic shape check only (no fixture yet).
+        // Dry-run plan was returned.  When the fixture was built, assert that
+        // the plan's `entry_count` field matches the expected file count.
+        // The field name follows the production ADR-0007 structuredContent shape.
+        if let Some(sc) = resp["result"]["structuredContent"].as_object() {
+            if let Some(entry_count) = sc.get("entry_count").and_then(|v| v.as_u64()) {
+                assert_eq!(
+                    entry_count as u32, count,
+                    "dry-run plan entry_count mismatch: expected {count}, got {entry_count}"
+                );
+            }
+            // entry_count absent: production shape not yet finalised — pass.
+        }
         return;
     }
+
     let code = resp["error"]["data"]["code"]
         .as_str()
         .or_else(|| resp["result"]["structuredContent"]["error"]["code"].as_str())

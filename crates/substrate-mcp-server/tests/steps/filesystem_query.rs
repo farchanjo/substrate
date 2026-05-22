@@ -49,6 +49,44 @@ async fn given_dir_contains_n_files(
     count: u32,
     pattern: String,
 ) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+
+    // Build a fixture tree with exactly `count` files so that fs.find returns
+    // the expected number of entries.  The files are plain .txt files; the
+    // pattern used in the Gherkin ("*.rs") is replaced at the call-site with
+    // the actual sandbox pattern, but the fixture builder uses .txt extensions
+    // — the server pattern "*.rs" won't match them, so we create .rs stubs
+    // when the pattern ends with ".rs".
+    let use_rs = pattern.ends_with(".rs");
+    let root_for_fixture = root.clone();
+    let created = if use_rs {
+        // Create .rs files using the archive fixture helper (reused here).
+        let src_dir = root_for_fixture.join("rs_files");
+        std::fs::create_dir_all(&src_dir)
+            .expect("create rs_files fixture directory");
+        let mut paths = Vec::with_capacity(count as usize);
+        for i in 0..(count as usize) {
+            let f = src_dir.join(format!("file_{i:04}.rs"));
+            std::fs::write(&f, b"// fixture\n")
+                .expect("write .rs fixture file");
+            paths.push(f);
+        }
+        paths
+    } else {
+        SubstrateWorld::create_fs_find_fixture(&root_for_fixture, count as usize)
+    };
+
+    world
+        .context
+        .insert("fixture_file_count".to_string(), created.len().to_string());
     world.context.insert("fixture_dir".to_string(), path);
     world
         .context
@@ -76,6 +114,30 @@ async fn given_dir_contains_exactly(
     count: u32,
     pattern: String,
 ) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+
+    let use_rs = pattern.ends_with(".rs");
+    if use_rs {
+        let src_dir = root.join("rs_files_exact");
+        std::fs::create_dir_all(&src_dir)
+            .expect("create rs_files_exact fixture directory");
+        for i in 0..(count as usize) {
+            let f = src_dir.join(format!("exact_{i:04}.rs"));
+            std::fs::write(&f, b"// exact fixture\n")
+                .expect("write .rs exact fixture file");
+        }
+    } else {
+        SubstrateWorld::create_fs_find_fixture(&root, count as usize);
+    }
+
     world.context.insert("fixture_dir".to_string(), path);
     world
         .context
