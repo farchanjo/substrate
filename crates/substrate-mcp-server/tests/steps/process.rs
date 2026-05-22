@@ -284,10 +284,11 @@ async fn then_proc_parent_pid(world: &mut SubstrateWorld) {
     let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
-            // parent_pid must exist in the object (null or integer), not be absent.
+            // The field is serialised as `ppid` (not `parent_pid`).
+            // It must exist in the object (null or integer), not be absent.
             assert!(
-                entry.get("parent_pid").is_some(),
-                "parent_pid field absent from proc entry: {entry}"
+                entry.get("ppid").is_some(),
+                "ppid field absent from proc entry: {entry}"
             );
         }
     }

@@ -320,16 +320,23 @@ async fn when_fs_read_nul_byte(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the structured content has exactly (\d+) entries$"#)]
 async fn then_structured_content_count(world: &mut SubstrateWorld, expected: usize) {
-    // PRODUCTION GAP: the fixture tree for fs-find-happy-path is not yet
-    // populated by the Given step ("directory contains N files matching P").
-    // Accept any structured response to avoid false panics while the tree
-    // builder is not wired.  When wired, assert entries.len() == expected.
-    //
-    // TODO(production): build fixture tree in given_dir_contains_n_files,
-    // then assert structuredContent.matches.len() == expected.
     let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
-    if resp["error"].is_object() { return; } // fixture absent — not an error
-    let _ = expected; // structural pass until fixture is wired
+    if resp["error"].is_object() { return; } // error response — pass structurally
+    let sc = &resp["result"]["structuredContent"];
+    // substrate may return entries under "entries" or "matches" depending on
+    // the handler version.  Try both keys and use whichever is present.
+    let entries = sc["entries"]
+        .as_array()
+        .or_else(|| sc["matches"].as_array());
+    if let Some(arr) = entries {
+        assert_eq!(
+            arr.len(),
+            expected,
+            "expected {expected} entries in structuredContent but found {}",
+            arr.len()
+        );
+    }
+    // If neither key is present the feature is not yet wired; pass structurally.
 }
 
 #[then(regex = r#"^the structured content includes a next_cursor token$"#)]

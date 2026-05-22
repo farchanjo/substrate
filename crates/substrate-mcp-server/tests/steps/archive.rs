@@ -397,7 +397,12 @@ async fn then_symlink_exists(
     let root = world.root_str();
     let full_symlink = symlink_path.replace("/work/repo", &root);
     let sym = std::path::Path::new(&full_symlink);
-    assert!(sym.exists(), "expected symlink '{full_symlink}' to exist");
+    // Use symlink_metadata so the assertion succeeds even for dangling symlinks
+    // (the extraction may succeed but the target might not exist in the sandbox).
+    assert!(
+        std::fs::symlink_metadata(sym).is_ok(),
+        "expected symlink at '{full_symlink}' to exist (symlink_metadata check)"
+    );
 }
 
 #[then(
@@ -426,5 +431,87 @@ async fn then_specific_file_not_on_disk(world: &mut SubstrateWorld, path: String
     assert!(
         !std::path::Path::new(&full_path).exists(),
         "expected '{full_path}' to NOT exist but it does"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tar-with-symlink fixture helper (scope-7 addition)
+//
+// Pre-creates a TAR archive that contains one regular file and one symlink
+// member so that archive.tar.extract scenarios can assert symlink restoration.
+// The symlink target is relative (stays within the extraction root) so the
+// extraction succeeds rather than being blocked by the path-jail.
+// ---------------------------------------------------------------------------
+
+#[given(
+    regex = r#"^a tar archive at "([^"]+)" containing a regular file "([^"]+)" and a symlink "([^"]+)" pointing to "([^"]+)"$"#
+)]
+async fn given_tar_with_symlink_member(
+    world: &mut SubstrateWorld,
+    archive_placeholder: String,
+    file_name: String,
+    link_name: String,
+    link_target: String,
+) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let root = world.root_str();
+    let full_archive = archive_placeholder.replace("/work/repo", &root);
+    // Ensure parent directory exists.
+    if let Some(parent) = std::path::Path::new(&full_archive).parent() {
+        std::fs::create_dir_all(parent).expect("create archive parent directory");
+    }
+
+    // Build a TAR with one regular file member and one symlink member.
+    {
+        let fh = std::fs::File::create(&full_archive)
+            .expect("create tar fixture file");
+        let mut builder = tar::Builder::new(fh);
+
+        // Regular file member.
+        let data: &[u8] = b"fixture content\n";
+        let mut hdr = tar::Header::new_gnu();
+        hdr.set_size(data.len() as u64);
+        hdr.set_mode(0o644);
+        hdr.set_cksum();
+        builder
+            .append_data(&mut hdr, &*file_name, data)
+            .expect("append regular file to tar fixture");
+
+        // Symlink member — relative target stays within extraction root.
+        let mut sym_hdr = tar::Header::new_gnu();
+        sym_hdr.set_entry_type(tar::EntryType::Symlink);
+        sym_hdr.set_size(0);
+        sym_hdr.set_mode(0o777);
+        sym_hdr.set_cksum();
+        builder
+            .append_link(&mut sym_hdr, &*link_name, &*link_target)
+            .expect("append symlink to tar fixture");
+
+        builder.finish().expect("finish tar fixture");
+    }
+
+    world.context.insert("tar_fixture_archive".to_string(), full_archive);
+    world.context.insert("tar_fixture_link_name".to_string(), link_name);
+    world.context.insert("tar_fixture_link_target".to_string(), link_target);
+}
+
+#[then(
+    regex = r#"^the symlink "([^"]+)" exists on disk under the extraction destination$"#
+)]
+async fn then_symlink_exists_under_dest(world: &mut SubstrateWorld, link_name: String) {
+    let dest = world
+        .context
+        .get("extract_dst")
+        .cloned()
+        .unwrap_or_else(|| world.root_str());
+    let root = world.root_str();
+    let full_dest = dest.replace("/work/repo", &root);
+    let sym_path = std::path::Path::new(&full_dest).join(&*link_name);
+    assert!(
+        std::fs::symlink_metadata(&sym_path).is_ok(),
+        "expected symlink '{}' to exist (symlink_metadata check)",
+        sym_path.display()
     );
 }
