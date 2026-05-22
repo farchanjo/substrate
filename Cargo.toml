@@ -1,0 +1,160 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/substrate-domain",
+    "crates/substrate-jobs",
+    "crates/substrate-fs-index",
+    "crates/substrate-policy",
+    "crates/substrate-config",
+    "crates/substrate-fs-query",
+    "crates/substrate-fs-mutation",
+    "crates/substrate-process",
+    "crates/substrate-system-info",
+    "crates/substrate-text",
+    "crates/substrate-archive",
+    "crates/substrate-mcp-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/archanjo/substrate"
+homepage = "https://github.com/archanjo/substrate"
+
+[workspace.dependencies]
+# Domain-only deps (zero infra)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+async-trait = "0.1"
+futures = "0.3"
+uuid = { version = "1", features = ["v7", "serde"] }
+tracing = "0.1"
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+anyhow = "1"
+
+# Infra / async runtime
+tokio = { version = "1.4", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "io-util",
+    "time",
+    "sync",
+    "signal",
+    "fs",
+] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+toml = "0.8"
+
+# MCP transport (ADR-0006): STDIO only; no transport-sse, no transport-streamable-http
+rmcp = { version = "1.7", default-features = false, features = ["server", "transport-io", "macros"] }
+
+# Security / filesystem
+strict-path = "0.2"
+nix = { version = "0.30", features = ["fs", "process", "signal", "user", "hostname"] }
+
+# Concurrency utilities
+arc-swap = "1"
+dashmap = "6"
+num_cpus = "1"
+
+# Native filesystem traversal
+ignore = "0.4"
+globset = "0.4"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
+# System / process info
+sysinfo = "0.33"
+
+# Text / search
+regex = "1"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+
+# SIMD acceleration (ADR-0043)
+# blake3: mmap feature DISABLED per ADR-0032 (signal-safety: SIGBUS risk)
+blake3 = { version = "1", default-features = false, features = ["std"] }
+simdutf8 = "0.1"
+memchr = "2"
+aho-corasick = "1"
+bytecount = "0.6"
+base64-simd = "0.8"
+crc32fast = "1"
+libdeflater = "1"
+
+# Archiving (Zone A async-native)
+async-compression = { version = "0.4", features = ["tokio", "gzip", "zstd", "deflate"] }
+async_zip = { version = "0.0", features = ["tokio", "deflate"] }
+tokio-tar = "0.3"
+
+# Archiving (Zone B/C sync — used inside spawn_blocking)
+tar = "0.4"
+flate2 = "1"
+zip = "2"
+
+# Hashing (Zone C)
+sha2 = "0.10"
+
+# Observability
+tracing-appender = "0.2"
+
+# JSON Schema generation (Task A: tool input schemas via schemars derive)
+schemars = { version = "1", features = ["derive"] }
+
+# Dev / test
+proptest = "1"
+criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+rstest = "0.23"
+insta = { version = "1", features = ["json", "yaml"] }
+tempfile = "3"
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = "none"
+
+[profile.bench]
+inherits = "release"
+
+[workspace.lints.rust]
+# unsafe_code is "deny" at workspace level. Modules that require unsafe
+# (platform syscall carve-outs per ADR-0042/ADR-0043/ADR-0044) override
+# locally with #[allow(unsafe_code, reason = "...")] — which is permitted
+# because forbid cannot be downgraded per-module, but deny can.
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "warn"
+unimplemented = "warn"
+disallowed_methods = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "warn"
+missing_crate_level_docs = "warn"
