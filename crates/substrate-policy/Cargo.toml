@@ -1,0 +1,31 @@
+[package]
+name = "substrate-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Allowlist + tiered PathJail (openat2 / O_NOFOLLOW_ANY / userspace-degraded) per ADR-0035, ADR-0042."
+
+[lints]
+workspace = true
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+serde = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+nix = { workspace = true }
+async-trait = { workspace = true }
+# strict-path is declared at workspace level but not yet available on crates.io at >=0.5;
+# userspace_jail uses std::fs::canonicalize until strict-path ships or the workspace pin is fixed.
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rstest = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
