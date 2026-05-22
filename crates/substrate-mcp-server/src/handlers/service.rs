@@ -754,12 +754,33 @@ impl ServerHandler for SubstrateService {
                 .dispatch(&request.name, args, per_request_cancel, client_id)
                 .await
             {
-                Ok(resp) => Ok(Self::into_call_tool_result(resp, false)),
+                Ok(resp) => {
+                    // ADR-0019 / ADR-0038: emit one structured audit_event line per
+                    // tool invocation so log processors and cucumber tests can grep
+                    // "audit_event" in stderr. Format: k=v pairs on a single line.
+                    tracing::info!(
+                        target: "substrate.audit",
+                        audit_event = "tool_call",
+                        tool = %request.name,
+                        outcome = "ok",
+                        "audit_event"
+                    );
+                    Ok(Self::into_call_tool_result(resp, false))
+                },
                 Err(err) => {
                     tracing::warn!(
                         tool = %request.name,
                         code = err.code(),
                         "tool dispatch error"
+                    );
+                    // ADR-0019 / ADR-0038: emit audit_event for error outcome too.
+                    tracing::info!(
+                        target: "substrate.audit",
+                        audit_event = "tool_call",
+                        tool = %request.name,
+                        outcome = "error",
+                        error_code = err.code(),
+                        "audit_event"
                     );
                     // Surface as tool-level error (is_error=true) so agents can
                     // inspect the structured content without a JSON-RPC fault.

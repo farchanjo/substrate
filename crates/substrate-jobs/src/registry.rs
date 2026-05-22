@@ -82,11 +82,9 @@ pub struct InMemoryJobRegistry {
     jobs: Arc<DashMap<JobId, Arc<JobSlot>>>,
 
     /// Push channel for progress and completion notifications.
-    // Wave G+: wired by MCP server dispatcher (progress event emission)
-    #[expect(
-        dead_code,
-        reason = "Wave G+: wired by MCP server progress event emission"
-    )]
+    ///
+    /// Called at job start (0%) and at terminal state to push `notifications/progress`
+    /// events to the MCP client. Per ADR-0040 progress event contract.
     notifier: Arc<dyn ProgressNotifier>,
 
     /// Quotas, thresholds, and TTL configuration.
@@ -260,6 +258,9 @@ impl JobRegistryPort for InMemoryJobRegistry {
         // is the first arm so it is polled first on each iteration).
         let execute = request.execute;
         let slot_cancel = job_cancel.clone();
+        // Clone the notifier Arc so the worker can push progress events per ADR-0040.
+        let worker_notifier = Arc::clone(&self.notifier);
+        let notify_job_id = job_id.clone();
         let worker_handle = tokio::spawn(async move {
             // Transition to Running before executing the handler.
             {
@@ -269,6 +270,21 @@ impl JobRegistryPort for InMemoryJobRegistry {
                     e.updated_at = time::OffsetDateTime::now_utc();
                 }
             }
+
+            // ADR-0040: emit at least one progress notification at job start (0%)
+            // so clients receive a push even when the operation completes in <250ms.
+            // This satisfies the cucumber assertion `notifications/progress arrives`
+            // for both fast ops and long ops — sequence_number=0 marks the start event.
+            worker_notifier
+                .notify_progress(substrate_domain::jobs::progress::ProgressEvent {
+                    progress_token: notify_job_id.clone(),
+                    progress: 0,
+                    total: 100,
+                    message: Some("job started".to_owned()),
+                    sequence_number: 0,
+                    emitted_at: time::OffsetDateTime::now_utc(),
+                })
+                .await;
 
             tokio::select! {
                 biased;
@@ -292,6 +308,10 @@ impl JobRegistryPort for InMemoryJobRegistry {
                             entry.terminal_at = Some(entry.updated_at);
                         }
                     }
+                    // ADR-0040: emit terminal progress notification (100% or 0% for
+                    // non-success) before publishing the result to the watch channel
+                    // so the audit trail is complete before job.result returns.
+                    worker_notifier.notify_complete(&notify_job_id, &job_result).await;
                     // Publish result to waiting `job_result` callers.
                     let _ = result_tx_clone.send(Some(job_result));
                 }
@@ -306,6 +326,8 @@ impl JobRegistryPort for InMemoryJobRegistry {
                             entry.terminal_at = Some(entry.updated_at);
                         }
                     }
+                    // ADR-0040: emit cancelled completion notification.
+                    worker_notifier.notify_complete(&notify_job_id, &JobResult::Cancelled).await;
                     let _ = result_tx_clone.send(Some(JobResult::Cancelled));
                 }
             }

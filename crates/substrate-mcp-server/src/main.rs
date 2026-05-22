@@ -47,12 +47,82 @@ use std::process::ExitCode;
 
 use substrate_domain::JailTier;
 
+/// Emits the ADR-0036 startup-error JSON envelope to stderr, then flushes.
+///
+/// Must be called before every non-zero exit so that MCP hosts and CI pipelines
+/// can parse the machine-readable `$schema = "substrate-startup-error/v1"` line.
+/// Per ADR-0036 §"Emit Sequence": emit → flush → exit; no MCP frames on stdout.
+fn emit_startup_error(
+    code: &str,
+    message: &str,
+    recovery_hint: &str,
+    details: serde_json::Value,
+) {
+    // UUIDv7 correlation_id: use a simple timestamp-based placeholder that
+    // satisfies the format contract without pulling uuid into main().
+    // Formatted as 01<timestamp_hex><random> — sufficient for log correlation.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let ts_ms = now.as_millis();
+    // ADR-0036 requires a UUIDv7 correlation_id in the envelope.
+    // Build a minimal UUIDv7-shaped string: version=7, variant=0b10.
+    let rand_hi = (ts_ms ^ 0xABCD_EF01_2345_6789u128) & 0x0FFF_FFFF_FFFF_FFFF;
+    let correlation_id = format!(
+        "{:08x}-{:04x}-7{:03x}-{:04x}-{:012x}",
+        (ts_ms >> 16) & 0xFFFF_FFFF,
+        (ts_ms >> 4) & 0xFFFF,
+        ts_ms & 0xFFF,
+        0x8000 | (rand_hi >> 48) & 0x3FFF,
+        rand_hi & 0xFFFF_FFFF_FFFF
+    );
+
+    // ISO 8601 UTC timestamp (seconds precision — milliseconds not needed here).
+    let secs = now.as_secs();
+    let timestamp = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        1970 + secs / 31_557_600,
+        (secs % 31_557_600 / 2_628_000) + 1,
+        (secs % 2_628_000 / 86_400) + 1,
+        (secs % 86_400) / 3_600,
+        (secs % 3_600) / 60,
+        secs % 60,
+    );
+
+    // Clamp recovery_hint to ≤ 150 chars per ADR-0036 field definition.
+    let hint = if recovery_hint.len() > 150 {
+        &recovery_hint[..150]
+    } else {
+        recovery_hint
+    };
+
+    let envelope = serde_json::json!({
+        "$schema": "substrate-startup-error/v1",
+        "code": code,
+        "message_en_us": message,
+        "recovery_hint": hint,
+        "correlation_id": correlation_id,
+        "timestamp": timestamp,
+        "details": details,
+    });
+
+    // Single-line JSON per ADR-0036: consumers grep for `"$schema"`.
+    eprintln!("{}", envelope);
+    // stderr flush is best-effort; eprintln! auto-flushes on most platforms.
+}
+
 fn main() -> ExitCode {
     // Step 1: Initialize tracing to stderr ONLY (ADR-0005, ADR-0009).
     // This happens before the runtime so that startup failures are logged.
     if let Err(e) = logging::init() {
         // Cannot use tracing here — subscriber is not yet installed.
-        eprintln!("substrate: logging init failed: {e}");
+        // ADR-0036: emit structured envelope before exit code 70.
+        emit_startup_error(
+            "SUBSTRATE_RUNTIME_INIT_FAILED",
+            &format!("logging subsystem initialization failed: {e}"),
+            "check stderr for OS-level errors; ensure stderr is writable",
+            serde_json::json!({ "component": "logging", "cause": e.to_string() }),
+        );
         return ExitCode::from(70);
     }
 
@@ -64,6 +134,13 @@ fn main() -> ExitCode {
     // the runtime before accepting any connections.
     if let Err(e) = signal_handlers::ignore_sigpipe() {
         tracing::error!(?e, "SIGPIPE SIG_IGN installation failed");
+        // ADR-0036: emit structured envelope before exit code 72.
+        emit_startup_error(
+            "SUBSTRATE_RUNTIME_INIT_FAILED",
+            &format!("SIGPIPE SIG_IGN installation failed: {e}"),
+            "check OS signal configuration; this is unusual on Linux/macOS",
+            serde_json::json!({ "component": "signal_handlers", "cause": e.to_string() }),
+        );
         return ExitCode::from(72);
     }
 
@@ -76,6 +153,13 @@ fn main() -> ExitCode {
         Ok(rt) => rt,
         Err(e) => {
             tracing::error!(?e, "tokio runtime build failed");
+            // ADR-0036: emit structured envelope before exit code 71.
+            emit_startup_error(
+                "SUBSTRATE_RUNTIME_INIT_FAILED",
+                &format!("tokio multi-thread runtime build failed: {e}"),
+                "check system resource limits (fd, threads); try ulimit -n 65536",
+                serde_json::json!({ "component": "tokio_runtime", "cause": e.to_string() }),
+            );
             return ExitCode::from(71);
         },
     };
@@ -90,6 +174,13 @@ async fn async_main() -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "configuration load failed (SUBSTRATE_CONFIG_INVALID)");
+            // ADR-0036: SUBSTRATE_CONFIG_INVALID → exit 78 (EX_CONFIG).
+            emit_startup_error(
+                "SUBSTRATE_CONFIG_INVALID",
+                &format!("configuration load failed: {e}"),
+                "check TOML syntax and field names; run substrate --check-config to validate",
+                serde_json::json!({ "cause": e.to_string() }),
+            );
             return ExitCode::from(78);
         },
     };
@@ -118,6 +209,17 @@ async fn async_main() -> ExitCode {
             tracing::error!(
                 "PathJail tier 1 unavailable and security.refuse_degraded_jail=true — aborting"
             );
+            // ADR-0036: SUBSTRATE_ALLOWLIST_ROOT_UNREADABLE / degraded-jail → exit 77 (EX_NOPERM).
+            emit_startup_error(
+                "SUBSTRATE_ALLOWLIST_ROOT_UNREADABLE",
+                "PathJail tier 1 unavailable and security.refuse_degraded_jail=true",
+                "upgrade the OS kernel (openat2 requires Linux ≥5.6) or set refuse_degraded_jail=false",
+                serde_json::json!({
+                    "jail_tier": "UserspaceDegraded",
+                    "has_openat2": caps.has_openat2,
+                    "has_o_nofollow_any": caps.has_o_nofollow_any,
+                }),
+            );
             return ExitCode::from(77);
         }
         tracing::warn!(
@@ -131,6 +233,13 @@ async fn async_main() -> ExitCode {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(code = e.code(), recovery_hint = e.recovery_hint(), "{e}");
+            // ADR-0036: SUBSTRATE_RUNTIME_INIT_FAILED → exit 73 (composition root failure).
+            emit_startup_error(
+                "SUBSTRATE_RUNTIME_INIT_FAILED",
+                &format!("composition root wiring failed: {e}"),
+                e.recovery_hint(),
+                serde_json::json!({ "error_code": e.code(), "cause": e.to_string() }),
+            );
             return ExitCode::from(73);
         },
     };
