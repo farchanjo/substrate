@@ -113,7 +113,7 @@ schemars = { version = "1", features = ["derive"] }
 # Dev / test
 cucumber = { version = "0.21", default-features = false, features = ["macros", "tracing"] }
 proptest = "1"
-criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+criterion = { version = "0.8", default-features = false, features = ["html_reports"] }
 rstest = "0.23"
 insta = { version = "1", features = ["json", "yaml"] }
 tempfile = "3"
