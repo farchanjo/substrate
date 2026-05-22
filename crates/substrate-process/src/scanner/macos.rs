@@ -76,11 +76,7 @@
     reason = "ABI documentation intentionally uses C-style type and macro names without backticks"
 )]
 
-use std::{
-    collections::HashMap,
-    sync::Mutex,
-    time::Instant,
-};
+use std::{collections::HashMap, sync::Mutex, time::Instant};
 
 use super::ProcessScannerPort;
 use crate::process_info::ProcessInfo;
@@ -218,7 +214,10 @@ fn read_i32_le(entry: &[u8], offset: usize) -> i32 {
     // caller. `read_unaligned` is safe regardless of the pointer alignment;
     // it avoids UB that a plain `*const i32` cast would produce on unaligned
     // access. The kernel guarantees the bytes are fully initialized.
-    #[expect(clippy::cast_ptr_alignment, reason = "read_unaligned is used precisely to avoid alignment requirements")]
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "read_unaligned is used precisely to avoid alignment requirements"
+    )]
     let ptr = entry[offset..].as_ptr().cast::<i32>();
     unsafe { ptr.read_unaligned() }
 }
@@ -226,7 +225,10 @@ fn read_i32_le(entry: &[u8], offset: usize) -> i32 {
 /// Reads a little-endian `u32` (uid_t / gid_t) at `offset`.
 fn read_u32_le(entry: &[u8], offset: usize) -> u32 {
     // SAFETY: Same reasoning as `read_i32_le`.
-    #[expect(clippy::cast_ptr_alignment, reason = "read_unaligned is used precisely to avoid alignment requirements")]
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "read_unaligned is used precisely to avoid alignment requirements"
+    )]
     let ptr = entry[offset..].as_ptr().cast::<u32>();
     unsafe { ptr.read_unaligned() }
 }
@@ -275,17 +277,20 @@ const OFF_P_STARTTIME_TV_USEC: usize = 8;
 /// Must be `#[repr(C)]` to match the kernel ABI.
 #[repr(C)]
 struct ProcTaskInfo {
-    pti_virtual_size:  u64,
+    pti_virtual_size: u64,
     pti_resident_size: u64,
-    pti_total_user:    u64,  // nanoseconds
-    pti_total_system:  u64,  // nanoseconds
+    pti_total_user: u64,   // nanoseconds
+    pti_total_system: u64, // nanoseconds
     /// Padding fields to reach the full 96-byte kernel struct size.
     /// (`proc_taskinfo` has many more counters beyond offset 32; we ignore them.)
     _padding: [u8; 64],
 }
 
 impl ProcTaskInfo {
-    #[expect(clippy::missing_const_for_fn, reason = "unsafe const fn is not yet stable for mem::zeroed")]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "unsafe const fn is not yet stable for mem::zeroed"
+    )]
     fn zeroed() -> Self {
         // SAFETY: `ProcTaskInfo` contains only integer fields and a byte-array
         // padding; zero-initializing all bytes produces a valid value for every
@@ -327,7 +332,11 @@ unsafe extern "C" {
 /// error — they should leave the corresponding fields at their zero defaults.
 fn task_info(pid: u32) -> Option<ProcTaskInfo> {
     let mut info = ProcTaskInfo::zeroed();
-    #[expect(clippy::cast_possible_truncation, clippy::cast_possible_wrap, reason = "ProcTaskInfo is 96 bytes; fits in i32 with certainty")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "ProcTaskInfo is 96 bytes; fits in i32 with certainty"
+    )]
     let buf_size = std::mem::size_of::<ProcTaskInfo>() as libc::c_int;
 
     // SAFETY: `pid` is a POSIX process identifier. `PROC_PIDTASKINFO` is a
@@ -336,7 +345,10 @@ fn task_info(pid: u32) -> Option<ProcTaskInfo> {
     // expected by the kernel for this flavor. The return value is checked
     // before the struct fields are accessed. The pointer does not escape this
     // function.
-    #[expect(clippy::cast_possible_wrap, reason = "pid is a valid POSIX pid; kernel rejects pids > INT_MAX")]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "pid is a valid POSIX pid; kernel rejects pids > INT_MAX"
+    )]
     let ret = unsafe {
         proc_pidinfo(
             pid as libc::c_int,
@@ -347,11 +359,7 @@ fn task_info(pid: u32) -> Option<ProcTaskInfo> {
         )
     };
 
-    if ret < buf_size {
-        None
-    } else {
-        Some(info)
-    }
+    if ret < buf_size { None } else { Some(info) }
 }
 
 /// Converts a `timeval` stored at raw byte offsets within a `kinfo_proc` entry
@@ -376,7 +384,10 @@ fn read_i64_le(entry: &[u8], offset: usize) -> i64 {
     // SAFETY: `entry[offset..offset+8]` is within bounds (callers verify).
     // `read_unaligned` avoids UB from potential misalignment; all macOS
     // platforms are little-endian.
-    #[expect(clippy::cast_ptr_alignment, reason = "read_unaligned is used precisely to avoid alignment requirements")]
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "read_unaligned is used precisely to avoid alignment requirements"
+    )]
     let ptr = entry[offset..].as_ptr().cast::<i64>();
     unsafe { ptr.read_unaligned() }
 }
@@ -389,7 +400,7 @@ struct CpuSnapshot {
     /// Total CPU time in nanoseconds (user + system) at the last sample.
     total_cpu_ns: u64,
     /// Wall-clock instant of the last sample.
-    wall:         Instant,
+    wall: Instant,
 }
 
 // ---- Entry parser -----------------------------------------------------------
@@ -433,12 +444,15 @@ fn parse_entry(entry: &[u8], task: Option<&ProcTaskInfo>, cpu_pct: f32) -> Optio
         (t.pti_resident_size / 1024, t.pti_virtual_size / 1024)
     });
 
-    #[expect(clippy::cast_sign_loss, reason = "pid validated > 0 above; parent_pid is a valid non-negative pid")]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "pid validated > 0 above; parent_pid is a valid non-negative pid"
+    )]
     Some(ProcessInfo {
         pid: pid as u32,
         ppid: parent_pid as u32,
         name,
-        command: String::new(), // argv not available via kinfo_proc
+        command: read_cmdline(pid),
         uid,
         gid,
         cpu_pct,
@@ -447,6 +461,136 @@ fn parse_entry(entry: &[u8], task: Option<&ProcTaskInfo>, cpu_pct: f32) -> Optio
         start_time_unix,
         state,
     })
+}
+
+// ---- KERN_PROCARGS2 cmdline reader ------------------------------------------
+
+/// Maximum buffer size accepted from the kernel's size-probe for
+/// `KERN_PROCARGS2`. `kern.argmax` is typically 1 MiB; refuse anything larger
+/// to avoid pathological allocations.
+const KERN_PROCARGS2_MAX: usize = 1_048_576;
+
+/// Parses the `KERN_PROCARGS2` byte buffer into a space-joined argv string.
+///
+/// Buffer layout:
+/// ```text
+/// [0..4]  argc       (i32, native-endian)
+/// [4..]   exec_path  (NUL-terminated)
+///         NUL padding to align next region
+///         argc NUL-terminated argv strings
+///         (env strings follow; ignored)
+/// ```
+///
+/// Returns an empty `String` if `buf` is too short or `argc <= 0`.
+///
+/// This function contains no `unsafe` code and is independently unit-testable.
+fn parse_argv(buf: &[u8], argc: i32) -> String {
+    if argc <= 0 || buf.len() < 4 {
+        return String::new();
+    }
+    #[expect(clippy::cast_sign_loss, reason = "argc validated > 0 above")]
+    let argc_usize = argc as usize;
+
+    // Skip exec_path (first NUL-terminated string after the 4-byte argc).
+    let after_argc = &buf[4..];
+    let exec_end = after_argc
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(after_argc.len());
+    // Skip exec_path + its NUL terminator.
+    let after_exec = after_argc.get(exec_end + 1..).unwrap_or(&[]);
+
+    // Skip any additional NUL padding between exec_path and argv[0].
+    let argv_start = after_exec
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(after_exec.len());
+    let mut remaining = after_exec.get(argv_start..).unwrap_or(&[]);
+
+    let mut argv_parts: Vec<&str> = Vec::with_capacity(argc_usize);
+    for _ in 0..argc_usize {
+        if remaining.is_empty() {
+            break;
+        }
+        let end = remaining
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(remaining.len());
+        let arg = std::str::from_utf8(&remaining[..end]).unwrap_or("");
+        if !arg.is_empty() {
+            argv_parts.push(arg);
+        }
+        remaining = remaining.get(end + 1..).unwrap_or(&[]);
+    }
+
+    argv_parts.join(" ")
+}
+
+/// Fetches the full command line for `pid` via `sysctl(CTL_KERN, KERN_PROCARGS2)`.
+///
+/// Best-effort: any failure (including `EINVAL` for PID 0, `EPERM` for
+/// processes owned by another user, or a truncated buffer) silently returns
+/// `String::new()`. A single unreadable process must NOT fail the entire scan
+/// (matches `ProcessScannerPort::scan_all` per-process error policy).
+fn read_cmdline(pid: i32) -> String {
+    // MIB: CTL_KERN / KERN_PROCARGS2 / pid
+    let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+
+    // --- First call: size probe -----------------------------------------------
+    let mut size: libc::size_t = 0;
+
+    // SAFETY: sysctl size-probe for KERN_PROCARGS2. `oldp` is null — kernel
+    // writes the required buffer size into `size` without touching any output
+    // buffer. `newp`/`newlen` are null/0 (read-only query). `mib` is a valid
+    // 3-element array live for the duration of the call; no pointer escapes.
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            std::ptr::addr_of_mut!(size),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+
+    if ret < 0 || size == 0 || size > KERN_PROCARGS2_MAX {
+        return String::new();
+    }
+
+    let mut buf: Vec<u8> = vec![0u8; size];
+    let mut actual = size;
+
+    // --- Second call: fill buffer ---------------------------------------------
+    // SAFETY: `buf` has `size` zero-initialized bytes. `sysctl` writes at most
+    // `actual` bytes into the buffer (updating `actual` to the count actually
+    // written). `mib` is still valid. The Vec allocation lives for the full
+    // duration of the call; no pointer escapes. A negative return value is
+    // checked immediately; only then are the filled bytes read.
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast(),
+            std::ptr::addr_of_mut!(actual),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+
+    if ret < 0 || actual < 4 {
+        return String::new();
+    }
+
+    buf.truncate(actual);
+
+    // Read argc from the first 4 bytes (native-endian i32).
+    // `actual >= 4` is guaranteed by the check above; the slice-to-array
+    // conversion cannot fail. `from_ne_bytes` is safe on any alignment.
+    let argc_bytes: [u8; 4] = buf[..4].try_into().unwrap_or([0u8; 4]);
+    let argc = i32::from_ne_bytes(argc_bytes);
+
+    parse_argv(&buf, argc)
 }
 
 // ---- MacOsProcessScanner ----------------------------------------------------
@@ -504,17 +648,25 @@ impl MacOsProcessScanner {
         )]
         let pct = guard.get(&pid).map_or(0.0_f32, |prev| {
             let cpu_delta = total_cpu_ns.saturating_sub(prev.total_cpu_ns);
-            let wall_ns = now.duration_since(prev.wall).as_nanos().min(u128::from(u64::MAX)) as u64;
+            let wall_ns = now
+                .duration_since(prev.wall)
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64;
             if wall_ns == 0 || self.cpu_count == 0 {
                 0.0
             } else {
-                let pct_f64 =
-                    (cpu_delta as f64 / wall_ns as f64) * 100.0 / self.cpu_count as f64;
+                let pct_f64 = (cpu_delta as f64 / wall_ns as f64) * 100.0 / self.cpu_count as f64;
                 pct_f64 as f32
             }
         });
 
-        guard.insert(pid, CpuSnapshot { total_cpu_ns, wall: now });
+        guard.insert(
+            pid,
+            CpuSnapshot {
+                total_cpu_ns,
+                wall: now,
+            },
+        );
         pct
     }
 }
@@ -542,9 +694,7 @@ impl ProcessScannerPort for MacOsProcessScanner {
 
                 // Compute delta CPU% from task CPU times.
                 let pct = task.as_ref().map_or(0.0, |t| {
-                    let total_ns = t
-                        .pti_total_user
-                        .saturating_add(t.pti_total_system);
+                    let total_ns = t.pti_total_user.saturating_add(t.pti_total_system);
                     self.cpu_pct(pid_u32, total_ns)
                 });
 
@@ -678,5 +828,80 @@ mod tests {
             "cpu_pct must be finite and non-negative; got {}",
             me.cpu_pct
         );
+    }
+
+    // ---- KERN_PROCARGS2 / cmdline regression tests ---------------------------
+
+    /// Regression test: the current process must have a non-empty `command`
+    /// field. The old code hardcoded `String::new()` here — this test would
+    /// fail with the unpatched scanner.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn current_process_command_is_non_empty() {
+        let scanner = MacOsProcessScanner::new();
+        let procs = scanner.scan_all().expect("scan_all must not fail");
+        let my_pid = std::process::id();
+        let me = procs
+            .iter()
+            .find(|p| p.pid == my_pid)
+            .expect("current process must appear in list");
+        // `command` must contain the test binary path which always has a path
+        // separator OR at least the binary name.
+        assert!(
+            !me.command.is_empty(),
+            "command must not be empty for current process (pid={my_pid})"
+        );
+        assert!(
+            me.command.contains('/') || me.command.contains('-'),
+            "command '{cmd}' for pid={my_pid} should contain a path separator or binary name fragment",
+            cmd = me.command,
+        );
+    }
+
+    /// Unit test for `parse_argv` — pure function, no FFI.
+    ///
+    /// Builds a hand-crafted `KERN_PROCARGS2` buffer with:
+    ///   argc = 2, exec_path = "/usr/bin/test", padding, argv[0] = "arg0",
+    ///   argv[1] = "arg1", then env "KEY=val".
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn parse_argv_returns_joined_args() {
+        // argc as little-endian i32
+        let argc: i32 = 2;
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&argc.to_ne_bytes()); // [0..4] argc
+        buf.extend_from_slice(b"/usr/bin/test\0"); // exec_path + NUL
+        buf.extend_from_slice(b"\0\0"); // extra NUL padding
+        buf.extend_from_slice(b"arg0\0"); // argv[0]
+        buf.extend_from_slice(b"arg1\0"); // argv[1]
+        buf.extend_from_slice(b"KEY=val\0"); // env (must be ignored)
+
+        let result = parse_argv(&buf, argc);
+        assert_eq!(result, "arg0 arg1", "expected 'arg0 arg1', got '{result}'");
+    }
+
+    /// Unit test: `parse_argv` with argc = 0 returns empty string.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn parse_argv_argc_zero_returns_empty() {
+        let argc: i32 = 0;
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&argc.to_ne_bytes());
+        buf.extend_from_slice(b"/usr/bin/test\0");
+        buf.extend_from_slice(b"arg0\0");
+
+        assert_eq!(parse_argv(&buf, argc), String::new());
+    }
+
+    /// Unit test: `parse_argv` with a malformed (too short) buffer returns empty.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn parse_argv_malformed_buffer_returns_empty() {
+        // Buffer shorter than 4 bytes — cannot even read argc.
+        assert_eq!(parse_argv(&[0u8, 1u8, 2u8], 1), String::new());
+        // Completely empty buffer.
+        assert_eq!(parse_argv(&[], 1), String::new());
+        // Negative argc.
+        assert_eq!(parse_argv(&[0u8; 16], -1), String::new());
     }
 }

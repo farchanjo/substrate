@@ -112,7 +112,10 @@ pub async fn handle_proc_signal(
 
     let sig = parse_signal(&req.signal)?;
     // POSIX pids fit in i32; the kernel rejects pids > INT_MAX, so the cast is safe.
-    #[expect(clippy::cast_possible_wrap, reason = "POSIX pids fit in i32; kernel rejects pids > INT_MAX")]
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "POSIX pids fit in i32; kernel rejects pids > INT_MAX"
+    )]
     let pid = Pid::from_raw(req.pid as i32);
 
     // Layer 1: PID existence check via kill(2) sig=0.

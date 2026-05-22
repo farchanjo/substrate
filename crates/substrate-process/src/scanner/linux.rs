@@ -29,7 +29,10 @@
 //! first-call CPU% should use `with_prime()`.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use procfs::process::{Process, all_processes};
@@ -134,7 +137,13 @@ impl LinuxProcessScanner {
             if let Ok(proc) = entry {
                 if let Ok(stat) = proc.stat() {
                     let current_ticks = stat.utime.saturating_add(stat.stime);
-                    new_sample.insert(proc.pid() as u32, TickSnapshot { ticks: current_ticks, at: now });
+                    new_sample.insert(
+                        proc.pid() as u32,
+                        TickSnapshot {
+                            ticks: current_ticks,
+                            at: now,
+                        },
+                    );
                 }
             }
         }
@@ -187,7 +196,10 @@ fn read_process(
 
     // Total scheduler ticks consumed by this process (user + kernel).
     let current_ticks = stat.utime.saturating_add(stat.stime);
-    let snapshot = TickSnapshot { ticks: current_ticks, at: now };
+    let snapshot = TickSnapshot {
+        ticks: current_ticks,
+        at: now,
+    };
 
     // CPU%: (tick_delta_secs / wall_secs) * 100, normalised across all CPUs.
     // First call always yields 0.0 because there is no baseline to compare.

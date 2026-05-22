@@ -165,12 +165,13 @@ pub async fn handle_proc_tree(
         remaining: max_nodes,
         truncated: false,
     };
-    let tree = build_node(root_pid, &adjacency, &by_pid, 0, max_depth, &mut budget).ok_or_else(
-        || SubstrateError::InternalError {
-            reason: format!("failed to build tree rooted at PID {root_pid}"),
-            correlation_id: None,
-        },
-    )?;
+    let tree =
+        build_node(root_pid, &adjacency, &by_pid, 0, max_depth, &mut budget).ok_or_else(|| {
+            SubstrateError::InternalError {
+                reason: format!("failed to build tree rooted at PID {root_pid}"),
+                correlation_id: None,
+            }
+        })?;
 
     let node_count = count_nodes(&tree);
     let truncated = budget.truncated;
