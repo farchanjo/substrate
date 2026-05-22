@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — fast pre-commit checks (fmt + clippy + spec fast lane).
+#
+# Install (opt-in, one time per clone):
+#   git config core.hooksPath .githooks
+#
+# Requires: just, spec (from spec-framework) on PATH.
+
+set -euo pipefail
+
+echo "[pre-commit] checking formatting..."
+just ci-fmt
+
+echo "[pre-commit] running clippy..."
+just ci-clippy
+
+echo "[pre-commit] validating spec (fast lane)..."
+if command -v spec >/dev/null 2>&1; then
+    spec validate --lane fast
+else
+    echo "[pre-commit] WARNING: spec CLI not found — skipping spec validate"
+fi
+
+echo "[pre-commit] all checks passed."

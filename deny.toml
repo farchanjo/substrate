@@ -1,0 +1,31 @@
+# deny.toml — cargo-deny configuration for substrate.
+# Controls which advisories, licenses, crate bans, and registries are permitted.
+# See: https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Deny yanked crates outright; don't ignore any known advisories.
+yanked = "deny"
+ignore = []
+
+[bans]
+# Warn (not deny) on multiple versions of the same crate to avoid silent bloat.
+multiple-versions = "warn"
+
+[licenses]
+# Allow common permissive and copyleft-with-weak-obligation licenses.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+]
+
+[sources]
+# Only the official crates.io index is trusted; reject unknown registries and
+# git sources to reduce supply-chain risk.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
