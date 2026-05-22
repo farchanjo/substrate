@@ -1,0 +1,32 @@
+[package]
+name = "substrate-system-info"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "System info BC adapter (sys.uname, sys.hostname, sys.uptime, sys.df, sys.load_average, sys.info)."
+
+[lints]
+workspace = true
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+schemars = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+nix = { workspace = true }
+time = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.18"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rstest = { workspace = true }
+proptest = { workspace = true }
