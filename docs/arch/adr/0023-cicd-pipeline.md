@@ -121,8 +121,8 @@ Depends on: `package`. Triggered on `git tag v*` only.
 | Job | Description |
 |---|---|
 | `gitlab:release` | Creates GitLab release with artifact links via `release-cli` |
-| `github:mirror` | `gh release create $TAG *.tar.gz --repo archanjo/substrate` (via `GITHUB_TOKEN` CI variable) |
-| `homebrew:bump` | Opens PR against `archanjo/homebrew-tap` with updated formula SHA256 via `brew bump-formula-pr` |
+| `github:mirror` | `gh release create $TAG *.tar.gz --repo farchanjo/substrate` (via `GITHUB_TOKEN` CI variable) |
+| `homebrew:bump` | Opens PR against `farchanjo/homebrew-tap` with updated formula SHA256 via `brew bump-formula-pr` |
 
 ### CI Variables (project-level, masked)
 

@@ -39,7 +39,7 @@ Chosen option: "single static binary with full signing, notarization, SBOM, and 
 - **macOS pipeline**: `cargo build --release` → `codesign --options runtime --entitlements` → `xcrun notarytool submit` (staple on success). Stapling embeds the notarization ticket so the binary verifies offline.
 - **SBOM**: `cargo-sbom` generates an SPDX 2.3 JSON document for each release. The SBOM is published as a GitHub Release asset alongside the binary and checksums.
 - **Signatures**: `cosign sign-blob` with a keyless OIDC identity (GitHub Actions OIDC) signs each binary. Verification: `cosign verify-blob --certificate-identity <CI_URL> --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
-- **Channels**: GitHub Releases is the canonical source. A Homebrew tap (`homebrew-archanjo/substrate`) provides `brew install archanjo/substrate/substrate`. `cargo install substrate-mcp` is supported as a convenience for developers.
+- **Channels**: GitHub Releases is the canonical source. A Homebrew tap (`farchanjo/homebrew-substrate`) provides `brew install farchanjo/substrate/substrate`. `cargo install substrate-mcp` is supported as a convenience for developers.
 - **Versioning**: strict SemVer. BREAKING changes in MCP tool schemas or error codes bump the major version. New tools or optional parameters bump the minor version. Bug fixes bump the patch version. Pre-release labels (`-alpha.N`, `-rc.N`) are used for unstable builds.
 
 #### Negative
@@ -55,7 +55,7 @@ Chosen option: "single static binary with full signing, notarization, SBOM, and 
 - CI asserts that `cosign verify-blob` succeeds on each published binary using the expected OIDC identity.
 - A smoke test in the release workflow starts the binary with `--help` on each platform target and asserts exit code 0.
 - SBOM is linted with `spdx-tools validate` as a CI gate before artifact upload.
-- Homebrew CI (`brew audit --strict archanjo/substrate/substrate`) runs on each formula update PR.
+- Homebrew CI (`brew audit --strict farchanjo/substrate/substrate`) runs on each formula update PR.
 
 ## Cross-References
 
