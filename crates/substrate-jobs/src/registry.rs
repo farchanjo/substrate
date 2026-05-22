@@ -18,8 +18,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use time::OffsetDateTime;
-use tokio::task::JoinHandle;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
 
@@ -697,4 +697,521 @@ mod tests {
     //
     // TODO(Wave D): add idempotency test: submit with identical idempotency_key twice
     // concurrently; assert only one job_id is created and both callers receive it.
+}
+
+// ---- TTL GC tests ----------------------------------------------------------
+//
+// Strategy: build a registry with a very short TTL (1 s), submit a job, drive
+// it to terminal state by hand (same technique as the cancel smoke test), then
+// call `ttl_gc::sweep_once` directly after backdating `terminal_at` past the TTL
+// window.  Using `tokio::time::pause()` + `advance()` for the GC-loop path is
+// validated separately via `terminal_state_gc_via_loop`.
+//
+// `sweep_once` is `pub(crate)` so these tests can call it without spawning an
+// async task or fighting the GC sleep interval.
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code: panicking assertions are idiomatic in unit tests"
+)]
+mod ttl_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio_util::sync::CancellationToken;
+
+    use substrate_domain::errors::SubstrateError;
+    use substrate_domain::jobs::bucket::JobBucket;
+    use substrate_domain::jobs::config::JobConfig;
+    use substrate_domain::jobs::state::JobState;
+    use substrate_domain::ports::job_registry::{JobRegistryPort, JobResult};
+    use substrate_domain::value_objects::ClientId;
+
+    use crate::notifier::NoopProgressNotifier;
+    use crate::registry::InMemoryJobRegistry;
+    use crate::ttl_gc;
+
+    use super::JobSubmitRequest;
+
+    /// Builds a registry whose TTL is `ttl_secs` seconds.
+    fn make_registry_with_ttl(ttl_secs: u32) -> Arc<InMemoryJobRegistry> {
+        let mut config = JobConfig::default();
+        config.quotas.result_ttl_secs = ttl_secs;
+        // Very short GC interval so the background loop fires quickly in the
+        // loop-driven test, but most tests use `sweep_once` directly.
+        config.quotas.gc_interval_secs = 1;
+        let notifier = Arc::new(NoopProgressNotifier);
+        let cancel = CancellationToken::new();
+        InMemoryJobRegistry::new(config, notifier, cancel)
+    }
+
+    fn make_request(client: &str) -> JobSubmitRequest {
+        JobSubmitRequest {
+            client_id: ClientId::parse(client).expect("test client_id must be valid"),
+            tool: "archive_tar_create".to_owned(),
+            bucket: JobBucket::CAlwaysAsync,
+            idempotency_key: None,
+            args_json: serde_json::json!({"src": "/tmp/gc-test"}),
+            execute: Box::pin(async { Ok(serde_json::Value::Null) }),
+        }
+    }
+
+    /// Drives a freshly submitted job slot to `Succeeded` terminal state.
+    ///
+    /// Mirrors the manual state injection pattern in `cancel_on_terminal_job_is_idempotent`.
+    async fn drive_to_succeeded(
+        registry: &Arc<InMemoryJobRegistry>,
+        job_id: &substrate_domain::value_objects::JobId,
+    ) {
+        let slot = registry.jobs.get(job_id).expect("slot must exist");
+        slot.try_transition(JobState::Running)
+            .expect("Pending -> Running must succeed");
+        slot.try_transition(JobState::Succeeded)
+            .expect("Running -> Succeeded must succeed");
+        slot.set_result(JobResult::Succeeded(serde_json::Value::Null));
+    }
+
+    async fn drive_to_cancelled(
+        registry: &Arc<InMemoryJobRegistry>,
+        job_id: &substrate_domain::value_objects::JobId,
+    ) {
+        let slot = registry.jobs.get(job_id).expect("slot must exist");
+        slot.try_transition(JobState::Running)
+            .expect("Pending -> Running must succeed");
+        slot.try_transition(JobState::Cancelled)
+            .expect("Running -> Cancelled must succeed");
+        slot.set_result(JobResult::Cancelled);
+    }
+
+    async fn drive_to_failed(
+        registry: &Arc<InMemoryJobRegistry>,
+        job_id: &substrate_domain::value_objects::JobId,
+    ) {
+        let slot = registry.jobs.get(job_id).expect("slot must exist");
+        slot.try_transition(JobState::Running)
+            .expect("Pending -> Running must succeed");
+        slot.try_transition(JobState::Failed)
+            .expect("Running -> Failed must succeed");
+        slot.set_result(JobResult::Failed(SubstrateError::InternalError {
+            reason: "deliberate test failure".to_owned(),
+            correlation_id: None,
+        }));
+    }
+
+    /// Backdates `terminal_at` so that `sweep_once` considers the entry expired.
+    ///
+    /// Adds a generous margin (TTL + 10 s) to guarantee the entry is past the
+    /// TTL window regardless of clock resolution.
+    fn backdate_terminal_at(
+        registry: &Arc<InMemoryJobRegistry>,
+        job_id: &substrate_domain::value_objects::JobId,
+        ttl_secs: u64,
+    ) {
+        let slot = registry.jobs.get(job_id).expect("slot must exist for backdating");
+        let mut entry = slot.entry.lock();
+        let past = time::OffsetDateTime::now_utc()
+            - time::Duration::seconds((ttl_secs + 10) as i64);
+        entry.terminal_at = Some(past);
+    }
+
+    // ---- terminal_state_gc_after_ttl ----------------------------------------
+
+    /// A job in state `Succeeded` is evicted from the registry by `sweep_once`
+    /// after its `terminal_at` timestamp is older than `result_ttl_secs`.
+    ///
+    /// After eviction both `registry.status(id)` and `registry.list(client)` must
+    /// reflect the removal.  This validates the core GC invariant from ADR-0040.
+    #[tokio::test]
+    async fn terminal_state_gc_after_ttl() {
+        let registry = make_registry_with_ttl(1);
+        let req = make_request("client-gc-1");
+        let client_id =
+            ClientId::parse("client-gc-1").expect("test client_id must be valid");
+
+        let job_id = registry
+            .submit(req)
+            .await
+            .expect("submit must succeed");
+
+        drive_to_succeeded(&registry, &job_id).await;
+
+        // Confirm the job is visible before GC.
+        let entry = registry
+            .status(&job_id)
+            .await
+            .expect("status must succeed before GC");
+        assert!(
+            entry.state.is_terminal(),
+            "job must be terminal before GC sweep"
+        );
+
+        // Backdate terminal_at so sweep_once considers it expired.
+        backdate_terminal_at(&registry, &job_id, 1);
+
+        let evicted = ttl_gc::sweep_once(
+            &registry.jobs,
+            &registry.idempotency_index,
+            1, // ttl_secs
+        );
+        assert_eq!(evicted, 1, "sweep must evict exactly one terminal entry");
+
+        // After eviction: status must return JobNotFound.
+        let status_result = registry.status(&job_id).await;
+        assert!(
+            matches!(
+                status_result,
+                Err(SubstrateError::JobNotFound { .. })
+            ),
+            "status after GC must return JobNotFound, got: {status_result:?}"
+        );
+
+        // After eviction: list must not contain the evicted job.
+        let page = registry
+            .list(&client_id, None)
+            .await
+            .expect("list must succeed after GC");
+        assert!(
+            !page.jobs.iter().any(|e| e.id == job_id),
+            "evicted job must not appear in list"
+        );
+    }
+
+    // ---- running_jobs_not_gcd ------------------------------------------------
+
+    /// A job still in `Running` state must never be evicted by `sweep_once`
+    /// regardless of how long it has been running.
+    ///
+    /// This verifies that the GC predicate is conditioned on `terminal_at` being
+    /// `Some(_)`, which is only set on terminal state entry.
+    #[tokio::test]
+    async fn running_jobs_not_gcd() {
+        let registry = make_registry_with_ttl(1);
+        let req = make_request("client-gc-2");
+
+        let job_id = registry
+            .submit(req)
+            .await
+            .expect("submit must succeed");
+
+        // Drive to Running (non-terminal).
+        {
+            let slot = registry.jobs.get(&job_id).expect("slot must exist");
+            slot.try_transition(JobState::Running)
+                .expect("Pending -> Running must succeed");
+        }
+
+        // Attempt a sweep with a zero TTL (everything terminal would be evicted).
+        let evicted = ttl_gc::sweep_once(
+            &registry.jobs,
+            &registry.idempotency_index,
+            0, // zero TTL — terminal jobs would be evicted immediately
+        );
+        assert_eq!(evicted, 0, "running job must not be evicted by GC sweep");
+
+        // Job must still be accessible.
+        let entry = registry
+            .status(&job_id)
+            .await
+            .expect("status must succeed for running job");
+        assert_eq!(
+            entry.state,
+            JobState::Running,
+            "job state must still be Running after failed GC attempt"
+        );
+    }
+
+    // ---- cancelled_job_gcd --------------------------------------------------
+
+    /// A job in state `Cancelled` is evicted once its TTL window has elapsed.
+    #[tokio::test]
+    async fn cancelled_job_gcd() {
+        let registry = make_registry_with_ttl(1);
+        let req = make_request("client-gc-3");
+
+        let job_id = registry
+            .submit(req)
+            .await
+            .expect("submit must succeed");
+
+        drive_to_cancelled(&registry, &job_id).await;
+        backdate_terminal_at(&registry, &job_id, 1);
+
+        let evicted = ttl_gc::sweep_once(
+            &registry.jobs,
+            &registry.idempotency_index,
+            1,
+        );
+        assert_eq!(evicted, 1, "cancelled job must be evicted after TTL");
+
+        let status_result = registry.status(&job_id).await;
+        assert!(
+            matches!(status_result, Err(SubstrateError::JobNotFound { .. })),
+            "cancelled job must be JobNotFound after GC, got: {status_result:?}"
+        );
+    }
+
+    // ---- failed_job_gcd -----------------------------------------------------
+
+    /// A job in state `Failed` is evicted once its TTL window has elapsed.
+    #[tokio::test]
+    async fn failed_job_gcd() {
+        let registry = make_registry_with_ttl(1);
+        let req = make_request("client-gc-4");
+
+        let job_id = registry
+            .submit(req)
+            .await
+            .expect("submit must succeed");
+
+        drive_to_failed(&registry, &job_id).await;
+        backdate_terminal_at(&registry, &job_id, 1);
+
+        let evicted = ttl_gc::sweep_once(
+            &registry.jobs,
+            &registry.idempotency_index,
+            1,
+        );
+        assert_eq!(evicted, 1, "failed job must be evicted after TTL");
+
+        let status_result = registry.status(&job_id).await;
+        assert!(
+            matches!(status_result, Err(SubstrateError::JobNotFound { .. })),
+            "failed job must be JobNotFound after GC, got: {status_result:?}"
+        );
+    }
+
+    // ---- terminal_state_gc_via_loop -----------------------------------------
+
+    /// Integration-level validation: the background GC loop wakes on its tokio
+    /// sleep interval and calls `sweep_once`.
+    ///
+    /// Strategy: configure a very short `gc_interval_secs` (zero maps to 0 ms,
+    /// which tokio treats as "fire immediately on yield") and backdate `terminal_at`
+    /// past the TTL window.  After sleeping briefly with real wall-clock time we
+    /// assert the job has been removed from the registry.
+    ///
+    /// Wall-clock `time::OffsetDateTime::now_utc()` is used inside `sweep_once`,
+    /// so `tokio::time::advance` cannot substitute for backdating `terminal_at`.
+    /// A short real `tokio::time::sleep` is used instead of virtual-time advance
+    /// to ensure the GC task is actually scheduled and runs at least once.
+    #[tokio::test]
+    async fn terminal_state_gc_via_loop() {
+        // gc_interval_secs=0 is treated as Duration::from_secs(0), which fires on
+        // the first `tokio::time::sleep(0)` → yields immediately to the executor.
+        let mut config = JobConfig::default();
+        config.quotas.result_ttl_secs = 1;
+        config.quotas.gc_interval_secs = 0; // fire as fast as the executor allows
+        let notifier = Arc::new(NoopProgressNotifier);
+        let cancel = CancellationToken::new();
+        let registry = InMemoryJobRegistry::new(config, notifier, cancel);
+
+        let req = make_request("client-gc-loop");
+        let job_id = registry
+            .submit(req)
+            .await
+            .expect("submit must succeed");
+
+        drive_to_succeeded(&registry, &job_id).await;
+
+        // Backdate terminal_at: sweep_once uses the `time` crate wall-clock, not
+        // tokio's monotonic clock, so we backdate directly.
+        backdate_terminal_at(&registry, &job_id, 1);
+
+        // Give the GC loop multiple opportunities to run by sleeping briefly.
+        // Even at gc_interval=0s, the tokio runtime needs to schedule the task.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let status_result = registry.status(&job_id).await;
+        assert!(
+            matches!(status_result, Err(SubstrateError::JobNotFound { .. })),
+            "job must be evicted by background GC loop after real-time sleep, got: {status_result:?}"
+        );
+    }
+}
+
+// ---- Idempotency-key dedup tests -------------------------------------------
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code: panicking assertions are idiomatic in unit tests"
+)]
+mod idempotency_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio_util::sync::CancellationToken;
+
+    use substrate_domain::jobs::bucket::JobBucket;
+    use substrate_domain::jobs::config::JobConfig;
+    use substrate_domain::ports::job_registry::JobRegistryPort;
+    use substrate_domain::value_objects::{ClientId, IdempotencyKey};
+
+    use crate::notifier::NoopProgressNotifier;
+    use crate::registry::InMemoryJobRegistry;
+
+    use super::JobSubmitRequest;
+
+    fn make_registry() -> Arc<InMemoryJobRegistry> {
+        let config = JobConfig::default();
+        let notifier = Arc::new(NoopProgressNotifier);
+        let cancel = CancellationToken::new();
+        InMemoryJobRegistry::new(config, notifier, cancel)
+    }
+
+    /// Builds a request whose execute future increments `counter` once.
+    fn make_counted_request(
+        client: &str,
+        ik: Option<IdempotencyKey>,
+        counter: Arc<AtomicUsize>,
+    ) -> JobSubmitRequest {
+        JobSubmitRequest {
+            client_id: ClientId::parse(client).expect("test client_id must be valid"),
+            tool: "archive_tar_create".to_owned(),
+            bucket: JobBucket::CAlwaysAsync,
+            idempotency_key: ik,
+            args_json: serde_json::json!({"src": "/tmp/dedup-test"}),
+            execute: Box::pin(async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::Value::Null)
+            }),
+        }
+    }
+
+    /// Builds a request with the same args but no counter.
+    fn make_request_with_key(client: &str, ik: Option<IdempotencyKey>) -> JobSubmitRequest {
+        JobSubmitRequest {
+            client_id: ClientId::parse(client).expect("test client_id must be valid"),
+            tool: "archive_tar_create".to_owned(),
+            bucket: JobBucket::CAlwaysAsync,
+            idempotency_key: ik,
+            args_json: serde_json::json!({"src": "/tmp/dedup-test"}),
+            execute: Box::pin(async { Ok(serde_json::Value::Null) }),
+        }
+    }
+
+    // ---- same_idempotency_key_returns_same_task_id --------------------------
+
+    /// Submitting twice with the same `idempotency_key` (same client, tool, args)
+    /// must return the same `JobId` on both calls.
+    ///
+    /// This is the primary deduplication contract from ADR-0040: a client that
+    /// retries an at-most-once operation must receive the existing job rather than
+    /// a new one.
+    #[tokio::test]
+    async fn same_idempotency_key_returns_same_task_id() {
+        let registry = make_registry();
+        let ik = IdempotencyKey::now_v7();
+
+        let req1 = make_request_with_key("client-idem-1", Some(ik.clone()));
+        let req2 = make_request_with_key("client-idem-1", Some(ik.clone()));
+
+        let id1 = registry
+            .submit(req1)
+            .await
+            .expect("first submit must succeed");
+        let id2 = registry
+            .submit(req2)
+            .await
+            .expect("second submit must succeed");
+
+        assert_eq!(
+            id1, id2,
+            "both submissions with the same idempotency_key must return the same JobId"
+        );
+    }
+
+    // ---- same_key_only_executes_once ----------------------------------------
+
+    /// The execute future is invoked exactly once even when the same
+    /// `idempotency_key` is submitted twice.
+    ///
+    /// The second `submit` returns the existing `JobId` and discards the new
+    /// `execute` future without spawning a second worker, so the counter remains 1.
+    #[tokio::test]
+    async fn same_key_only_executes_once() {
+        let registry = make_registry();
+        let ik = IdempotencyKey::now_v7();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let req1 = make_counted_request("client-idem-2", Some(ik.clone()), Arc::clone(&counter));
+        let req2 = make_counted_request("client-idem-2", Some(ik.clone()), Arc::clone(&counter));
+
+        registry
+            .submit(req1)
+            .await
+            .expect("first submit must succeed");
+        registry
+            .submit(req2)
+            .await
+            .expect("second submit must succeed");
+
+        // Allow the spawned worker task to run.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let count = counter.load(Ordering::SeqCst);
+        assert_eq!(
+            count, 1,
+            "execute future must be invoked exactly once for two submissions with the same key; got {count}"
+        );
+    }
+
+    // ---- different_keys_create_separate_tasks --------------------------------
+
+    /// Two submissions with *different* idempotency keys must produce distinct
+    /// `JobId` values and spawn two independent workers.
+    #[tokio::test]
+    async fn different_keys_create_separate_tasks() {
+        let registry = make_registry();
+        let ik_a = IdempotencyKey::now_v7();
+        let ik_b = IdempotencyKey::now_v7();
+
+        let req_a = make_request_with_key("client-idem-3", Some(ik_a));
+        let req_b = make_request_with_key("client-idem-3", Some(ik_b));
+
+        let id_a = registry
+            .submit(req_a)
+            .await
+            .expect("submit A must succeed");
+        let id_b = registry
+            .submit(req_b)
+            .await
+            .expect("submit B must succeed");
+
+        assert_ne!(
+            id_a, id_b,
+            "different idempotency keys must produce distinct JobIds"
+        );
+    }
+
+    // ---- idempotency_key_none_no_dedup --------------------------------------
+
+    /// When `idempotency_key` is `None`, every submission creates a new, independent
+    /// job even when all other fields are identical.
+    ///
+    /// This is the default behavior: without an explicit dedup key the caller
+    /// accepts that retries will result in duplicate executions.
+    #[tokio::test]
+    async fn idempotency_key_none_no_dedup() {
+        let registry = make_registry();
+
+        let req1 = make_request_with_key("client-idem-4", None);
+        let req2 = make_request_with_key("client-idem-4", None);
+
+        let id1 = registry
+            .submit(req1)
+            .await
+            .expect("first submit must succeed");
+        let id2 = registry
+            .submit(req2)
+            .await
+            .expect("second submit must succeed");
+
+        assert_ne!(
+            id1, id2,
+            "submissions with idempotency_key=None must always create separate jobs"
+        );
+    }
 }

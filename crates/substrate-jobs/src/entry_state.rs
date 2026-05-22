@@ -72,7 +72,10 @@ impl JobSlot {
     /// Creates a new `JobSlot` from an initial `JobEntry` and the given handles.
     ///
     /// The result watch channel is initialised to `None` (no result yet).
-    #[expect(dead_code, reason = "alternate constructor retained for Wave G+ graceful-shutdown drain path")]
+    #[expect(
+        dead_code,
+        reason = "alternate constructor retained for Wave G+ graceful-shutdown drain path"
+    )]
     pub(crate) fn new(entry: JobEntry, cancel: CancellationToken, abort: AbortHandle) -> Arc<Self> {
         let (result_tx, result_rx) = watch::channel(None);
         Arc::new(Self {
