@@ -233,7 +233,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cache mise tooling
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.local/share/mise
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml') }}
