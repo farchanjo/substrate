@@ -93,10 +93,10 @@ Structurizr DSL, OpenSLO definitions, AsyncAPI spec, and a TLA+ formal model.
 
 Read in order:
 
-1. [docs/arch/README.md](docs/arch/README.md) -- overview
-2. [docs/arch/glossary.md](docs/arch/glossary.md) -- vocabulary
-3. [docs/arch/adr/0002-bounded-contexts.md](docs/arch/adr/0002-bounded-contexts.md)
-4. [docs/arch/adr/0040-async-job-control-plane.md](docs/arch/adr/0040-async-job-control-plane.md)
+1. [Architecture Overview](docs/arch/README.md) — entry point for the spec
+2. [Glossary](docs/arch/glossary.md) — ubiquitous-language vocabulary
+3. [ADR-0002](docs/arch/adr/0002-bounded-contexts.md) — strategic DDD and the seven bounded contexts
+4. [ADR-0040](docs/arch/adr/0040-async-job-control-plane.md) — async job control-plane (Push/Pull dual channel)
 
 ## Validation
 
