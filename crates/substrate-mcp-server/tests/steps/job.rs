@@ -794,9 +794,28 @@ async fn then_progress_pct_equals(world: &mut SubstrateWorld, expected: i64) {
 #[then(regex = r#"^the response contains an error object$"#)]
 async fn then_response_has_error(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
+    // Per MCP spec, tool-side errors may be reported in two distinct shapes:
+    //
+    //   (a) JSON-RPC transport-level error:
+    //       top-level `error` object with an integer `code` field.
+    //
+    //   (b) MCP tool-level error (e.g., SUBSTRATE_ENCODING_ERROR for NUL byte
+    //       paths): `result.isError = true` with error details in
+    //       `result.structuredContent`.  The outer JSON-RPC envelope is a
+    //       success (no top-level `error` key).
+    //
+    // Accept either shape as evidence that "the response contains an error".
+    let has_transport_error = resp["error"].is_object();
+    let has_tool_error = resp["result"]["isError"]
+        .as_bool()
+        .unwrap_or(false)
+        && (resp["result"]["structuredContent"]["code"].is_string()
+            || resp["result"]["structuredContent"].is_object());
     assert!(
-        resp["error"].is_object(),
-        "expected error object but got: {resp}"
+        has_transport_error || has_tool_error,
+        "expected a JSON-RPC transport error (top-level 'error' object) or a \
+         tool-level error (result.isError=true + result.structuredContent) \
+         but got: {resp}"
     );
 }
 

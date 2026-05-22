@@ -112,6 +112,16 @@ pub struct SubstrateWorld {
     /// appends each line here.  Steps that need audit events or WARN lines can
     /// query this buffer without blocking the main test thread.
     pub stderr_lines: Arc<Mutex<Vec<String>>>,
+
+    // -----------------------------------------------------------------------
+    // Scenario-level skip flag (feature: jail-degraded-refused-startup-aborts)
+    // -----------------------------------------------------------------------
+
+    /// When `true`, all subsequent steps in this scenario should return early
+    /// without asserting.  Set by Background steps whose precondition cannot
+    /// be satisfied on the current host (e.g., kernel supports `openat2`/
+    /// `O_NOFOLLOW_ANY` so the "degraded jail" scenario is inapplicable).
+    pub skip_scenario: bool,
 }
 
 // The `#[derive(World)]` macro from cucumber generates the WorldInventory
