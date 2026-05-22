@@ -61,7 +61,9 @@ pub(crate) fn jail_dest_via_parent(
 
     // SAFETY (semantic): `jailed_parent` is verified within the allowlist;
     // appending a plain filename component cannot escape the jail.
-    Ok(JailedPath::new_jailed(jailed_parent.as_path().join(filename)))
+    Ok(JailedPath::new_jailed(
+        jailed_parent.as_path().join(filename),
+    ))
 }
 
 #[cfg(test)]

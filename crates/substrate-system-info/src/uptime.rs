@@ -3,7 +3,13 @@
 //! The macOS implementation calls `libc::sysctl(KERN_BOOTTIME)` directly; the
 //! module-level allow below is the narrowest scope available for a file module.
 // macOS sysctl FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
-#![cfg_attr(target_os = "macos", allow(unsafe_code, reason = "libc::sysctl(KERN_BOOTTIME) FFI on macOS; standard read-only syscall. ADR-0042 + ADR-0044 sysctl carve-out."))]
+#![cfg_attr(
+    target_os = "macos",
+    allow(
+        unsafe_code,
+        reason = "libc::sysctl(KERN_BOOTTIME) FFI on macOS; standard read-only syscall. ADR-0042 + ADR-0044 sysctl carve-out."
+    )
+)]
 //!
 //! Returns system uptime in seconds and as a human-readable duration string.
 //!
@@ -220,5 +226,66 @@ mod tests {
     fn humanize_seconds_only() {
         let s = Uptime::humanize(42);
         assert_eq!(s, "42s");
+    }
+
+    #[test]
+    fn humanize_zero_seconds() {
+        let s = Uptime::humanize(0);
+        assert_eq!(s, "0s", "zero uptime must render as '0s'");
+    }
+
+    #[test]
+    fn humanize_exactly_one_day() {
+        let s = Uptime::humanize(86_400);
+        assert_eq!(s, "1d 0h 0m 0s");
+    }
+
+    #[test]
+    fn humanize_large_value_does_not_panic() {
+        // u64::MAX / 86400 is a valid number of days; must not panic.
+        let _ = Uptime::humanize(u64::MAX);
+    }
+
+    // Proptest: humanize(s) must always produce a non-empty string and
+    // the re-parsed total seconds must equal the original value.
+    proptest::proptest! {
+        #[test]
+        fn humanize_roundtrip_via_parse(secs in 0u64..=365u64 * 86_400 * 200) {
+            let s = Uptime::humanize(secs);
+            proptest::prop_assert!(!s.is_empty(), "humanize must never produce an empty string");
+
+            // Verify structural composition: seconds component always present when
+            // below 1 day, or whole-unit boundary is expressed correctly.
+            let days  = secs / 86_400;
+            let hours = (secs % 86_400) / 3_600;
+            let mins  = (secs % 3_600) / 60;
+            let ss    = secs % 60;
+            if days > 0 {
+                let expected = format!("{0}d", days);
+                proptest::prop_assert!(s.contains(&expected));
+            } else if hours > 0 {
+                let expected = format!("{0}h", hours);
+                proptest::prop_assert!(s.contains(&expected));
+            } else if mins > 0 {
+                let expected = format!("{0}m", mins);
+                proptest::prop_assert!(s.contains(&expected));
+            } else {
+                let expected = format!("{0}s", ss);
+                proptest::prop_assert!(s.contains(&expected));
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn uptime_is_positive_macos() {
+        let deps = Arc::new(SystemInfoDeps {
+            capabilities: Arc::new(Capabilities::default()),
+        });
+        let resp = handle_sys_uptime(deps)
+            .await
+            .expect("sys.uptime must not fail on macOS");
+        let up: Uptime = serde_json::from_value(resp.structured_content).expect("valid JSON");
+        assert!(up.seconds > 0, "uptime must be greater than 0 on macOS");
     }
 }

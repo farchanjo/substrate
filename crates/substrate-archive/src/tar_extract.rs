@@ -398,6 +398,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn symlink_member_in_tar_is_blocked() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("evil.tar");
+        let dest = tmp.path().join("extracted");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // Build a TAR with a symlink entry.
+        {
+            let file = std::fs::File::create(&archive).unwrap();
+            let mut builder = tar::Builder::new(file);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_cksum();
+            // link_name points outside; member path is inside extraction root.
+            builder
+                .append_link(&mut header, "innocent.txt", "/etc/passwd")
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let deps = make_deps();
+        let req = TarExtractRequest {
+            archive: archive.to_string_lossy().into_owned(),
+            dest: dest.to_string_lossy().into_owned(),
+            dry_run: false,
+            confirmed: true,
+        };
+        let err = handle_archive_tar_extract(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SubstrateError::SymlinkEscape { .. }),
+            "expected SymlinkEscape, got: {err:?}"
+        );
+        assert!(!dest.join("innocent.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn tar_slip_dotdot_is_blocked() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("slip.tar");
+        let dest = tmp.path().join("extracted");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        create_test_tar(&archive, &[("../escape.txt", b"bad")]);
+
+        let deps = make_deps();
+        let req = TarExtractRequest {
+            archive: archive.to_string_lossy().into_owned(),
+            dest: dest.to_string_lossy().into_owned(),
+            dry_run: false,
+            confirmed: true,
+        };
+        let err = handle_archive_tar_extract(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SubstrateError::PathTraversalBlocked { .. }));
+        assert!(!tmp.path().join("escape.txt").exists());
+    }
+
+    #[tokio::test]
     async fn dry_run_returns_manifest_without_writing() {
         let tmp = TempDir::new().unwrap();
         let archive = tmp.path().join("test.tar");

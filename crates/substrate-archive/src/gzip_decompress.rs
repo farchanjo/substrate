@@ -370,6 +370,41 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn gzip_large_stream_respects_resource_limit() {
+        // Validates that a gzip input larger than max_output_bytes is rejected
+        // quickly (within 5 seconds) without allocating the full stream.
+        // We use 100 KiB of zeros compressed to a small .gz, then set
+        // max_output_bytes = 1 KiB so the guard triggers early.
+        let tmp = TempDir::new().unwrap();
+        let gz = tmp.path().join("large.gz");
+        let data = vec![0u8; 100 * 1024]; // 100 KiB zeros
+        create_gz(&gz, &data);
+        let dest = tmp.path().join("large.out");
+        let deps = make_deps();
+
+        let req = GzipDecompressRequest {
+            source: gz.to_string_lossy().into_owned(),
+            dest: dest.to_string_lossy().into_owned(),
+            dry_run: false,
+            max_output_bytes: 1024, // 1 KiB limit
+        };
+
+        // Must complete within 5 seconds and must return ResourceLimit.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_archive_gzip_decompress(req, &deps, CancellationToken::new()),
+        )
+        .await
+        .expect("gzip resource-limit guard must complete within 5 seconds");
+
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, SubstrateError::ResourceLimit { .. }),
+            "expected ResourceLimit, got: {err:?}"
+        );
+    }
+
     // Regression for the dest-path-jail bug: a live decompress whose output
     // does not exist yet must succeed by jailing the parent directory.
     #[tokio::test]

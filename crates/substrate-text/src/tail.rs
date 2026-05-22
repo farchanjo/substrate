@@ -368,6 +368,49 @@ mod tests {
         assert_eq!(lines, vec!["gamma", "delta"]);
     }
 
+    /// Proptest: for any file content and any n, the head+tail counts must
+    /// together be <= 2*n and <= total lines (they may overlap on short files).
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(30))]
+        #[test]
+        fn head_and_tail_line_counts_are_bounded(
+            lines_count in 0usize..40,
+            n in 1usize..25,
+        ) {
+            use std::io::Write;
+            let content: String = (0..lines_count).map(|i| format!("line{i}\n")).collect();
+            let mut f = NamedTempFile::new().expect("tempfile");
+            write!(f, "{content}").expect("write");
+
+            let buf = std::fs::read(f.path()).expect("read");
+            let head_lines = {
+                // Simulate Zone A head: first n lines.
+                let text = std::str::from_utf8(&buf).expect("utf8");
+                let all: Vec<&str> = text.lines().collect();
+                all.len().min(n)
+            };
+            let tail_lines = last_n_lines_from_bytes(&buf, n).len();
+
+            proptest::prop_assert!(
+                head_lines <= n,
+                "head must return at most n lines (got {head_lines})"
+            );
+            proptest::prop_assert!(
+                tail_lines <= n,
+                "tail must return at most n lines (got {tail_lines})"
+            );
+            // Both head and tail are subsets of the full file lines.
+            proptest::prop_assert!(
+                head_lines <= lines_count,
+                "head count must not exceed file line count"
+            );
+            proptest::prop_assert!(
+                tail_lines <= lines_count,
+                "tail count must not exceed file line count"
+            );
+        }
+    }
+
     /// Verifies that the large-file Zone B blocking tail path produces the same
     /// result as the Zone A path for content that fits in memory.
     #[tokio::test]

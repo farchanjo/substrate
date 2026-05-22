@@ -145,6 +145,8 @@ mod tests {
         let deps = FsMutationDeps {
             jail,
             capabilities: caps,
+            #[cfg(feature = "fs-index")]
+            index: substrate_fs_index::FsIndexFactory::new().build(&Capabilities::default()),
         };
         (dir, root, deps)
     }
@@ -197,5 +199,59 @@ mod tests {
         handle_fs_set_permissions(req, &deps, &root)
             .await
             .expect("chmod 0o644");
+    }
+
+    /// Verifies that `fchmodat` with `FollowSymlink` updates the target file's
+    /// mode, not the symlink's mode (symlinks have no independent mode on POSIX).
+    /// After `chmod` on a symlink, the target's mode must be updated.
+    #[tokio::test]
+    async fn set_permissions_on_symlink_affects_target_via_fchmodat() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, root, deps) = make_test_env();
+        let target = dir.path().join("real.txt");
+        let link   = dir.path().join("link.txt");
+        std::fs::write(&target, b"data").expect("seed target");
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+        let req = FsSetPermissionsRequest {
+            path: link.display().to_string(),
+            mode: 0o600,
+            dry_run_acknowledged: true,
+            confirmed: false,
+        };
+        handle_fs_set_permissions(req, &deps, &root)
+            .await
+            .expect("chmod on symlink via fchmodat must succeed");
+
+        // Stat the TARGET (not the link) — fchmodat(FollowSymlink) follows links.
+        let target_meta = std::fs::metadata(&target).expect("stat target");
+        let mode = target_meta.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "target file mode must be 0o600 after chmod via symlink");
+
+        // lstat the LINK itself — symlink mode is fixed at 0o777 on macOS/Linux.
+        let link_lstat = std::fs::symlink_metadata(&link).expect("lstat link");
+        assert!(link_lstat.file_type().is_symlink(), "link must still be a symlink");
+    }
+
+    #[tokio::test]
+    async fn rejects_path_outside_allowlist() {
+        let (_dir, root, deps) = make_test_env();
+        let req = FsSetPermissionsRequest {
+            path: "/etc/passwd".into(),
+            mode: 0o644,
+            dry_run_acknowledged: true,
+            confirmed: false,
+        };
+        let err = handle_fs_set_permissions(req, &deps, &root)
+            .await
+            .unwrap_err();
+        assert!(
+            err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
+                || err.code() == "SUBSTRATE_NOT_FOUND"
+                || err.code() == "SUBSTRATE_PERMISSION_DENIED",
+            "unexpected code: {}",
+            err.code()
+        );
     }
 }

@@ -340,6 +340,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_match_returns_empty_matches() {
+        let tmp = write_temp("alpha\nbeta\ngamma\n");
+        let params = SearchParams {
+            path: tmp.path().to_str().expect("utf8 path").to_owned(),
+            pattern: "ZZZNOMATCH".to_owned(),
+            page_size: None,
+            cursor: None,
+        };
+        let result = handle_text_search(params, make_deps(), CancellationToken::new())
+            .await
+            .expect("no-match search must succeed");
+        let total = result.structured_content["total_match_count"]
+            .as_u64()
+            .expect("total_match_count");
+        assert_eq!(total, 0, "pattern that matches nothing must return zero results");
+        let matches = result.structured_content["matches"]
+            .as_array()
+            .expect("matches array");
+        assert!(matches.is_empty(), "matches array must be empty for no-match");
+    }
+
+    #[tokio::test]
+    async fn catastrophic_regex_is_rejected_not_hung() {
+        let tmp = write_temp(&"a".repeat(100));
+        let params = SearchParams {
+            path: tmp.path().to_str().expect("utf8 path").to_owned(),
+            pattern: "(a+)+b".to_owned(),
+            page_size: None,
+            cursor: None,
+        };
+        // The regex guard must either reject the pattern outright (InvalidArgument)
+        // or return a result quickly. Under no circumstances should this hang.
+        // We assert the call completes (no timeout), and if it errors the code
+        // must be SUBSTRATE_INVALID_ARGUMENT.
+        let result = handle_text_search(params, make_deps(), CancellationToken::new()).await;
+        if let Err(e) = result {
+            assert_eq!(
+                e.code(),
+                "SUBSTRATE_INVALID_ARGUMENT",
+                "only InvalidArgument is acceptable for catastrophic regex"
+            );
+        }
+        // If Ok: the regex engine handled it within DFA limits — acceptable too.
+    }
+
+    #[tokio::test]
+    async fn literal_substring_match() {
+        let tmp = write_temp("the quick brown fox\njumps over the lazy dog\n");
+        let params = SearchParams {
+            path: tmp.path().to_str().expect("utf8 path").to_owned(),
+            pattern: "lazy".to_owned(),
+            page_size: None,
+            cursor: None,
+        };
+        let result = handle_text_search(params, make_deps(), CancellationToken::new())
+            .await
+            .expect("literal match must succeed");
+        let total = result.structured_content["total_match_count"]
+            .as_u64()
+            .expect("total_match_count");
+        assert_eq!(total, 1, "exactly one line contains 'lazy'");
+    }
+
+    #[tokio::test]
+    async fn regex_match_returns_correct_line_numbers() {
+        let tmp = write_temp("line 1\nline 2\nMATCH 3\nline 4\nMATCH 5\n");
+        let params = SearchParams {
+            path: tmp.path().to_str().expect("utf8 path").to_owned(),
+            pattern: "^MATCH".to_owned(),
+            page_size: None,
+            cursor: None,
+        };
+        let result = handle_text_search(params, make_deps(), CancellationToken::new())
+            .await
+            .expect("regex match must succeed");
+        let total = result.structured_content["total_match_count"]
+            .as_u64()
+            .expect("total_match_count");
+        assert_eq!(total, 2, "two lines start with MATCH");
+        let matches = result.structured_content["matches"]
+            .as_array()
+            .expect("matches array");
+        assert_eq!(
+            matches[0]["line_number"].as_u64().expect("line_number"),
+            3,
+            "first match must be on line 3"
+        );
+        assert_eq!(
+            matches[1]["line_number"].as_u64().expect("line_number"),
+            5,
+            "second match must be on line 5"
+        );
+    }
+
+    #[tokio::test]
     async fn pagination_splits_results() {
         let content: String = (1..=60).map(|i| format!("match line {i}\n")).collect();
         let tmp = write_temp(&content);

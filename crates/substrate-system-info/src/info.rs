@@ -1,6 +1,12 @@
 //! `sys.info` handler — Zone A (sync inline).
 // macOS sysctl + mach FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
-#![cfg_attr(target_os = "macos", allow(unsafe_code, reason = "libc sysctl(HW_MEMSIZE, VM_SWAPUSAGE) + sysconf + mach host_statistics64(HOST_VM_INFO64) FFI on macOS; read-only syscalls. ADR-0042 + ADR-0044 sysctl/mach carve-out."))]
+#![cfg_attr(
+    target_os = "macos",
+    allow(
+        unsafe_code,
+        reason = "libc sysctl(HW_MEMSIZE, VM_SWAPUSAGE) + sysconf + mach host_statistics64(HOST_VM_INFO64) FFI on macOS; read-only syscalls. ADR-0042 + ADR-0044 sysctl/mach carve-out."
+    )
+)]
 //!
 //! Returns a composite `SystemSnapshot` combining kernel version, hostname,
 //! uptime, memory statistics, and load averages in a single call.

@@ -179,6 +179,8 @@ mod tests {
         let deps = FsMutationDeps {
             jail,
             capabilities: caps,
+            #[cfg(feature = "fs-index")]
+            index: substrate_fs_index::FsIndexFactory::new().build(&Capabilities::default()),
         };
         (dir, root, deps)
     }

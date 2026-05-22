@@ -89,7 +89,10 @@ pub async fn handle_fs_copy(
     }
 
     // Preflight disk-space.
-    let dst_parent = jailed_dst.as_path().parent().unwrap_or_else(|| Path::new("."));
+    let dst_parent = jailed_dst
+        .as_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
     preflight::check_disk_space(dst_parent, src_len).await?;
 
     // Zone A transactional copy: tokio::fs::copy then atomic rename.
@@ -211,6 +214,8 @@ mod tests {
         let deps = FsMutationDeps {
             jail,
             capabilities: caps,
+            #[cfg(feature = "fs-index")]
+            index: substrate_fs_index::FsIndexFactory::new().build(&Capabilities::default()),
         };
         (dir, root, deps)
     }

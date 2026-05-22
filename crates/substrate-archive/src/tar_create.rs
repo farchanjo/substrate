@@ -38,7 +38,9 @@ use crate::response::{ArchiveDeps, ToolResponse};
 use crate::tmp_path::TmpPath;
 
 /// Compression algorithm for TAR archives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum TarCompression {
     /// No compression — plain `.tar`.
@@ -245,11 +247,7 @@ fn build_tar_blocking(
                 let path = src.as_path();
                 if path.is_dir() {
                     builder
-                        .append_dir_all(
-                            path.file_name()
-                                .map_or(path, std::path::Path::new),
-                            path,
-                        )
+                        .append_dir_all(path.file_name().map_or(path, std::path::Path::new), path)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
                             correlation_id: None,
@@ -260,11 +258,7 @@ fn build_tar_blocking(
                         correlation_id: None,
                     })?;
                     builder
-                        .append_file(
-                            path.file_name()
-                                .map_or(path, std::path::Path::new),
-                            &mut f,
-                        )
+                        .append_file(path.file_name().map_or(path, std::path::Path::new), &mut f)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
                             correlation_id: None,
@@ -284,11 +278,7 @@ fn build_tar_blocking(
                 let path = src.as_path();
                 if path.is_dir() {
                     builder
-                        .append_dir_all(
-                            path.file_name()
-                                .map_or(path, std::path::Path::new),
-                            path,
-                        )
+                        .append_dir_all(path.file_name().map_or(path, std::path::Path::new), path)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
                             correlation_id: None,
@@ -299,11 +289,7 @@ fn build_tar_blocking(
                         correlation_id: None,
                     })?;
                     builder
-                        .append_file(
-                            path.file_name()
-                                .map_or(path, std::path::Path::new),
-                            &mut f,
-                        )
+                        .append_file(path.file_name().map_or(path, std::path::Path::new), &mut f)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
                             correlation_id: None,

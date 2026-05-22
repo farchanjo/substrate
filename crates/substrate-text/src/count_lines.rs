@@ -283,4 +283,48 @@ mod tests {
         let scalar_count = data.iter().filter(|&&b| b == b'\n').count();
         assert_eq!(simd_count, scalar_count);
     }
+
+    /// Single line with no trailing newline must count as 1 by the newline-count
+    /// method only if the caller adds 1 for the final unterminated line.
+    /// The current implementation counts raw newlines (bytecount), so "hello"
+    /// with no newline yields 0 newlines and 5 bytes — document this contract.
+    #[tokio::test]
+    async fn single_line_no_newline_counts_zero_newlines() {
+        let tmp = write_temp("hello");
+        let params = CountLinesParams {
+            path: tmp.path().to_str().expect("utf8").to_owned(),
+        };
+        let result = handle_text_count_lines(params, make_deps(), CancellationToken::new())
+            .await
+            .expect("count must succeed");
+        // bytecount counts b'\n' occurrences — "hello" has none.
+        assert_eq!(result.structured_content["line_count"].as_u64(), Some(0));
+        assert_eq!(result.structured_content["byte_count"].as_u64(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn multi_line_file_returns_correct_count() {
+        let tmp = write_temp("a\nb\nc\n");
+        let params = CountLinesParams {
+            path: tmp.path().to_str().expect("utf8").to_owned(),
+        };
+        let result = handle_text_count_lines(params, make_deps(), CancellationToken::new())
+            .await
+            .expect("count must succeed");
+        assert_eq!(result.structured_content["line_count"].as_u64(), Some(3));
+    }
+
+    // Proptest: for any string written to disk, bytecount(newlines) == count of
+    // '\n' bytes in the content. Validates the SIMD path against a scalar oracle.
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(50))]
+        #[test]
+        fn simd_newline_count_matches_scalar(
+            content in proptest::string::string_regex("[a-z \n]{0,200}").unwrap()
+        ) {
+            let scalar = content.bytes().filter(|&b| b == b'\n').count();
+            let simd   = bytecount::count(content.as_bytes(), b'\n');
+            proptest::prop_assert_eq!(scalar, simd, "SIMD count must equal scalar count");
+        }
+    }
 }

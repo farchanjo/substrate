@@ -3,7 +3,13 @@
 //! The macOS implementation calls `libc::getloadavg` directly; see the
 //! `read_load_average` function for full safety justification (ADR-0042 + ADR-0044).
 // macOS getloadavg FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
-#![cfg_attr(target_os = "macos", allow(unsafe_code, reason = "libc::getloadavg FFI on macOS; standard POSIX read call. ADR-0042 + ADR-0044 sysctl carve-out."))]
+#![cfg_attr(
+    target_os = "macos",
+    allow(
+        unsafe_code,
+        reason = "libc::getloadavg FFI on macOS; standard POSIX read call. ADR-0042 + ADR-0044 sysctl carve-out."
+    )
+)]
 //!
 //! Returns 1-, 5-, and 15-minute CPU load averages.
 //!
@@ -89,10 +95,7 @@ fn read_load_average() -> SubstrateResult<LoadAverage> {
 
     if ret < 0 {
         return Err(substrate_domain::SubstrateError::InternalError {
-            reason: format!(
-                "getloadavg(3) failed: {}",
-                std::io::Error::last_os_error()
-            ),
+            reason: format!("getloadavg(3) failed: {}", std::io::Error::last_os_error()),
             correlation_id: None,
         });
     }
@@ -158,5 +161,33 @@ mod tests {
             .await
             .expect("sys.load_average must not fail");
         assert!(resp.content.starts_with("sys.load_average:"));
+    }
+
+    #[tokio::test]
+    async fn load_average_values_are_non_nan() {
+        let deps = Arc::new(SystemInfoDeps {
+            capabilities: Arc::new(Capabilities::default()),
+        });
+        let resp = handle_sys_load_average(deps)
+            .await
+            .expect("sys.load_average must not fail");
+        let avg: LoadAverage = serde_json::from_value(resp.structured_content).expect("valid JSON");
+        assert!(!avg.load_1.is_nan(), "load_1 must not be NaN");
+        assert!(!avg.load_5.is_nan(), "load_5 must not be NaN");
+        assert!(!avg.load_15.is_nan(), "load_15 must not be NaN");
+    }
+
+    #[tokio::test]
+    async fn load_average_values_are_finite() {
+        let deps = Arc::new(SystemInfoDeps {
+            capabilities: Arc::new(Capabilities::default()),
+        });
+        let resp = handle_sys_load_average(deps)
+            .await
+            .expect("sys.load_average must not fail");
+        let avg: LoadAverage = serde_json::from_value(resp.structured_content).expect("valid JSON");
+        assert!(avg.load_1.is_finite(), "load_1 must be finite");
+        assert!(avg.load_5.is_finite(), "load_5 must be finite");
+        assert!(avg.load_15.is_finite(), "load_15 must be finite");
     }
 }

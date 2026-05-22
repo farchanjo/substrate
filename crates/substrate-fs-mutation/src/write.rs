@@ -37,7 +37,9 @@ use crate::tmp_path::TmpPath;
 // ---- Request -----------------------------------------------------------------
 
 /// Encoding of the `content` field in [`FsWriteRequest`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum WriteEncoding {
     /// Plain UTF-8 text.
@@ -271,6 +273,8 @@ mod tests {
         let deps = FsMutationDeps {
             jail,
             capabilities: caps,
+            #[cfg(feature = "fs-index")]
+            index: substrate_fs_index::FsIndexFactory::new().build(&Capabilities::default()),
         };
         (dir, root, deps)
     }
@@ -342,5 +346,59 @@ mod tests {
         // Original content preserved.
         let still_old = std::fs::read_to_string(&target).expect("read");
         assert_eq!(still_old, "old");
+    }
+
+    /// Verifies atomic write semantics: after a successful write there must be
+    /// no residual `.tmp.<uuid>` files in the parent directory.
+    #[tokio::test]
+    async fn write_leaves_no_temp_file_on_success() {
+        let (dir, root, deps) = make_test_env();
+        let target = dir.path().join("atomic.txt");
+        let req = FsWriteRequest {
+            path: target.display().to_string(),
+            content: "atomic content".into(),
+            encoding: WriteEncoding::Text,
+            fail_if_exists: false,
+            dry_run: false,
+        };
+        handle_fs_write(req, &deps, &root).await.expect("write");
+        // The parent directory must contain only the target file, no temp files.
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .collect();
+        let tmp_files: Vec<_> = entries
+            .iter()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains(".tmp.")
+            })
+            .collect();
+        assert!(
+            tmp_files.is_empty(),
+            "no temp files must remain after successful write: {tmp_files:?}"
+        );
+        assert!(target.exists(), "target file must exist");
+    }
+
+    #[tokio::test]
+    async fn rejects_path_outside_allowlist() {
+        let (_dir, root, deps) = make_test_env();
+        let req = FsWriteRequest {
+            path: "/etc/substrate_test_file".into(),
+            content: "data".into(),
+            encoding: WriteEncoding::Text,
+            fail_if_exists: false,
+            dry_run: false,
+        };
+        let err = handle_fs_write(req, &deps, &root).await.unwrap_err();
+        assert!(
+            err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
+                || err.code() == "SUBSTRATE_NOT_FOUND"
+                || err.code() == "SUBSTRATE_PERMISSION_DENIED",
+            "unexpected code: {}",
+            err.code()
+        );
     }
 }

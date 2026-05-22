@@ -176,6 +176,8 @@ mod tests {
         let deps = FsMutationDeps {
             jail,
             capabilities: caps,
+            #[cfg(feature = "fs-index")]
+            index: substrate_fs_index::FsIndexFactory::new().build(&Capabilities::default()),
         };
         (dir, root, deps)
     }
@@ -211,5 +213,45 @@ mod tests {
         handle_fs_rename(req, &deps, &root).await.expect("rename");
         assert!(!src.exists());
         assert!(dst.exists());
+    }
+
+    #[tokio::test]
+    async fn rename_dst_outside_allowlist_is_rejected() {
+        let (dir, root, deps) = make_test_env();
+        let src = dir.path().join("file.txt");
+        std::fs::write(&src, b"data").expect("seed");
+        let req = FsRenameRequest {
+            src: src.display().to_string(),
+            dst: "/tmp/__substrate_rename_escape_test".into(),
+            overwrite: true,
+            dry_run_acknowledged: true,
+        };
+        let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
+        assert!(
+            err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
+                || err.code() == "SUBSTRATE_NOT_FOUND",
+            "unexpected code: {}",
+            err.code()
+        );
+        assert!(src.exists(), "source must still exist");
+    }
+
+    #[tokio::test]
+    async fn overwrite_true_replaces_existing_dst() {
+        let (dir, root, deps) = make_test_env();
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+        std::fs::write(&src, b"new content").expect("seed src");
+        std::fs::write(&dst, b"old content").expect("seed dst");
+        let req = FsRenameRequest {
+            src: src.display().to_string(),
+            dst: dst.display().to_string(),
+            overwrite: true,
+            dry_run_acknowledged: true,
+        };
+        handle_fs_rename(req, &deps, &root).await.expect("rename with overwrite");
+        assert!(!src.exists());
+        let content = std::fs::read_to_string(&dst).expect("read dst");
+        assert_eq!(content, "new content");
     }
 }

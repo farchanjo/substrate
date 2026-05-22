@@ -116,8 +116,7 @@ pub async fn handle_archive_hash(
             match algorithm {
                 HashAlgorithm::Blake3 => {
                     let digest = hasher.hash_file(&jailed)?;
-                    let size = std::fs::metadata(jailed.as_path())
-                        .map_or(0, |m| m.len());
+                    let size = std::fs::metadata(jailed.as_path()).map_or(0, |m| m.len());
                     Ok((digest.to_hex(), size))
                 },
                 HashAlgorithm::Sha256 => {
@@ -301,6 +300,23 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, SubstrateError::NotFound { .. }));
+    }
+
+    // Proptest: identical byte content must always produce the same BLAKE3 digest.
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(20))]
+        #[test]
+        fn blake3_is_deterministic_for_arbitrary_content(
+            content in proptest::collection::vec(proptest::num::u8::ANY, 0..=512)
+        ) {
+            let d1 = blake3::hash(&content);
+            let d2 = blake3::hash(&content);
+            proptest::prop_assert_eq!(
+                d1.as_bytes(),
+                d2.as_bytes(),
+                "BLAKE3 must be deterministic"
+            );
+        }
     }
 
     #[tokio::test]

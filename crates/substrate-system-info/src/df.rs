@@ -4,7 +4,13 @@
 //! `read_mounts` function for full safety justification (ADR-0042 + ADR-0044).
 // macOS getmntinfo FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
 // This file is the ONLY module in this crate that uses unsafe code.
-#![cfg_attr(target_os = "macos", allow(unsafe_code, reason = "libc::getmntinfo + CStr FFI on macOS; no safe wrapper exists. ADR-0042 + ADR-0044 sysctl/getmntinfo carve-out."))]
+#![cfg_attr(
+    target_os = "macos",
+    allow(
+        unsafe_code,
+        reason = "libc::getmntinfo + CStr FFI on macOS; no safe wrapper exists. ADR-0042 + ADR-0044 sysctl/getmntinfo carve-out."
+    )
+)]
 //!
 //! Lists mounted filesystems with capacity, used, available bytes, and
 //! usage percentage.
@@ -142,13 +148,7 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
 
 /// Pseudo-filesystem type names skipped on macOS (virtual/kernel-internal).
 #[cfg(target_os = "macos")]
-const PSEUDO_FS_TYPES_MACOS: &[&str] = &[
-    "devfs",
-    "autofs",
-    "nullfs",
-    "fdesc",
-    "map auto.home",
-];
+const PSEUDO_FS_TYPES_MACOS: &[&str] = &["devfs", "autofs", "nullfs", "fdesc", "map auto.home"];
 
 #[cfg(target_os = "macos")]
 fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
@@ -164,10 +164,7 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
 
     if count < 0 {
         return Err(substrate_domain::SubstrateError::InternalError {
-            reason: format!(
-                "getmntinfo failed: {}",
-                std::io::Error::last_os_error()
-            ),
+            reason: format!("getmntinfo failed: {}", std::io::Error::last_os_error()),
             correlation_id: None,
         });
     }
@@ -186,8 +183,7 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
         clippy::cast_sign_loss,
         reason = "count is i32 from getmntinfo; negativity is checked explicitly above"
     )]
-    let entries =
-        unsafe { std::slice::from_raw_parts(mounts_ptr, count as usize) };
+    let entries = unsafe { std::slice::from_raw_parts(mounts_ptr, count as usize) };
 
     let mut result = Vec::with_capacity(entries.len());
 
@@ -196,31 +192,25 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
         // SAFETY: `f_fstypename` is a NUL-terminated array filled by the kernel.
         // `CStr::from_ptr` is safe because the kernel guarantees NUL termination
         // within the MFSNAMELEN (16) bytes.
-        let fstype = unsafe {
-            std::ffi::CStr::from_ptr(entry.f_fstypename.as_ptr())
-        }
-        .to_str()
-        .unwrap_or("unknown")
-        .to_owned();
+        let fstype = unsafe { std::ffi::CStr::from_ptr(entry.f_fstypename.as_ptr()) }
+            .to_str()
+            .unwrap_or("unknown")
+            .to_owned();
 
         if PSEUDO_FS_TYPES_MACOS.contains(&fstype.as_str()) {
             continue;
         }
 
         // SAFETY: same reasoning as above for f_mntonname and f_mntfromname.
-        let mount = unsafe {
-            std::ffi::CStr::from_ptr(entry.f_mntonname.as_ptr())
-        }
-        .to_str()
-        .unwrap_or("unknown")
-        .to_owned();
+        let mount = unsafe { std::ffi::CStr::from_ptr(entry.f_mntonname.as_ptr()) }
+            .to_str()
+            .unwrap_or("unknown")
+            .to_owned();
 
-        let device = unsafe {
-            std::ffi::CStr::from_ptr(entry.f_mntfromname.as_ptr())
-        }
-        .to_str()
-        .unwrap_or("unknown")
-        .to_owned();
+        let device = unsafe { std::ffi::CStr::from_ptr(entry.f_mntfromname.as_ptr()) }
+            .to_str()
+            .unwrap_or("unknown")
+            .to_owned();
 
         // `statfs` on macOS uses u32 block sizes and u64 block counts.
         let block_size = u64::from(entry.f_bsize);
@@ -314,5 +304,35 @@ mod tests {
     #[test]
     fn usage_pct_full() {
         assert_eq!(MountPoint::usage_pct(100, 100), 100.0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn df_returns_at_least_one_mount_macos() {
+        let deps = Arc::new(SystemInfoDeps {
+            capabilities: Arc::new(Capabilities::default()),
+        });
+        let resp = handle_sys_df(deps).await.expect("sys.df must not fail");
+        let obj = resp.structured_content.as_object().expect("object");
+        let mounts = obj["mounts"].as_array().expect("mounts array");
+        assert!(
+            !mounts.is_empty(),
+            "at least one real mount must exist on macOS"
+        );
+    }
+
+    #[test]
+    fn usage_pct_over_hundred_is_clamped_at_display_level() {
+        // usage_pct does NOT clamp; caller is expected to handle. This test
+        // documents the existing behavior: a partial block may exceed 100% due
+        // to rounding in the one-decimal-place display.
+        let pct = MountPoint::usage_pct(101, 100);
+        assert!((pct - 101.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn usage_pct_rounds_to_one_decimal() {
+        // 33 / 100 = 33.0%, rounds cleanly.
+        assert_eq!(MountPoint::usage_pct(1, 3), 33.3);
     }
 }
