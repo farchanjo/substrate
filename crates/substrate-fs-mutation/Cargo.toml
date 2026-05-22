@@ -1,0 +1,39 @@
+[package]
+name = "substrate-fs-mutation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Write-side filesystem adapter (fs.mkdir, fs.write, fs.copy, fs.rename, fs.remove, fs.set_permissions, fs.symlink, fs.touch). Transactional via tmp.<uuid7> + atomic rename."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+fs-index = ["dep:substrate-fs-index"]
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-policy = { path = "../substrate-policy" }
+schemars = { workspace = true }
+substrate-fs-index = { path = "../substrate-fs-index", optional = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+nix = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+futures = { workspace = true }
+base64-simd = { workspace = true }
+simdutf8 = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }

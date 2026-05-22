@@ -1,0 +1,215 @@
+//! `fs.rename` — atomically rename or move a file or directory.
+//!
+//! # Async zone: A
+//!
+//! Uses `tokio::fs::rename` (maps to `rename(2)` on POSIX). Atomic on the
+//! same filesystem. Cross-filesystem moves require a copy+remove sequence —
+//! that pattern is not supported here; callers should use `fs.copy` + `fs.remove`.
+//!
+//! # Dry-run
+//!
+//! When `dry_run = true`, returns a preview of the intended rename without
+//! touching disk. The handler checks the dry-run gate per ADR-0004 Layer 3.
+
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+
+use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
+
+use crate::elicitation;
+use crate::hints_helpers;
+use crate::response::{FsMutationDeps, ToolResponse};
+
+// ---- Request -----------------------------------------------------------------
+
+/// Input parameters for `fs.rename`.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FsRenameRequest {
+    /// Source path (must exist and be within the allowlist).
+    pub src: String,
+
+    /// Destination path (parent must be within the allowlist).
+    pub dst: String,
+
+    /// When `false` (default), fail if `dst` already exists.
+    #[serde(default)]
+    pub overwrite: bool,
+
+    /// Must be explicitly set to `true` before the operation executes.
+    /// First call with `false` returns a dry-run preview.
+    #[serde(default)]
+    pub dry_run_acknowledged: bool,
+}
+
+// ---- Handler -----------------------------------------------------------------
+
+/// Handles an `fs.rename` tool call.
+///
+/// # Errors
+///
+/// Propagates any [`SubstrateError`] from jail validation, dry-run gate, or
+/// `tokio::fs::rename`.
+#[instrument(skip(deps), fields(src = %req.src, dst = %req.dst))]
+pub async fn handle_fs_rename(
+    req: FsRenameRequest,
+    deps: &FsMutationDeps,
+    allowlist_root: &JailedPath,
+) -> SubstrateResult<ToolResponse> {
+    // Layer 1+2: jail both paths.
+    let jailed_src = deps.jail.jail(allowlist_root, Path::new(&req.src))?;
+    let jailed_dst = jail_dst_path(&req.dst, deps, allowlist_root)?;
+
+    // Layer 3: dry-run gate.
+    if !req.dry_run_acknowledged {
+        elicitation::require_dry_run_acknowledged(false)?;
+    }
+
+    // Overwrite guard.
+    if !req.overwrite && jailed_dst.as_path().exists() {
+        return Err(SubstrateError::InvalidArgument {
+            offending_field: "dst".into(),
+            reason: "Destination already exists and overwrite is false.".into(),
+            correlation_id: None,
+        });
+    }
+
+    // Zone A: atomic rename.
+    tokio::fs::rename(jailed_src.as_path(), jailed_dst.as_path())
+        .await
+        .map_err(|e| map_io_error(e, jailed_src.as_path()))?;
+
+    #[cfg(feature = "fs-index")]
+    crate::write_through::on_rename(&deps.index, &jailed_src, &jailed_dst);
+
+    let content = format!("Renamed {jailed_src} → {jailed_dst}");
+    let sc = serde_json::json!({
+        "src": jailed_src.as_path(),
+        "dst": jailed_dst.as_path(),
+    });
+    Ok(ToolResponse::with_hints(
+        content,
+        sc,
+        hints_helpers::mutation_success_hints("fs.stat"),
+    ))
+}
+
+// ---- Helpers -----------------------------------------------------------------
+
+fn jail_dst_path(
+    raw: &str,
+    deps: &FsMutationDeps,
+    root: &JailedPath,
+) -> SubstrateResult<JailedPath> {
+    let target = Path::new(raw);
+    if target.exists() {
+        return deps.jail.jail(root, target);
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| SubstrateError::InvalidArgument {
+            offending_field: "dst".into(),
+            reason: "Destination path has no parent directory.".into(),
+            correlation_id: None,
+        })?;
+    let jailed_parent = deps.jail.jail(root, parent)?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| SubstrateError::InvalidArgument {
+            offending_field: "dst".into(),
+            reason: "Destination path has no file name component.".into(),
+            correlation_id: None,
+        })?;
+    Ok(JailedPath::new_jailed(
+        jailed_parent.as_path().join(file_name),
+    ))
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "std::io::Error is the conventional error-mapping pattern; taking by value avoids lifetime annotation at call sites"
+)]
+fn map_io_error(e: std::io::Error, path: &Path) -> SubstrateError {
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
+            path: path.display().to_string(),
+            correlation_id: None,
+        },
+        std::io::ErrorKind::NotFound => SubstrateError::NotFound {
+            resource: path.display().to_string(),
+            correlation_id: None,
+        },
+        _ => SubstrateError::IoError {
+            path: path.display().to_string(),
+            correlation_id: None,
+        },
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::missing_panics_doc,
+    reason = "test module: panics are the correct failure mode"
+)]
+mod tests {
+    use std::sync::Arc;
+
+    use substrate_domain::{Capabilities, JailedPath, PortFactory};
+    use substrate_policy::{Allowlist, PathJailFactory};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::response::FsMutationDeps;
+
+    fn make_test_env() -> (TempDir, JailedPath, FsMutationDeps) {
+        let dir = TempDir::new().expect("tempdir");
+        let canonical = dir.path().canonicalize().expect("canonicalize");
+        let root = JailedPath::new_jailed(canonical.clone());
+        let allowlist = Allowlist::new(vec![canonical]).expect("allowlist");
+        let caps = Arc::new(Capabilities::default());
+        let factory = PathJailFactory::new(allowlist, false);
+        let jail = factory.build(&caps);
+        let deps = FsMutationDeps {
+            jail,
+            capabilities: caps,
+        };
+        (dir, root, deps)
+    }
+
+    #[tokio::test]
+    async fn dry_run_gate_blocks_without_acknowledgement() {
+        let (dir, root, deps) = make_test_env();
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, b"data").expect("seed");
+        let req = FsRenameRequest {
+            src: src.display().to_string(),
+            dst: dir.path().join("b.txt").display().to_string(),
+            overwrite: false,
+            dry_run_acknowledged: false,
+        };
+        let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
+        assert!(src.exists(), "source must still exist");
+    }
+
+    #[tokio::test]
+    async fn renames_file_with_acknowledged_dry_run() {
+        let (dir, root, deps) = make_test_env();
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, b"data").expect("seed");
+        let dst = dir.path().join("b.txt");
+        let req = FsRenameRequest {
+            src: src.display().to_string(),
+            dst: dst.display().to_string(),
+            overwrite: false,
+            dry_run_acknowledged: true,
+        };
+        handle_fs_rename(req, &deps, &root).await.expect("rename");
+        assert!(!src.exists());
+        assert!(dst.exists());
+    }
+}
