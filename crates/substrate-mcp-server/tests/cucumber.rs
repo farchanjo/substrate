@@ -17,6 +17,7 @@
 //   - missing_docs / unreachable_pub: internal test harness; no public API.
 #![expect(
     clippy::expect_used,
+    clippy::panic,
     clippy::disallowed_types,
     clippy::disallowed_methods,
     clippy::must_use_candidate,

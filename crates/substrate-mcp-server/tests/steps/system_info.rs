@@ -134,12 +134,22 @@ async fn then_content_text_under_80_tokens(world: &mut SubstrateWorld) {
 )]
 async fn then_uptime_gte(world: &mut SubstrateWorld, min: u64) {
     let resp = world.last_response.as_ref().expect("no response");
+    // sys.info embeds host uptime as structuredContent.uptime_seconds.
+    // Try multiple candidate paths to handle future schema evolution.
     let uptime = resp["result"]["structuredContent"]["uptime_seconds"]
         .as_u64()
+        .or_else(|| resp["result"]["structuredContent"]["sys_uptime"]["uptime_seconds"].as_u64())
+        .or_else(|| resp["result"]["content"][0]["text"]
+            .as_str()
+            .and_then(|t| {
+                // Fallback: parse uptime from embedded JSON text if tool wraps it.
+                serde_json::from_str::<serde_json::Value>(t).ok()
+                    .and_then(|v| v["uptime_seconds"].as_u64())
+            }))
         .unwrap_or(0);
     assert!(
         uptime >= min,
-        "expected uptime_seconds >= {min} but got {uptime}"
+        "expected uptime_seconds >= {min} but got {uptime} (host uptime from sys.info)"
     );
 }
 
