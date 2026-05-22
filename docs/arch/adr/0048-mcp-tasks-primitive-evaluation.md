@@ -243,7 +243,5 @@ This decision MUST be reopened under any of the following conditions:
   https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/
 - rmcp 1.7.0 release notes (STDIO Tasks examples):
   https://github.com/modelcontextprotocol/rust-sdk/releases
-- ADR-0040 Push/Pull dual-channel design:
-  [0040-async-job-control-plane.md](0040-async-job-control-plane.md)
-- ADR-0027 MCP protocol migration policy:
-  [0027-mcp-protocol-migration.md](0027-mcp-protocol-migration.md)
+- [ADR-0040](0040-async-job-control-plane.md) — Push/Pull dual-channel design
+- [ADR-0027](0027-mcp-protocol-migration.md) — MCP protocol migration policy

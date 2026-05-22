@@ -95,7 +95,7 @@ If you are new to this specification, read the following documents in order:
   partition substrate's tool surface (filesystem-query, filesystem-mutation,
   process, system-info, text-processing, archive, job), their mutation risk
   classifications, and the context map showing how they share the kernel
-- [glossary.md](glossary.md) — definitions for every term used across ADRs,
+- [Glossary](glossary.md) — definitions for every term used across ADRs,
   schemas, and bounded-context READMEs; consult this when a term is ambiguous
 - [ADR-0007](adr/0007-tool-card-narrative-arc.md) — the canonical format for
   tool descriptions (narrative-arc template), the bifurcation between prose and
@@ -111,7 +111,7 @@ context README under `domain/`, any CUE schema under `schemas/`, and any ADR in
 ## Architecture Model
 
 The Structurizr DSL workspace model at
-[architecture/workspace.dsl](architecture/workspace.dsl) defines the C4 system
+[Structurizr workspace](architecture/workspace.dsl) defines the C4 system
 context, container, and component diagrams. Render it with the Structurizr CLI
 or the Structurizr Lite server:
 
