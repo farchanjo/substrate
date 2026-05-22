@@ -1,0 +1,122 @@
+---
+status: accepted
+date: 2026-05-21
+deciders: [com.archanjo]
+consulted: []
+informed: []
+---
+
+# ADR-0002 — Bounded Contexts and Context Map
+
+## Context and Problem Statement
+
+Substrate exposes a wide surface of OS management capabilities to LLM agents.
+Without explicit semantic boundaries, tools from different concern families
+(querying filesystem metadata versus mutating it, or inspecting processes
+versus reading system hardware info) would accumulate in a single service blob,
+making policy enforcement, testing, and future versioning impractical.
+
+The problem is: how should the MCP tool surface be partitioned so that each
+region has a coherent ubiquitous language, clear ownership, and independently
+evolvable policy?
+
+## Decision Drivers
+
+- Each tool family carries distinct mutation risk: reads are idempotent,
+  mutations are destructive, process signals are irreversible.
+- Security policy (allowlists, dry-run, elicitation) differs per family.
+- Independent deployability and testability of each concern family.
+- Ubiquitous language must be unambiguous within each boundary.
+
+## Considered Options
+
+- Option A: Single bounded context, all tools in one crate.
+- Option B: Two contexts (read-only vs. mutating).
+- Option C: Six contexts partitioned by semantic family.
+
+## Decision Outcome
+
+Chosen option: "Option C — six contexts partitioned by semantic family",
+because each family has a distinct risk profile, a distinct ubiquitous
+language, and a distinct set of port abstractions that would be muddied by
+coarser partitioning.
+
+### Bounded Contexts
+
+**filesystem-query**
+
+Purpose: Read-only inspection of filesystem metadata and content.
+Ubiquitous language: Entry, Stat, DiskUsage, FileKind, Glob, PageCursor.
+Aggregates: DirectoryListing, StatResult, DiskUsageTree.
+Tools exposed: ls, find, stat, du, file.
+Mutation risk: none.
+
+**filesystem-mutation**
+
+Purpose: Structural changes to the filesystem.
+Ubiquitous language: JailedPath, MutationPlan, DryRunReport, Overwrite,
+Permission, Ownership.
+Aggregates: MutationRequest, MutationResult.
+Tools exposed: mkdir, cp, mv, rm, ln, touch, chmod, chown.
+Mutation risk: high; dry-run mandatory; elicitation required for destructive
+operations.
+
+**process**
+
+Purpose: Inspection and control of running OS processes.
+Ubiquitous language: Pid, ProcessSnapshot, Signal, ProcessFilter, ResourceUsage.
+Aggregates: ProcessList, ProcessHandle.
+Tools exposed: ps, top, kill, pgrep, lsof.
+Mutation risk: high for signals; elicitation required for SIGKILL, SIGTERM,
+SIGSTOP.
+
+**system-info**
+
+Purpose: Read-only hardware and OS-level metadata.
+Ubiquitous language: KernelVersion, Uptime, MountPoint, MemoryStats,
+HostName.
+Aggregates: SystemSnapshot.
+Tools exposed: uname, uptime, df, free, hostname.
+Mutation risk: none.
+
+**text-processing**
+
+Purpose: Stream-oriented text search and transformation over file content
+or stdin.
+Ubiquitous language: Pattern, Match, Delimiter, FieldSelector, SortKey,
+Frequency.
+Aggregates: MatchResult, TransformResult.
+Tools exposed: grep, sed, awk, cut, sort, uniq, wc.
+Mutation risk: none (reads only; writes are out of scope for MVP).
+
+**archive**
+
+Purpose: Creation, inspection, and extraction of archive files.
+Ubiquitous language: ArchiveEntry, CompressionAlgorithm, ArchivePath,
+ExtractTarget.
+Aggregates: ArchiveManifest, ArchiveWriteRequest.
+Tools exposed: tar, gzip, zip.
+Mutation risk: medium for writes; elicitation required for archive creation
+targeting jailed paths.
+
+### Context Map
+
+All six contexts share a single **shared kernel** (`substrate-domain` crate)
+containing value objects that cross boundaries: JailedPath, ToolResult,
+PageCursor, ProgressToken, AuditEvent. No aggregate is shared. Each context
+maps to its own adapter crate; the shared kernel is the only permitted
+inter-context dependency at the domain layer. See ADR-0025.
+
+## Validation
+
+- Each bounded context crate (`substrate-fs-query`, `substrate-fs-mutation`,
+  `substrate-process`, `substrate-system-info`, `substrate-text`,
+  `substrate-archive`) must compile independently with `cargo check -p <crate>`.
+- `cargo deny` must confirm no direct crate-to-crate imports crossing context
+  boundaries except through `substrate-domain`.
+- Integration tests for each context live under `crates/<context>/tests/`.
+
+## Links
+
+- Related: [ADR-0025](0025-bounded-context-interactions.md)
+- Related: [ADR-0022](0022-project-layout.md)

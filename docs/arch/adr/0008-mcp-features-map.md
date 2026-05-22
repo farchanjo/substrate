@@ -1,0 +1,243 @@
+---
+status: accepted
+date: 2026-05-21
+deciders: [com.archanjo]
+consulted: []
+informed: []
+---
+
+# ADR-0008 — MCP Feature Usage Map
+
+## Context and Problem Statement
+
+The MCP specification (2025-06-18 and 2025-11-25) provides a rich set of optional features: tool annotations, outputSchema, pagination, progress notifications, cancellation, elicitation, and resource URIs. Substrate must declare which features it uses, per namespace, so that capability negotiation is deterministic and implementors know what to implement and test.
+
+The question: which MCP optional features does substrate use, for which tool namespaces, and what are the concrete defaults and rules for each?
+
+## Decision Drivers
+
+- Determinism: agents must be able to predict feature availability from the initialize response.
+- Safety: destructive operations (fs.remove, proc.signal, archive writes) require elicitation guards.
+- Performance: progress notifications are necessary for long-running archive and find operations.
+- Compatibility: features must degrade gracefully when the client lacks capability.
+- Auditability: a single document maps all feature usage; no scattered tribal knowledge.
+
+## Considered Options
+
+1. **Full feature matrix** — enumerate every feature per namespace in this ADR, with defaults and rules.
+2. **Feature-by-feature ADRs** — one ADR per MCP feature.
+3. **Inline code comments only** — no architectural documentation.
+
+## Decision Outcome
+
+Chosen option: "Full feature matrix", because the features are interdependent (e.g., elicitation depends on annotations, outputSchema depends on pagination shape) and a single map is the least ambiguous reference.
+
+### Tool Annotations Matrix
+
+| Namespace | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
+|-----------|:------------:|:---------------:|:--------------:|:-------------:|
+| fs.find | true | false | true | false |
+| fs.read | true | false | true | false |
+| fs.read_dir | true | false | true | false |
+| fs.stat | true | false | true | false |
+| fs.write | false | false | false | false |
+| fs.mkdir | false | false | true | false |
+| fs.remove | false | **true** | false | false |
+| fs.rename | false | false | false | false |
+| fs.copy | false | false | false | false |
+| fs.set_permissions | false | false | false | false |
+| proc.list | true | false | true | true |
+| proc.signal | false | **true** | false | false |
+| proc.tree | true | false | true | true |
+| sys.info | true | false | true | false |
+| sys.uptime | true | false | true | false |
+| sys.df | true | false | true | false |
+| sys.uname | true | false | true | false |
+| text.search | true | false | true | false |
+| text.count_lines | true | false | true | false |
+| archive.tar.create | false | false | false | false |
+| archive.tar.extract | false | false | false | false |
+| archive.zip.create | false | false | false | false |
+| archive.zip.extract | false | false | false | false |
+| archive.gzip.compress | false | false | false | false |
+| archive.gzip.decompress | false | false | false | false |
+| archive.hash | true | false | true | false |
+
+### outputSchema via schemars
+
+Every tool that returns a structured result derives `JsonSchema` via `schemars`:
+
+```rust
+#[derive(Serialize, JsonSchema)]
+pub struct FindResult {
+    pub matches: Vec<FileMeta>,
+    pub next_cursor: Option<String>,
+}
+```
+
+The derived schema is registered in the tool's `output_schema` field during server initialization. Clients that support `outputSchema` (2025-06-18+) use the schema for result validation. Clients without support receive the result as untyped JSON.
+
+### Pagination Defaults and Cursor Encoding
+
+- Default page size: **50** items.
+- Maximum page size: **500** items (enforced server-side; requests exceeding this are clamped).
+- Cursor encoding: opaque base64url-encoded JSON containing `{offset: u64, seed: u64}`. The seed is a per-request random value that invalidates stale cursors after a directory modification.
+- Applicable tools: `fs.find`, `fs.read_dir`, `proc.list`, `proc.tree`.
+- Tools that do not paginate omit `next_cursor` from their outputSchema.
+
+### Progress Notification Rule
+
+Progress notifications (`$/progress`) are emitted for operations expected to exceed **1 second** wall time. The minimum cadence between notifications is **500 milliseconds** (prevents notification flooding).
+
+Tools that emit progress:
+
+| Tool | Trigger condition |
+|------|------------------|
+| fs.find | Subtree depth > 3 or estimated match count > 200 |
+| archive.tar.create | Archive size estimate > 10 MB |
+| archive.tar.extract | Archive size > 10 MB |
+| archive.zip.create | Archive size estimate > 10 MB |
+| archive.zip.extract | Archive size > 10 MB |
+| archive.gzip.compress | Input size > 50 MB |
+| archive.hash | Input size > 100 MB |
+
+Progress payload:
+
+```json
+{"progress": 0.42, "total": 1.0, "message": "hashing 420/1000 files"}
+```
+
+### Cancellation Propagation
+
+All tools accept cancellation via `$/cancelRequest`. The cancellation token is threaded through the async call chain via `tokio_util::sync::CancellationToken`. Upon cancellation:
+
+1. The tool stops processing and drops all intermediate state.
+2. The tool returns a JSON-RPC error with code `-32800` (request cancelled).
+3. Partially written files (fs.write) are NOT committed; the original file is preserved.
+4. Archive operations abort and clean up temporary files.
+
+### Elicitation Matrix
+
+Elicitation (form-mode, 2025-11-25) is triggered for operations that are destructive or irreversible. The server requests user confirmation before executing:
+
+| Tool | Elicitation trigger | Form fields |
+|------|---------------------|-------------|
+| fs.remove | Always | `confirm: bool`, `path: string (readonly)` |
+| fs.write | When path exists | `overwrite: bool`, `path: string (readonly)` |
+| proc.signal | signal in {SIGKILL, SIGTERM, SIGSTOP} | `confirm: bool`, `pid: u32 (readonly)`, `signal: string (readonly)` |
+| archive.tar.create | When output path exists | `overwrite: bool`, `dest: string (readonly)` |
+| archive.zip.create | When output path exists | `overwrite: bool`, `dest: string (readonly)` |
+| fs.set_permissions | mode octal ≤ 0o444 (removing write/exec broadly) | `confirm: bool`, `mode: string (readonly)` |
+
+When the client does not support elicitation (pre-2025-11-25), the tool returns an error with code `-32001` (elicitation required but unsupported) and takes no action.
+
+### Resources URI Catalog
+
+Substrate exposes on-demand resources (not pre-listed in `resources/list`):
+
+| URI pattern | Content | MIME type |
+|-------------|---------|-----------|
+| `substrate://docs/{tool_name}` | Full tool documentation (Markdown) | `text/markdown` |
+| `substrate://examples/{tool_name}` | Worked usage examples (Markdown) | `text/markdown` |
+| `substrate://errors/{code}` | Error code explanation and recovery guide | `text/markdown` |
+| `substrate://prompts/{workflow_name}` | Canned workflow prompt template | `text/plain` |
+
+Resources are generated at request time from embedded static assets. The `resources/list` response advertises the URI templates; individual resources are fetched via `resources/read`.
+
+### Consequences
+
+#### Positive
+
+- Single source of truth for all feature usage; implementors and reviewers consult one document.
+- Elicitation matrix prevents accidental destructive operations even when the agent runtime is poorly constrained.
+- Pagination defaults prevent memory exhaustion on large directory trees.
+
+#### Negative
+
+- Maintaining the annotations matrix manually is error-prone; a macro or derive attribute would be preferable.
+- Elicitation fallback (error on unsupported clients) may break older agent runtimes; those runtimes must upgrade to 2025-11-25.
+
+## Validation
+
+- CI runs a schema comparison between the schemars-derived outputSchema and a golden file for each tool.
+- Integration tests exercise pagination with page_size=1 to verify cursor correctness across all paginated tools.
+- Cancellation tests inject a cancel signal 100ms into a large `fs.find` and assert no result is returned.
+- Elicitation tests mock the client form submission and verify that fs.remove does not execute without `confirm: true`.
+
+### Concurrency and Capability Edge Cases
+
+#### Concurrency ceiling
+
+A maximum of **32** simultaneous in-flight tool calls is permitted per session (configurable via `[protocol] max_in_flight_requests`). See [ADR-0005](0005-stdio-transport.md) for the transport-level enforcement and the `-32000` response format.
+
+#### Elicitation timeout
+
+Substrate waits at most **60 seconds** for the client to respond to an `elicit/create` request. On timeout, the tool returns `SUBSTRATE_CONFIRMATION_REQUIRED` with:
+
+```json
+{"recovery_hint": "user did not respond within 60s; retry the operation when ready"}
+```
+
+The tool **never** proceeds without explicit user confirmation regardless of the timeout path.
+
+#### Elicitation declined vs cancelled distinction
+
+| User action | Error code | `recovery_hint` value |
+|---|---|---|
+| Explicit decline | `SUBSTRATE_CONFIRMATION_REQUIRED` | `"user declined the operation"` |
+| Dialog closed / timeout | `SUBSTRATE_CONFIRMATION_REQUIRED` | `"user did not respond within 60s; retry the operation when ready"` |
+
+#### Elicitation response schema re-validation
+
+Before acting on an `elicit/create` response, substrate MUST re-validate the returned fields against the declared `requestedSchema`. If validation fails (e.g., `confirm: "yes"` when `bool` is expected), the tool returns `SUBSTRATE_INVALID_ARGUMENT` with an `offending_field` key naming the field that failed validation.
+
+#### Nested elicitation prohibited
+
+If a tool handler attempts to send a second `elicit/create` while one is already pending for the same request, the second attempt is rejected with `SUBSTRATE_INTERNAL_ERROR`. Tool handlers must not chain elicitation calls.
+
+#### `content` MUST be non-empty when `structuredContent` is populated
+
+When a tool response includes a `structuredContent` object, the `content` array MUST contain at least one text item carrying a one-line human-readable summary of the result. Older MCP clients that ignore `structuredContent` receive this text as their only display string.
+
+#### Progress capability gating
+
+Substrate emits `notifications/progress` **only** when the client advertised the `progress` capability during `initialize`. When the capability is absent, progress events are silently suppressed; the underlying operation continues and completes normally.
+
+#### Logging capability gating
+
+Substrate emits `notifications/message` (MCP log notifications) **only** when the client advertised the `logging` capability during `initialize`. When the capability is absent, log output goes to stderr only and is never sent over the MCP channel.
+
+#### Cancel-before-progress race
+
+If a cancellation notification arrives before the first progress notification is emitted, the tool aborts immediately. The client receives a JSON-RPC error with code `-32800` (request cancelled). No progress notification ever fires. Tool handlers MUST check their `CancellationToken` at the very start of execution to handle this case.
+
+#### Cancel-vs-completion race
+
+If the tool result is already queued for write when a cancellation notification arrives, the result is delivered to the client. The cancellation becomes a no-op. Per the MCP specification, clients are permitted to receive a valid result for a request they attempted to cancel.
+
+#### Cancel for unknown request id
+
+Silently dropped. Cancellation is a notification (no response expected), and referencing an unknown id is not an error condition.
+
+#### Double-cancel for in-flight request
+
+Idempotent. `tokio_util::sync::CancellationToken` is already-cancelled-safe; signalling it a second time has no effect.
+
+### tools/list Cursor Policy
+
+Substrate currently implements fewer than 30 tools. The `tools/list` response fits in a single page. **Cursor support on `tools/list` itself is NOT implemented in MVP.** Clients must not pass a `cursor` parameter to `tools/list`; doing so is ignored and the full list is returned.
+
+Tool *results* still use cursor pagination (per [ADR-0007](0007-tool-card-narrative-arc.md)) — this restriction applies only to the `tools/list` meta-endpoint.
+
+### Tool Annotation Audit-Log Exception
+
+`readOnlyHint: true` in the annotations matrix refers to the **primary data** the tool accesses. It does NOT account for incidental audit-log writes that substrate may make as a cross-cutting internal concern. Operations such as `fs.read`, `fs.stat`, and `sys.info` are correctly annotated as `readOnlyHint: true` even if an audit record is persisted, because auditing is a side-effect of the infrastructure layer, not of the tool's declared behavior.
+
+## Cross-References
+
+- ADR-0005: STDIO Transport — transport layer over which all these features are delivered; transport-level concurrency cap.
+- ADR-0007: Tool Card Narrative Arc Design — how annotations and structuredContent hints relate to tool descriptions; cursor pagination for tool results.
+- ADR-0013: MCP Protocol Version Pinning — which features require which minimum version.
+- ADR-0032: Signal Safety — cancellation and shutdown signal propagation that interacts with in-flight tool calls.
+- ADR-0033: Elicitation Security Model — threat model and rate-limit policy for elicitation flows.
+- ADR-0037: Audit Logging — cross-cutting audit-log concern referenced in the annotation exception above.
