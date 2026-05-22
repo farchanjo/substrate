@@ -128,7 +128,10 @@ fn initialize_returns_protocol_2025_11_25_and_capabilities() {
 
     // Verify experimental.substrate.jobs is a boolean (true or false).
     let jobs = &resp["result"]["capabilities"]["experimental"]["substrate"]["jobs"];
-    assert!(jobs.is_boolean(), "experimental.substrate.jobs must be boolean, got: {jobs}");
+    assert!(
+        jobs.is_boolean(),
+        "experimental.substrate.jobs must be boolean, got: {jobs}"
+    );
 
     // Kill child cleanly.
     let mut guard = child_arc.lock().unwrap_or_else(|e| e.into_inner());
@@ -164,19 +167,20 @@ fn tools_list_returns_37_tools() {
     let _init = recv(&mut reader);
 
     // Send initialized notification (no response expected).
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
 
     // Request tools/list.
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"tools/list","id":2,"params":{}}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"tools/list","id":2,"params":{}}"#,
+    );
     let resp = recv(&mut reader);
 
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(
-        tools.len(),
-        37,
-        "expected 37 tools, found {}",
-        tools.len()
-    );
+    assert_eq!(tools.len(), 37, "expected 37 tools, found {}", tools.len());
 
     let mut guard = child_arc.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(c) = guard.as_mut() {
@@ -208,7 +212,10 @@ fn tools_call_sys_hostname_returns_result() {
         r#"{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.1"}}}"#,
     );
     let _init = recv(&mut reader);
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
 
     send(
         &mut stdin,
@@ -265,7 +272,10 @@ fn tools_call_fs_stat_on_temp_returns_structured_content() {
         r#"{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.1"}}}"#,
     );
     let _init = recv(&mut reader);
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
 
     let call = serde_json::json!({
         "jsonrpc": "2.0",

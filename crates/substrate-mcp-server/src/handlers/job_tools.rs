@@ -9,8 +9,10 @@
 //! individual job control-plane operations without going through the full
 //! `ToolDispatcher::dispatch` match arm.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
-
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 // Retained for integration-test access; not yet called by the production path.
 #![expect(
     dead_code,

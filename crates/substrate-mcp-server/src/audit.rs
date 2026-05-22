@@ -15,7 +15,10 @@
 //! (file, syslog, or external sink) configured via `[audit]` TOML config.
 //! The current implementation is a thin tracing wrapper.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use substrate_domain::Capabilities;
 

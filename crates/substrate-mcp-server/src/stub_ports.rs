@@ -14,7 +14,10 @@
 //! error taxonomy; the remaining stub uses `SUBSTRATE_INTERNAL_ERROR` with a
 //! descriptive message.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use async_trait::async_trait;
 
@@ -28,7 +31,10 @@ use substrate_domain::{
 /// Null-object `FsIndexPort` stub; returns empty results for `lookup` and
 /// `SUBSTRATE_INTERNAL_ERROR` for `rebuild_root`.
 /// Replaced by `FsIndexFactory::build` in Wave D.
-#[expect(dead_code, reason = "replaced by FsIndexFactory in composition; retained for testing")]
+#[expect(
+    dead_code,
+    reason = "replaced by FsIndexFactory in composition; retained for testing"
+)]
 #[derive(Debug)]
 pub(crate) struct NullFsIndex;
 

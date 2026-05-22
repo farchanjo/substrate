@@ -59,9 +59,7 @@ impl PortFactory<dyn PathJailPort> for PathJailFactory {
         // --- Tier 1: macOS O_NOFOLLOW_ANY ---
         #[cfg(target_os = "macos")]
         if caps.has_o_nofollow_any {
-            self.chosen_tier
-                .set("macos-o-nofollow-any")
-                .unwrap_or(());
+            self.chosen_tier.set("macos-o-nofollow-any").unwrap_or(());
             tracing::info!(tier = "macos-o-nofollow-any", "PathJail tier selected");
             return Arc::new(crate::macos::ONoFollowAnyJail::new(self.allowlist.clone()));
         }
@@ -70,9 +68,7 @@ impl PortFactory<dyn PathJailPort> for PathJailFactory {
         let _ = caps;
 
         // --- Tier degraded ---
-        self.chosen_tier
-            .set("userspace-degraded")
-            .unwrap_or(());
+        self.chosen_tier.set("userspace-degraded").unwrap_or(());
 
         if self.refuse_degraded {
             // Log at ERROR level; the composition root must abort after build()

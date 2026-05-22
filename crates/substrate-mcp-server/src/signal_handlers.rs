@@ -10,54 +10,58 @@
 //! ADR-0032 amendment (ADR-0042): capability probe must complete before
 //! signal handlers are installed.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use tokio_util::sync::CancellationToken;
 
 // ---- SIGPIPE -----------------------------------------------------------------
 
-/// Sets SIGPIPE to `SIG_IGN` in the calling process.
+/// Sets SIGPIPE to `SIG_IGN` so broken-pipe conditions surface as `EPIPE` /
+/// `io::ErrorKind::BrokenPipe` rather than terminating the process silently.
 ///
-/// Must be called in single-threaded context before `tokio::runtime::Builder`
-/// spawns worker threads. Returns `Ok(())` on success.
+/// Per ADR-0032: "SIGPIPE `SIG_IGN` converts broken pipe to EPIPE error for
+/// surface handling." This must be called in single-threaded context before
+/// `tokio::runtime::Builder` spawns worker threads.
+///
+/// # Implementation constraint (ADR-0032 + crate lint policy)
+///
+/// `main.rs` declares `#![cfg_attr(not(test), forbid(unsafe_code))]`, which
+/// prevents any `unsafe` block anywhere in this crate — including the
+/// `unsafe { nix::sys::signal::signal(...) }` call that installs `SIG_IGN`.
+/// Both `nix::sys::signal::signal` and `nix::sys::signal::sigaction` are
+/// `unsafe fn`, so no safe-Rust path exists without a separate crate or a
+/// `forbid` → `deny` relaxation in `main.rs`.
+///
+/// The correct fix (deferred to Wave D) is to extract the signal-setup logic
+/// into a dedicated `substrate-signal` crate with its own
+/// `[lints.rust] unsafe_code = "deny"` (workspace `forbid` overridden at
+/// crate level per Cargo lint precedence), include a SAFETY comment, and add
+/// a `miri` coverage test. Until that crate exists this function is a safe
+/// no-op: tokio converts `EPIPE` to `io::ErrorKind::BrokenPipe` on most
+/// platforms, which the MCP dispatch layer already handles gracefully.
+///
+/// Wave D action: move this into `substrate-signal` crate, relax `unsafe_code`
+/// to `"deny"` at crate level, then call:
+/// ```text
+///   // SAFETY: signal(SIGPIPE, SIG_IGN) is async-signal-safe and safe to call
+///   // in single-threaded context before the tokio worker pool is started.
+///   // SigHandler::SigIgn does not invoke a user-space handler; no re-entrancy
+///   // risk. ADR-0032: "SIGPIPE SIG_IGN converts broken pipe to EPIPE error
+///   // for surface handling."
+///   unsafe { nix::sys::signal::signal(Signal::SIGPIPE, SigHandler::SigIgn)?; }
+/// ```
 ///
 /// # Errors
 ///
-/// Returns a `nix::Error` when the `signal(2)` call fails (extremely rare;
-/// would indicate a kernel-level constraint on signal disposition).
-/// Sets SIGPIPE to `SIG_IGN` in the calling process (ADR-0032).
-///
-/// Must be called in single-threaded context before `tokio::runtime::Builder`
-/// spawns worker threads. Returns `Ok(())` on success.
-///
-/// # Implementation note (Wave B scaffold)
-///
-/// `nix::sys::signal::signal` is `unsafe fn`. The workspace lint table sets
-/// `unsafe_code = "forbid"`, which cannot be overridden per-function without
-/// removing `workspace = true` from `[lints]`. The Wave D implementation will
-/// resolve this by either:
-///   (a) Moving `ignore_sigpipe` to a dedicated crate that opts out of the
-///       workspace forbid via its own `[lints.rust] unsafe_code = "deny"`, or
-///   (b) Using the `rlimit` / `signal-hook` crate's safe `SigAction` wrapper.
-///
-/// For the Wave B scaffold, SIGPIPE handling is intentionally a no-op. The
-/// tokio runtime converts `BrokenPipe` to `io::ErrorKind::BrokenPipe` on many
-/// platforms anyway; the scaffold does not perform long-running stdout writes.
-///
-/// TODO Wave D: implement real `SIG_IGN` via safe wrapper crate.
-///
-/// # Errors
-///
-/// Always returns `Ok(())` in the Wave B scaffold.
+/// Always returns `Ok(())` (no-op; see constraint note above).
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "Wave B scaffold — Wave D will perform a real SIGPIPE install that can fail; preserving Result signature avoids call-site churn"
+    reason = "Result signature preserved so call-site is unchanged when Wave D adds the real SIG_IGN install in substrate-signal"
 )]
 pub(crate) const fn ignore_sigpipe() -> Result<(), nix::Error> {
-    // TODO Wave D: call `nix::sys::signal::signal(Signal::SIGPIPE, SigHandler::SigIgn)`
-    // inside an `unsafe` block with a SAFETY comment, from a crate module that
-    // uses `#![allow(unsafe_code)]` with `[lints.rust] unsafe_code = "deny"`
-    // (workspace forbid overridden at crate level per Cargo lint precedence).
     Ok(())
 }
 

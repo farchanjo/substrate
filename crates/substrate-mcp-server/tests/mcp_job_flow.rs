@@ -123,10 +123,12 @@ fn handshake(
         r#"{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"job-flow-test","version":"0.0.1"}}}"#,
     );
     let init_resp = recv(reader);
-    send(stdin, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+    send(
+        stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
     init_resp
 }
-
 
 // ---- archive_tar_create job flow test ----------------------------------------
 

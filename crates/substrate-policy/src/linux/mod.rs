@@ -63,8 +63,7 @@ const SYS_OPENAT2: libc::c_long = 437;
 const SYS_OPENAT2: libc::c_long = 437; // conservative fallback; see comment above
 
 // O_PATH | O_CLOEXEC — open purely for validation; no actual I/O.
-const OPEN_FLAGS: u64 =
-    (libc::O_PATH | libc::O_CLOEXEC) as u64;
+const OPEN_FLAGS: u64 = (libc::O_PATH | libc::O_CLOEXEC) as u64;
 
 /// Opens `root` as a directory file descriptor for use as the `dirfd` argument
 /// to `openat2`.
@@ -92,14 +91,9 @@ fn open_root_dirfd(root: &Path) -> SubstrateResult<OwnedFd> {
 
 /// Converts a `Path` to a `CString`, returning `EncodingError` on null bytes.
 fn path_to_cstring(path: &Path) -> SubstrateResult<CString> {
-    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| {
-        SubstrateError::EncodingError {
-            detail: format!(
-                "null byte in path: {}",
-                path.display()
-            ),
-            correlation_id: None,
-        }
+    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| SubstrateError::EncodingError {
+        detail: format!("null byte in path: {}", path.display()),
+        correlation_id: None,
     })
 }
 
@@ -171,9 +165,7 @@ impl substrate_domain::PathJailPort for Openat2Jail {
         };
 
         if fd < 0 {
-            let errno = std::io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(0);
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             return Err(map_openat2_errno(errno, raw_path));
         }
 

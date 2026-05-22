@@ -118,7 +118,7 @@ const fn crockford_digit(b: u8) -> Option<u8> {
     // Accept both uppercase and lowercase; map common confusable chars.
     let b = b.to_ascii_uppercase();
     match b {
-        b'0' | b'O' => Some(0), // O -> 0 (confusable)
+        b'0' | b'O' => Some(0),        // O -> 0 (confusable)
         b'1' | b'I' | b'L' => Some(1), // I -> 1, L -> 1 (confusables)
         b'2' => Some(2),
         b'3' => Some(3),

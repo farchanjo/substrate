@@ -30,9 +30,7 @@ use rmcp::{
     model::{NumberOrString, ProgressNotificationParam, ProgressToken},
 };
 use substrate_domain::{
-    jobs::progress::ProgressEvent,
-    ports::job_registry::JobResult,
-    value_objects::JobId,
+    jobs::progress::ProgressEvent, ports::job_registry::JobResult, value_objects::JobId,
 };
 use substrate_jobs::ProgressNotifier;
 use tracing::{debug, warn};

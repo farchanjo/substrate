@@ -19,7 +19,10 @@
 //! 9. Build `ToolDispatcher`.
 //! 10. Emit `SUBSTRATE_CAPABILITY_TIERS_SELECTED` audit event.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use std::sync::Arc;
 
@@ -241,8 +244,7 @@ mod tests {
     #[tokio::test]
     async fn job_control_plane_wired_when_config_section_absent() {
         // A real, canonical allowlist root so `Allowlist::new` succeeds.
-        let root =
-            std::fs::canonicalize(std::env::temp_dir()).expect("temp dir must canonicalize");
+        let root = std::fs::canonicalize(std::env::temp_dir()).expect("temp dir must canonicalize");
 
         let mut config = RuntimeConfig::default();
         config.policy.roots = vec![root];

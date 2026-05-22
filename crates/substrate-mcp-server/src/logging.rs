@@ -12,7 +12,10 @@
 //!
 //! Standard `RUST_LOG` env var drives the filter. Defaults to `info` when absent.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use std::io;
 
@@ -29,8 +32,8 @@ pub(crate) fn init() -> Result<(), io::Error> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    let use_json = std::env::var("SUBSTRATE_LOG_FORMAT")
-        .is_ok_and(|v| v.eq_ignore_ascii_case("json"));
+    let use_json =
+        std::env::var("SUBSTRATE_LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json"));
 
     if use_json {
         tracing_subscriber::fmt()

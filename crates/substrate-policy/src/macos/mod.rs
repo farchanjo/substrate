@@ -53,11 +53,9 @@ const MAXPATHLEN: usize = 1024;
 
 /// Converts a `Path` to a `CString`, returning `EncodingError` on null bytes.
 fn path_to_cstring(path: &Path) -> SubstrateResult<CString> {
-    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| {
-        SubstrateError::EncodingError {
-            detail: format!("null byte in path: {}", path.display()),
-            correlation_id: None,
-        }
+    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| SubstrateError::EncodingError {
+        detail: format!("null byte in path: {}", path.display()),
+        correlation_id: None,
     })
 }
 
@@ -68,9 +66,7 @@ fn fd_to_canonical_path(fd: libc::c_int) -> SubstrateResult<PathBuf> {
     // SAFETY: `fd` is a valid, open file descriptor. `buf` is a stack-allocated
     // array of `MAXPATHLEN` bytes — exactly the buffer size `F_GETPATH` expects.
     // `fcntl` writes at most `MAXPATHLEN` bytes including the trailing NUL byte.
-    let ret = unsafe {
-        libc::fcntl(fd, F_GETPATH, buf.as_mut_ptr())
-    };
+    let ret = unsafe { libc::fcntl(fd, F_GETPATH, buf.as_mut_ptr()) };
     if ret < 0 {
         return Err(SubstrateError::InternalError {
             reason: format!(
@@ -144,9 +140,7 @@ impl substrate_domain::PathJailPort for ONoFollowAnyJail {
         };
 
         if fd < 0 {
-            let errno = std::io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(0);
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             return Err(map_openat_errno(errno, raw_path));
         }
 

@@ -48,7 +48,10 @@ pub enum ConfigError {
 /// Returns [`ConfigError::Parse`] when a TOML file exists but is malformed or
 /// contains unknown keys.  Returns [`ConfigError::Validation`] when post-parse
 /// invariants are violated.
-#[expect(clippy::result_large_err, reason = "figment::Error is large; boxing would add indirection for no functional benefit in this startup-path function")]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Error is large; boxing would add indirection for no functional benefit in this startup-path function"
+)]
 pub fn load() -> Result<RuntimeConfig, ConfigError> {
     load_with(default_paths())
 }
@@ -62,7 +65,10 @@ pub fn load() -> Result<RuntimeConfig, ConfigError> {
 /// # Errors
 ///
 /// See [`load`].
-#[expect(clippy::result_large_err, reason = "figment::Error is large; boxing would add indirection for no functional benefit in this startup-path function")]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Error is large; boxing would add indirection for no functional benefit in this startup-path function"
+)]
 pub fn load_with(paths: Vec<PathBuf>) -> Result<RuntimeConfig, ConfigError> {
     let mut fig = Figment::from(Serialized::defaults(RuntimeConfig::default()));
 
@@ -100,7 +106,10 @@ fn default_paths() -> Vec<PathBuf> {
 }
 
 /// Resolves the operator config path respecting the XDG Base Directory specification.
-#[expect(clippy::needless_return, reason = "cfg-gated arms require explicit return to avoid type errors when multiple cfg blocks are present")]
+#[expect(
+    clippy::needless_return,
+    reason = "cfg-gated arms require explicit return to avoid type errors when multiple cfg blocks are present"
+)]
 fn operator_config_path() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(xdg).join("substrate").join("config.toml"));
@@ -128,7 +137,10 @@ fn operator_config_path() -> Option<PathBuf> {
 }
 
 /// Post-parse validation of assembled configuration.
-#[expect(clippy::result_large_err, reason = "figment::Error is large; boxing would add indirection for no functional benefit in this startup-path function")]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Error is large; boxing would add indirection for no functional benefit in this startup-path function"
+)]
 fn validate(cfg: &RuntimeConfig) -> Result<(), ConfigError> {
     // shutdown_drain_secs must be in [1, 120] per CUE schema constraint.
     if cfg.shutdown_drain_secs == 0 || cfg.shutdown_drain_secs > 120 {
@@ -169,7 +181,10 @@ fn validate(cfg: &RuntimeConfig) -> Result<(), ConfigError> {
     // max_in_memory_buffer_bytes hard ceiling: 32 MiB per ADR-0016.
     // The const is declared at the top of the validate fn body to avoid the
     // `clippy::items_after_statements` lint (items must precede all statements).
-    #[expect(clippy::items_after_statements, reason = "const belongs near the guard that uses it; hoisting would obscure intent")]
+    #[expect(
+        clippy::items_after_statements,
+        reason = "const belongs near the guard that uses it; hoisting would obscure intent"
+    )]
     const MAX_BUFFER_HARD_CEILING: u64 = 32 * 1_024 * 1_024;
     if cfg.protocol.max_in_memory_buffer_bytes > MAX_BUFFER_HARD_CEILING {
         return Err(ConfigError::Validation {

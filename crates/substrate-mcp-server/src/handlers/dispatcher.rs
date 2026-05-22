@@ -44,9 +44,7 @@ use substrate_domain::{
 use substrate_archive::{ArchiveDeps, ToolResponse as ArchiveToolResponse};
 use substrate_fs_mutation::{FsMutationDeps, ToolResponse as FsMutationToolResponse};
 use substrate_fs_query::{FsQueryDeps, ToolResponse as FsQueryToolResponse};
-use substrate_process::{
-    ProcessDeps, ProcessScannerPort, ToolResponse as ProcessToolResponse,
-};
+use substrate_process::{ProcessDeps, ProcessScannerPort, ToolResponse as ProcessToolResponse};
 use substrate_system_info::{SystemInfoDeps, ToolResponse as SystemInfoToolResponse};
 use substrate_text::{TextDeps, ToolResponse as TextToolResponse};
 
@@ -132,8 +130,7 @@ fn job_pending_response(job_id: &JobId) -> DispatchedResponse {
     // it directly back to job_status / job_result / job_cancel, which all
     // deserialize `job_id` via `JobId: Deserialize` (inner Uuid format).
     // Using `Display` (Crockford base32) would mismatch the server's Deserialize.
-    let job_id_serialized = serde_json::to_value(job_id)
-        .unwrap_or(serde_json::Value::Null);
+    let job_id_serialized = serde_json::to_value(job_id).unwrap_or(serde_json::Value::Null);
     let job_id_str = job_id_serialized.as_str().unwrap_or("").to_owned();
     let structured = serde_json::json!({
         "job_id": job_id_serialized,
@@ -602,7 +599,11 @@ impl ToolDispatcher {
             .as_ref()
             .map_or(1_048_576, |c| c.inline_thresholds.fs_read_inline_bytes);
 
-        let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -624,7 +625,13 @@ impl ToolDispatcher {
                     })
             });
             return self
-                .dispatch_as_job(args, "fs_read", JobBucket::BAutoMode, client_id, handler_call)
+                .dispatch_as_job(
+                    args,
+                    "fs_read",
+                    JobBucket::BAutoMode,
+                    client_id,
+                    handler_call,
+                )
                 .await;
         }
 
@@ -650,7 +657,11 @@ impl ToolDispatcher {
             .as_ref()
             .map_or(4_194_304, |c| c.inline_thresholds.fs_hash_inline_bytes);
 
-        let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -672,7 +683,13 @@ impl ToolDispatcher {
                     })
             });
             return self
-                .dispatch_as_job(args, "fs_hash", JobBucket::BAutoMode, client_id, handler_call)
+                .dispatch_as_job(
+                    args,
+                    "fs_hash",
+                    JobBucket::BAutoMode,
+                    client_id,
+                    handler_call,
+                )
                 .await;
         }
 
@@ -699,7 +716,11 @@ impl ToolDispatcher {
             .map_or(1_048_576, |c| c.inline_thresholds.fs_copy_inline_bytes);
 
         // `FsCopyRequest` uses `src` as the source field name.
-        let src_path = args.get("src").and_then(Value::as_str).unwrap_or("").to_owned();
+        let src_path = args
+            .get("src")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&src_path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -720,7 +741,13 @@ impl ToolDispatcher {
                     })
             });
             return self
-                .dispatch_as_job(args, "fs_copy", JobBucket::BAutoMode, client_id, handler_call)
+                .dispatch_as_job(
+                    args,
+                    "fs_copy",
+                    JobBucket::BAutoMode,
+                    client_id,
+                    handler_call,
+                )
                 .await;
         }
 
@@ -749,7 +776,11 @@ impl ToolDispatcher {
             .as_ref()
             .map_or(524_288, |c| c.inline_thresholds.text_search_inline_bytes);
 
-        let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -802,7 +833,11 @@ impl ToolDispatcher {
             c.inline_thresholds.text_count_lines_inline_bytes
         });
 
-        let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -858,7 +893,11 @@ impl ToolDispatcher {
             .map_or(131_072, |c| c.inline_thresholds.archive_gzip_inline_bytes);
 
         // `GzipCompressRequest` uses `source` as the input path field.
-        let source_path = args.get("source").and_then(Value::as_str).unwrap_or("").to_owned();
+        let source_path = args
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&source_path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -913,7 +952,11 @@ impl ToolDispatcher {
             .map_or(131_072, |c| c.inline_thresholds.archive_gzip_inline_bytes);
 
         // `GzipDecompressRequest` uses `source` as the input path field.
-        let source_path = args.get("source").and_then(Value::as_str).unwrap_or("").to_owned();
+        let source_path = args
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&source_path).await.unwrap_or(0);
 
         if size >= threshold {
@@ -968,7 +1011,11 @@ impl ToolDispatcher {
             .as_ref()
             .map_or(4_194_304, |c| c.inline_thresholds.archive_hash_inline_bytes);
 
-        let path = args.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {

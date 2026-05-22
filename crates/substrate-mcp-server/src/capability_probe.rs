@@ -22,7 +22,10 @@
 //! `ENOSYS` / `EOPNOTSUPP` → capability absent; any other errno → present.
 //! Current stubs return `false`; production probes will be added in the adapter wave.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use std::sync::OnceLock;
 

@@ -9,7 +9,10 @@
 //! `initialize.rs`.
 //! Per ADR-0022: all tool routing is centralised in `dispatcher.rs`.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 pub(crate) mod dispatcher;
 pub(crate) mod initialize;
@@ -79,7 +82,10 @@ pub(crate) async fn run_stdio_server(rt: RuntimeComponents) -> SubstrateResult<(
     // `serve_with_ct` runs the initialize handshake then enters the main loop.
     // When `shutdown_token` is cancelled the loop exits after the current
     // in-flight request completes.
-    let running = match service.serve_with_ct(transport, rt.shutdown_token.clone()).await {
+    let running = match service
+        .serve_with_ct(transport, rt.shutdown_token.clone())
+        .await
+    {
         Ok(svc) => svc,
         Err(e) => {
             tracing::error!(error = %e, "rmcp STDIO server initialization failed");
@@ -110,9 +116,9 @@ pub(crate) async fn run_stdio_server(rt: RuntimeComponents) -> SubstrateResult<(
     // Drain window: give in-flight jobs time to complete gracefully.
     // We sleep for `shutdown_drain_secs` then exit regardless; any still-running
     // tasks hold only child tokens and will be abandoned when the process exits.
-    tokio::time::sleep(std::time::Duration::from_secs(
-        u64::from(rt.config.shutdown_drain_secs),
-    ))
+    tokio::time::sleep(std::time::Duration::from_secs(u64::from(
+        rt.config.shutdown_drain_secs,
+    )))
     .await;
 
     tracing::info!("drain complete — exiting MCP server");

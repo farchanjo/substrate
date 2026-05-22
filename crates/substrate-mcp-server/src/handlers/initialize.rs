@@ -6,29 +6,47 @@
 //!
 //! The experimental block is diagnostic only; clients MUST NOT branch on it.
 
-#![allow(clippy::redundant_pub_crate, reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
 
 use serde_json::json;
 use substrate_domain::Capabilities;
 
 /// Minimum protocol version accepted per ADR-0013.
-#[allow(dead_code, reason = "Wave B scaffold — used by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — used by rmcp initialize handler in Wave D"
+)]
 pub(crate) const PROTOCOL_VERSION_MINIMUM: &str = "2025-06-18";
 
 /// Preferred (maximum) protocol version per ADR-0013.
-#[allow(dead_code, reason = "Wave B scaffold — used by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — used by rmcp initialize handler in Wave D"
+)]
 pub(crate) const PROTOCOL_VERSION_PREFERRED: &str = "2025-11-25";
 
 /// Substrate server name declared in `initialize` response.
-#[allow(dead_code, reason = "Wave B scaffold — used by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — used by rmcp initialize handler in Wave D"
+)]
 pub(crate) const SERVER_NAME: &str = "substrate";
 
 /// Substrate server version — sourced from Cargo at compile time.
-#[allow(dead_code, reason = "Wave B scaffold — used by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — used by rmcp initialize handler in Wave D"
+)]
 pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Negotiated MCP protocol version outcome.
-#[allow(dead_code, reason = "Wave B scaffold — used by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — used by rmcp initialize handler in Wave D"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NegotiatedVersion {
     /// Client version is below minimum; must reject with error `-32600`.
@@ -45,7 +63,10 @@ pub(crate) enum NegotiatedVersion {
 /// Version comparison uses lexicographic ordering on the YYYY-MM-DD string,
 /// which is correct because all version strings are ISO 8601 dates.
 // Wave B: called by rmcp initialize handler wired in Wave D.
-#[allow(dead_code, reason = "Wave B scaffold — called by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — called by rmcp initialize handler in Wave D"
+)]
 #[must_use]
 pub(crate) fn negotiate_version(client_version: &str) -> NegotiatedVersion {
     if client_version < PROTOCOL_VERSION_MINIMUM {
@@ -69,7 +90,10 @@ pub(crate) fn negotiate_version(client_version: &str) -> NegotiatedVersion {
 /// All values are diagnostic only; clients MUST NOT make behavioral decisions
 /// based on them.
 // Wave B: called by rmcp initialize handler wired in Wave D.
-#[allow(dead_code, reason = "Wave B scaffold — called by rmcp initialize handler in Wave D")]
+#[allow(
+    dead_code,
+    reason = "Wave B scaffold — called by rmcp initialize handler in Wave D"
+)]
 #[must_use]
 pub(crate) fn build_experimental_capabilities(
     caps: &Capabilities,

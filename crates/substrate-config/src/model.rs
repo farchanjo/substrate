@@ -204,7 +204,10 @@ pub struct PolicyConfig {
 // ---- Security ----------------------------------------------------------------
 
 /// Runtime-level security hardening knobs per `#SecurityRuntime` in `runtime_config.cue`.
-#[expect(clippy::struct_excessive_bools, reason = "security config intentionally exposes individual on/off knobs; a state-machine would be less ergonomic for TOML deserialization")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "security config intentionally exposes individual on/off knobs; a state-machine would be less ergonomic for TOML deserialization"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SecurityRuntime {

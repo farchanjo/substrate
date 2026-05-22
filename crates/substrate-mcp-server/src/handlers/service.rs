@@ -24,9 +24,11 @@ use std::{collections::BTreeMap, sync::Arc};
 use rmcp::{
     ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, ErrorData as McpErrorData, Implementation,
-        InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
-        ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, Content,
+        CreateTaskResult, ErrorData as McpErrorData, GetTaskInfoParams, GetTaskPayloadResult,
+        GetTaskResult, GetTaskResultParams, Implementation, InitializeRequestParams,
+        InitializeResult, ListTasksResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+        ServerCapabilities, ServerInfo, Task, TaskStatus, TasksCapability, Tool,
     },
     service::{NotificationContext, RequestContext, RoleServer},
 };
@@ -34,7 +36,12 @@ use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use substrate_domain::{Capabilities, ClientId, SubstrateError};
+use substrate_domain::{
+    Capabilities, ClientId, JobState, SubstrateError,
+    jobs::entry::JobEntry,
+    ports::job_registry::JobResult,
+    value_objects::JobId,
+};
 
 use super::{
     dispatcher::ToolDispatcher,
@@ -51,8 +58,8 @@ use super::{
 /// built-in `schema_for_type` (JSON Schema 2020-12, draft2020-12 settings).
 ///
 /// Used inside `tool_registry` to generate real per-tool input schemas (Task A).
-fn schema_for<T: schemars::JsonSchema + 'static>(
-) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+fn schema_for<T: schemars::JsonSchema + 'static>()
+-> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
     rmcp::handler::server::common::schema_for_type::<T>()
 }
 
@@ -292,102 +299,94 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
     vec![
         // ---- filesystem-query BC (read-side) ---------------------------------
         make::<substrate_fs_query::read_dir::FsReadDirRequest>(
-            "fs_read_dir", descriptions::fs_read_dir(),
+            "fs_read_dir",
+            descriptions::fs_read_dir(),
         ),
-        make::<substrate_fs_query::stat::FsStatRequest>(
-            "fs_stat", descriptions::fs_stat(),
-        ),
-        make::<substrate_fs_query::find::FsFindRequest>(
-            "fs_find", descriptions::fs_find(),
-        ),
-        make::<substrate_fs_query::read::FsReadRequest>(
-            "fs_read", descriptions::fs_read(),
-        ),
-        make::<substrate_fs_query::hash::FsHashRequest>(
-            "fs_hash", descriptions::fs_hash(),
-        ),
+        make::<substrate_fs_query::stat::FsStatRequest>("fs_stat", descriptions::fs_stat()),
+        make::<substrate_fs_query::find::FsFindRequest>("fs_find", descriptions::fs_find()),
+        make::<substrate_fs_query::read::FsReadRequest>("fs_read", descriptions::fs_read()),
+        make::<substrate_fs_query::hash::FsHashRequest>("fs_hash", descriptions::fs_hash()),
         // ---- filesystem-mutation BC (write-side) -----------------------------
-        make::<substrate_fs_mutation::mkdir::FsMkdirRequest>(
-            "fs_mkdir", descriptions::fs_mkdir(),
-        ),
-        make::<substrate_fs_mutation::write::FsWriteRequest>(
-            "fs_write", descriptions::fs_write(),
-        ),
-        make::<substrate_fs_mutation::copy::FsCopyRequest>(
-            "fs_copy", descriptions::fs_copy(),
-        ),
+        make::<substrate_fs_mutation::mkdir::FsMkdirRequest>("fs_mkdir", descriptions::fs_mkdir()),
+        make::<substrate_fs_mutation::write::FsWriteRequest>("fs_write", descriptions::fs_write()),
+        make::<substrate_fs_mutation::copy::FsCopyRequest>("fs_copy", descriptions::fs_copy()),
         make::<substrate_fs_mutation::rename::FsRenameRequest>(
-            "fs_rename", descriptions::fs_rename(),
+            "fs_rename",
+            descriptions::fs_rename(),
         ),
         make::<substrate_fs_mutation::remove::FsRemoveRequest>(
-            "fs_remove", descriptions::fs_remove(),
+            "fs_remove",
+            descriptions::fs_remove(),
         ),
         make::<substrate_fs_mutation::set_permissions::FsSetPermissionsRequest>(
-            "fs_set_permissions", descriptions::fs_set_permissions(),
+            "fs_set_permissions",
+            descriptions::fs_set_permissions(),
         ),
         make::<substrate_fs_mutation::symlink::FsSymlinkRequest>(
-            "fs_symlink", descriptions::fs_symlink(),
+            "fs_symlink",
+            descriptions::fs_symlink(),
         ),
-        make::<substrate_fs_mutation::touch::FsTouchRequest>(
-            "fs_touch", descriptions::fs_touch(),
-        ),
+        make::<substrate_fs_mutation::touch::FsTouchRequest>("fs_touch", descriptions::fs_touch()),
         // ---- process BC ------------------------------------------------------
-        make::<substrate_process::list::ProcListRequest>(
-            "proc_list", descriptions::proc_list(),
-        ),
-        make::<substrate_process::tree::ProcTreeRequest>(
-            "proc_tree", descriptions::proc_tree(),
-        ),
+        make::<substrate_process::list::ProcListRequest>("proc_list", descriptions::proc_list()),
+        make::<substrate_process::tree::ProcTreeRequest>("proc_tree", descriptions::proc_tree()),
         make::<substrate_process::signal::ProcSignalRequest>(
-            "proc_signal", descriptions::proc_signal(),
+            "proc_signal",
+            descriptions::proc_signal(),
         ),
         // ---- system-info BC (no caller-supplied parameters) ------------------
-        Tool::new("sys_uname",        descriptions::sys_uname(),        schema_empty()),
-        Tool::new("sys_hostname",     descriptions::sys_hostname(),     schema_empty()),
-        Tool::new("sys_uptime",       descriptions::sys_uptime(),       schema_empty()),
-        Tool::new("sys_df",           descriptions::sys_df(),           schema_empty()),
-        Tool::new("sys_load_average", descriptions::sys_load_average(), schema_empty()),
-        Tool::new("sys_info",         descriptions::sys_info(),         schema_empty()),
+        Tool::new("sys_uname", descriptions::sys_uname(), schema_empty()),
+        Tool::new("sys_hostname", descriptions::sys_hostname(), schema_empty()),
+        Tool::new("sys_uptime", descriptions::sys_uptime(), schema_empty()),
+        Tool::new("sys_df", descriptions::sys_df(), schema_empty()),
+        Tool::new(
+            "sys_load_average",
+            descriptions::sys_load_average(),
+            schema_empty(),
+        ),
+        Tool::new("sys_info", descriptions::sys_info(), schema_empty()),
         // ---- text-processing BC ----------------------------------------------
-        make::<substrate_text::search::SearchParams>(
-            "text_search", descriptions::text_search(),
-        ),
+        make::<substrate_text::search::SearchParams>("text_search", descriptions::text_search()),
         make::<substrate_text::count_lines::CountLinesParams>(
-            "text_count_lines", descriptions::text_count_lines(),
+            "text_count_lines",
+            descriptions::text_count_lines(),
         ),
-        make::<substrate_text::head::HeadParams>(
-            "text_head", descriptions::text_head(),
-        ),
-        make::<substrate_text::tail::TailParams>(
-            "text_tail", descriptions::text_tail(),
-        ),
+        make::<substrate_text::head::HeadParams>("text_head", descriptions::text_head()),
+        make::<substrate_text::tail::TailParams>("text_tail", descriptions::text_tail()),
         // ---- archive BC ------------------------------------------------------
         make::<substrate_archive::tar_create::TarCreateRequest>(
-            "archive_tar_create", descriptions::archive_tar_create(),
+            "archive_tar_create",
+            descriptions::archive_tar_create(),
         ),
         make::<substrate_archive::tar_extract::TarExtractRequest>(
-            "archive_tar_extract", descriptions::archive_tar_extract(),
+            "archive_tar_extract",
+            descriptions::archive_tar_extract(),
         ),
         make::<substrate_archive::zip_create::ZipCreateRequest>(
-            "archive_zip_create", descriptions::archive_zip_create(),
+            "archive_zip_create",
+            descriptions::archive_zip_create(),
         ),
         make::<substrate_archive::zip_extract::ZipExtractRequest>(
-            "archive_zip_extract", descriptions::archive_zip_extract(),
+            "archive_zip_extract",
+            descriptions::archive_zip_extract(),
         ),
         make::<substrate_archive::gzip_compress::GzipCompressRequest>(
-            "archive_gzip_compress", descriptions::archive_gzip_compress(),
+            "archive_gzip_compress",
+            descriptions::archive_gzip_compress(),
         ),
         make::<substrate_archive::gzip_decompress::GzipDecompressRequest>(
-            "archive_gzip_decompress", descriptions::archive_gzip_decompress(),
+            "archive_gzip_decompress",
+            descriptions::archive_gzip_decompress(),
         ),
         make::<substrate_archive::hash::ArchiveHashRequest>(
-            "archive_hash", descriptions::archive_hash(),
+            "archive_hash",
+            descriptions::archive_hash(),
         ),
         // ---- job control-plane -----------------------------------------------
         make::<JobStatusRequest>("job_status", descriptions::job_status()),
         make::<JobResultRequest>("job_result", descriptions::job_result()),
         make::<JobCancelRequest>("job_cancel", descriptions::job_cancel()),
-        make::<JobListRequest>("job_list",   descriptions::job_list()),
+        make::<JobListRequest>("job_list", descriptions::job_list()),
     ]
 }
 
@@ -503,8 +502,7 @@ impl SubstrateService {
 
     /// Builds the `ServerCapabilities` struct including the experimental substrate block.
     fn build_server_capabilities(&self) -> ServerCapabilities {
-        let experimental_value =
-            build_experimental_capabilities(&self.caps, self.jobs_wired);
+        let experimental_value = build_experimental_capabilities(&self.caps, self.jobs_wired);
 
         let experimental: Option<BTreeMap<String, Map<String, Value>>> =
             if let Value::Object(obj) = experimental_value {
@@ -523,14 +521,93 @@ impl SubstrateService {
                 None
             };
 
+        // `TasksCapability::server_default()` advertises `list`, `cancel`, and
+        // `requests.tools.call` per SEP-1686 / ADR-0048.
         let mut caps = ServerCapabilities::builder()
             .enable_tools()
+            .enable_tasks_with(TasksCapability::server_default())
             .build();
+
+        // rmcp 1.7 does not expose a capability builder method for `elicitation`
+        // on `ServerCapabilities` — elicitation is a CLIENT-side capability
+        // (the server requests elicitation; clients advertise the ability to
+        // respond). The server sends `elicitation/create` requests; it does not
+        // need to declare a corresponding `ServerCapabilities.elicitation` field.
+        //
+        // rmcp 1.7 does not expose capability builder methods for
+        // `structured_content` or `output_schema` on `ServerCapabilities`.
+        // These are result-level fields in `CallToolResult`, not capability
+        // advertised in `initialize`. No builder method exists.
+
         // Wire the experimental substrate block if non-empty.
         if let Some(exp) = experimental {
             caps.experimental = Some(exp);
         }
         caps
+    }
+
+    // ---- Tasks primitive helpers -------------------------------------------
+
+    /// Maps a `JobState` (domain) to the closest `TaskStatus` (MCP SEP-1686).
+    const fn job_state_to_task_status(state: JobState) -> TaskStatus {
+        match state {
+            JobState::Pending | JobState::Running => TaskStatus::Working,
+            JobState::Succeeded => TaskStatus::Completed,
+            // `TimedOut` is a terminal failure in substrate's domain model; both
+            // map to SEP-1686 `Failed`.
+            JobState::Failed | JobState::TimedOut => TaskStatus::Failed,
+            JobState::Cancelled => TaskStatus::Cancelled,
+        }
+    }
+
+    /// Converts a `JobEntry` snapshot into an rmcp `Task` value object.
+    fn job_entry_to_task(entry: &JobEntry) -> Task {
+        use time::format_description::well_known::Rfc3339;
+
+        let created_iso = entry
+            .started_at
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| entry.started_at.to_string());
+        let updated_iso = entry
+            .updated_at
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| entry.updated_at.to_string());
+
+        let mut task = Task::new(
+            entry.id.to_crockford(),
+            Self::job_state_to_task_status(entry.state),
+            created_iso,
+            updated_iso,
+        );
+        if let Some(msg) = &entry.message {
+            task = task.with_status_message(msg.clone());
+        }
+        task
+    }
+
+    /// Extracts the `ClientId` from the request context, falling back to "anonymous".
+    fn client_id_from_context(context: &RequestContext<RoleServer>) -> ClientId {
+        context
+            .peer
+            .peer_info()
+            .and_then(|info| {
+                let raw = format!("{}-{}", info.client_info.name, info.client_info.version);
+                let sanitised: String = raw
+                    .chars()
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }
+                    })
+                    .take(64)
+                    .collect();
+                ClientId::parse(sanitised).ok()
+            })
+            .unwrap_or_else(|| {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "'anonymous' satisfies ClientId invariants; this is infallible"
+                )]
+                ClientId::parse("anonymous").expect("'anonymous' is a valid ClientId")
+            })
     }
 }
 
@@ -647,7 +724,13 @@ impl ServerHandler for SubstrateService {
                     let raw = format!("{}-{}", info.client_info.name, info.client_info.version);
                     let sanitised: String = raw
                         .chars()
-                        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                        .map(|c| {
+                            if c.is_alphanumeric() || c == '-' || c == '_' {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
                         .take(64)
                         .collect();
                     ClientId::parse(sanitised).ok()
@@ -701,8 +784,7 @@ impl ServerHandler for SubstrateService {
             let token_str = notification.request_id.to_string();
             tracing::debug!(token = %token_str, "notifications/cancelled received");
 
-            if let Ok(job_id) =
-                substrate_domain::value_objects::JobId::parse_crockford(&token_str)
+            if let Ok(job_id) = substrate_domain::value_objects::JobId::parse_crockford(&token_str)
             {
                 match self.dispatcher.jobs.cancel(&job_id).await {
                     Ok(state) => {
@@ -726,6 +808,233 @@ impl ServerHandler for SubstrateService {
                     token = %token_str,
                     "notifications/cancelled: request_id is not a substrate job_id — ignored"
                 );
+            }
+        }
+    }
+
+    // ---- MCP Tasks primitive (SEP-1686 / ADR-0048) -------------------------
+
+    /// Handles `tasks/call` — enqueues a `tools/call` as an async job.
+    ///
+    /// Called by rmcp when a `tools/call` request carries a `task` field.
+    /// Delegates to `ToolDispatcher.jobs.submit` via the existing job control-plane.
+    /// Returns `CreateTaskResult { task }` with the initial `TaskStatus::Working`.
+    #[instrument(skip(self, context), fields(tool = %request.name))]
+    fn enqueue_task(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<CreateTaskResult, McpErrorData>> + Send + '_ {
+        async move {
+            use substrate_domain::jobs::bucket::JobBucket;
+            use substrate_domain::ports::job_registry::JobSubmitRequest;
+
+            let client_id = Self::client_id_from_context(&context);
+            let per_request_cancel = context.ct.child_token();
+            let shutdown_child = self.shutdown_token.child_token();
+            let cancel_fwd = per_request_cancel.clone();
+            tokio::spawn(async move {
+                shutdown_child.cancelled().await;
+                cancel_fwd.cancel();
+            });
+
+            let args = request
+                .arguments
+                .clone()
+                .map_or_else(|| serde_json::Value::Object(Map::new()), serde_json::Value::Object);
+
+            let tool_name = request.name.clone();
+            let dispatcher = self.dispatcher.clone();
+            let execute_cancel = per_request_cancel.clone();
+            // Clone `client_id` for the execute closure; ownership goes into
+            // the async block while the outer scope keeps the original for
+            // `JobSubmitRequest`.
+            let client_id_execute = client_id.clone();
+            let execute = Box::pin(async move {
+                dispatcher
+                    .dispatch(&tool_name, args, execute_cancel, client_id_execute)
+                    .await
+                    .map(|resp| resp.structured_content)
+            });
+
+            let submit_req = JobSubmitRequest {
+                client_id,
+                tool: request.name.to_string(),
+                // `enqueue_task` is always async; use C_always_async bucket.
+                bucket: JobBucket::CAlwaysAsync,
+                idempotency_key: None,
+                args_json: request
+                    .arguments
+                    .map_or_else(|| serde_json::Value::Object(Map::new()), serde_json::Value::Object),
+                execute,
+            };
+
+            use time::OffsetDateTime;
+            use time::format_description::well_known::Rfc3339;
+
+            match self.dispatcher.jobs.submit(submit_req).await {
+                Ok(job_id) => {
+                    tracing::info!(
+                        job_id = %job_id,
+                        tool = %request.name,
+                        "task enqueued"
+                    );
+                    // Build a minimal Task in `Working` state; the client polls
+                    // `tasks/get` or `tasks/result` for terminal state.
+                    let now = OffsetDateTime::now_utc()
+                        .format(&Rfc3339)
+                        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
+                    let task = Task::new(
+                        job_id.to_crockford(),
+                        TaskStatus::Working,
+                        now.clone(),
+                        now,
+                    );
+                    Ok(CreateTaskResult::new(task))
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        tool = %request.name,
+                        code = err.code(),
+                        "enqueue_task submit error"
+                    );
+                    Err(McpErrorData::internal_error(
+                        format!("job submit failed: {err}"),
+                        None,
+                    ))
+                },
+            }
+        }
+    }
+
+    /// Handles `tasks/list` — delegates to `JobRegistryPort::list`.
+    #[instrument(skip(self, _request, context))]
+    fn list_tasks(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListTasksResult, McpErrorData>> + Send + '_ {
+        async move {
+            let client_id = Self::client_id_from_context(&context);
+            match self.dispatcher.jobs.list(&client_id, None).await {
+                Ok(page) => {
+                    let tasks: Vec<Task> = page.jobs.iter().map(Self::job_entry_to_task).collect();
+                    // Encode cursor bytes to UTF-8 string for the MCP wire format.
+                    // The registry stores cursor payload as UTF-8 JSON bytes (see
+                    // `encode_cursor` in `substrate-jobs`); converting to String is
+                    // infallible for well-formed cursors.
+                    // `ListTasksResult` is #[non_exhaustive]; use the named
+                    // constructor then mutate the optional cursor field.
+                    let mut result = ListTasksResult::new(tasks);
+                    result.next_cursor = page.next_cursor.and_then(|c| {
+                        // Cursor bytes are UTF-8 JSON produced by `encode_cursor`
+                        // in substrate-jobs; conversion is infallible for valid cursors.
+                        String::from_utf8(c.into_bytes()).ok()
+                    });
+                    Ok(result)
+                },
+                Err(err) => Err(McpErrorData::internal_error(
+                    format!("list_tasks failed: {err}"),
+                    None,
+                )),
+            }
+        }
+    }
+
+    /// Handles `tasks/get` — delegates to `JobRegistryPort::status`.
+    #[instrument(skip(self, _context), fields(task_id = %request.task_id))]
+    fn get_task_info(
+        &self,
+        request: GetTaskInfoParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetTaskResult, McpErrorData>> + Send + '_ {
+        async move {
+            let job_id = JobId::parse_crockford(&request.task_id).map_err(|_| {
+                McpErrorData::invalid_params(
+                    format!("invalid task_id: {}", request.task_id),
+                    None,
+                )
+            })?;
+            match self.dispatcher.jobs.status(&job_id).await {
+                Ok(entry) => Ok(GetTaskResult {
+                    meta: None,
+                    task: Self::job_entry_to_task(&entry),
+                }),
+                Err(err) => Err(McpErrorData::internal_error(
+                    format!("get_task_info failed: {err}"),
+                    None,
+                )),
+            }
+        }
+    }
+
+    /// Handles `tasks/result` — delegates to `JobRegistryPort::result` (long-poll until terminal).
+    #[instrument(skip(self, _context), fields(task_id = %request.task_id))]
+    fn get_task_result(
+        &self,
+        request: GetTaskResultParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetTaskPayloadResult, McpErrorData>> + Send + '_ {
+        async move {
+            let job_id = JobId::parse_crockford(&request.task_id).map_err(|_| {
+                McpErrorData::invalid_params(
+                    format!("invalid task_id: {}", request.task_id),
+                    None,
+                )
+            })?;
+            // Long-poll with no timeout override; server-side cap applies.
+            match self.dispatcher.jobs.result(&job_id, None).await {
+                Ok(JobResult::Succeeded(v)) => Ok(GetTaskPayloadResult::new(v)),
+                Ok(JobResult::Failed(e)) => Err(McpErrorData::internal_error(
+                    format!("task failed: {e}"),
+                    None,
+                )),
+                Ok(JobResult::Cancelled) => Err(McpErrorData::internal_error(
+                    "task was cancelled".to_owned(),
+                    None,
+                )),
+                Ok(JobResult::TimedOut) => Err(McpErrorData::internal_error(
+                    "task timed out".to_owned(),
+                    None,
+                )),
+                Err(err) => Err(McpErrorData::internal_error(
+                    format!("get_task_result failed: {err}"),
+                    None,
+                )),
+            }
+        }
+    }
+
+    /// Handles `tasks/cancel` — delegates to `JobRegistryPort::cancel`.
+    #[instrument(skip(self, _context), fields(task_id = %request.task_id))]
+    fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<CancelTaskResult, McpErrorData>> + Send + '_ {
+        async move {
+            let job_id = JobId::parse_crockford(&request.task_id).map_err(|_| {
+                McpErrorData::invalid_params(
+                    format!("invalid task_id: {}", request.task_id),
+                    None,
+                )
+            })?;
+            match self.dispatcher.jobs.status(&job_id).await {
+                Ok(entry) => {
+                    // Best-effort cancel; idempotent per JobRegistryPort contract.
+                    let _ = self.dispatcher.jobs.cancel(&job_id).await;
+                    // Re-fetch updated state for the response; fall back to the
+                    // pre-cancel snapshot on error (idempotent cancel already fired).
+                    let task = match self.dispatcher.jobs.status(&job_id).await {
+                        Ok(updated) => Self::job_entry_to_task(&updated),
+                        Err(_) => Self::job_entry_to_task(&entry),
+                    };
+                    Ok(CancelTaskResult { meta: None, task })
+                },
+                Err(err) => Err(McpErrorData::internal_error(
+                    format!("cancel_task status check failed: {err}"),
+                    None,
+                )),
             }
         }
     }
