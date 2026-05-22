@@ -1,10 +1,11 @@
 ---
-status: accepted
+status: superseded
 date: 2026-05-22
 deciders: [com.archanjo]
 consulted: []
 informed: []
 tags: [mcp, protocol, tasks, evaluation]
+superseded_by: 0049-mcp-tasks-primitive-adoption.md
 ---
 
 # ADR-0048: MCP Tasks Primitive Evaluation (SEP-1686 deferral)
