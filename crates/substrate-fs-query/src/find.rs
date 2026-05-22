@@ -211,8 +211,7 @@ pub async fn handle_fs_find(
             let path = entry.path();
 
             // Apply glob to the file name only.
-            let matches_glob =
-                path.file_name().is_none_or(|name| glob.is_match(name));
+            let matches_glob = path.file_name().is_none_or(|name| glob.is_match(name));
             if !matches_glob {
                 continue;
             }

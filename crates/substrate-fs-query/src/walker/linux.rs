@@ -25,10 +25,8 @@ use futures::stream::BoxStream;
 use nix::{
     dir::{Dir, Type},
     fcntl::OFlag,
-    sys::{
-        stat::{statx, StatxFlags, StatxMask},
-    },
     sys::stat::Mode,
+    sys::stat::{StatxFlags, StatxMask, statx},
 };
 use substrate_domain::{
     SubstrateResult,
@@ -37,7 +35,6 @@ use substrate_domain::{
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
 
 // ---- Constants ---------------------------------------------------------------
 
@@ -100,14 +97,7 @@ impl DirWalkerPort for LinuxStatxWalker {
         let max_depth = opts.max_depth;
 
         tokio::task::spawn_blocking(move || {
-            walk_dir_recursive(
-                &root_path,
-                max_depth,
-                0,
-                &tx_clone,
-                &cancel,
-                &mut 0usize,
-            );
+            walk_dir_recursive(&root_path, max_depth, 0, &tx_clone, &cancel, &mut 0usize);
             // tx_clone dropped here — rx will observe stream end.
         });
 
@@ -139,7 +129,11 @@ fn walk_dir_recursive(
     }
 
     // Open the directory.
-    let dir = match Dir::open(dir_path, OFlag::O_RDONLY | OFlag::O_DIRECTORY, Mode::empty()) {
+    let dir = match Dir::open(
+        dir_path,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY,
+        Mode::empty(),
+    ) {
         Ok(d) => d,
         Err(err) => {
             let _ = tx.blocking_send(Err(substrate_domain::SubstrateError::IoError {
@@ -148,7 +142,7 @@ fn walk_dir_recursive(
             }));
             tracing::debug!(%err, path = %dir_path.display(), "linux walker: cannot open dir");
             return;
-        }
+        },
     };
 
     // Collect entries first to avoid holding the Dir handle while recursing.
@@ -170,7 +164,7 @@ fn walk_dir_recursive(
                 }));
                 tracing::debug!(%err, "linux walker: readdir error");
                 continue;
-            }
+            },
         };
 
         // Skip "." and "..".
@@ -195,12 +189,12 @@ fn walk_dir_recursive(
                 let is_reg = kind == 0o0100000; // S_IFREG
                 let size = if is_reg { Some(sx.stx_size) } else { None };
                 (is_dir, size)
-            }
+            },
             Err(_) => {
                 // Fallback: use the d_type from the dirent if available.
                 let is_dir = entry.file_type() == Some(Type::Directory);
                 (is_dir, None)
-            }
+            },
         };
 
         let jailed = JailedPath::new_jailed(entry_path.clone());
@@ -272,8 +266,14 @@ mod tests {
             paths.iter().any(|p| p.ends_with("alpha.txt")),
             "alpha.txt not found; got {paths:?}"
         );
-        assert!(paths.iter().any(|p| p.ends_with("beta.txt")), "beta.txt not found");
-        assert!(paths.iter().any(|p| p.ends_with("gamma.txt")), "gamma.txt not found");
+        assert!(
+            paths.iter().any(|p| p.ends_with("beta.txt")),
+            "beta.txt not found"
+        );
+        assert!(
+            paths.iter().any(|p| p.ends_with("gamma.txt")),
+            "gamma.txt not found"
+        );
     }
 
     #[test]

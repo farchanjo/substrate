@@ -124,8 +124,7 @@ pub async fn handle_fs_hash(
             HashAlgorithm::Blake3 => {
                 let digest = hasher.hash_file(&jailed)?;
                 // Get file size for metadata.
-                let size = std::fs::metadata(jailed.as_path())
-                    .map_or(0, |m| m.len());
+                let size = std::fs::metadata(jailed.as_path()).map_or(0, |m| m.len());
                 Ok((digest.to_hex(), size))
             },
             HashAlgorithm::Sha256 => {

@@ -127,19 +127,25 @@ pub async fn handle_fs_read_dir(
         let entry_path = entry.path();
 
         // Fetch symlink-aware metadata.
-        let (is_dir, is_symlink, size_bytes, modified_at) = tokio::fs::symlink_metadata(&entry_path)
-            .await
-            .map_or((false, false, None, None), |meta| {
-                let is_sym = meta.is_symlink();
-                let is_dir = meta.is_dir();
-                let size = if meta.is_file() { Some(meta.len()) } else { None };
-                let mtime = meta.modified().ok().map(|t| {
-                    use std::time::UNIX_EPOCH;
-                    let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                    format_unix_secs(secs)
-                });
-                (is_dir, is_sym, size, mtime)
+        let (is_dir, is_symlink, size_bytes, modified_at) = tokio::fs::symlink_metadata(
+            &entry_path,
+        )
+        .await
+        .map_or((false, false, None, None), |meta| {
+            let is_sym = meta.is_symlink();
+            let is_dir = meta.is_dir();
+            let size = if meta.is_file() {
+                Some(meta.len())
+            } else {
+                None
+            };
+            let mtime = meta.modified().ok().map(|t| {
+                use std::time::UNIX_EPOCH;
+                let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                format_unix_secs(secs)
             });
+            (is_dir, is_sym, size, mtime)
+        });
 
         all_entries.push(DirEntryInfo {
             name,

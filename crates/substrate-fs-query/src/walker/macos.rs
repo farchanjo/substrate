@@ -37,7 +37,6 @@ use substrate_domain::{
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-
 // ---- Constants ---------------------------------------------------------------
 
 /// mpsc channel depth for back-pressure between blocking walker and async consumer.
@@ -90,12 +89,12 @@ const VDIR: u32 = 2;
 #[repr(C)]
 struct AttrList {
     bitmapcount: u16,
-    reserved:    u16,
-    commonattr:  u32,
-    volattr:     u32,
-    dirattr:     u32,
-    fileattr:    u32,
-    forkattr:    u32,
+    reserved: u16,
+    commonattr: u32,
+    volattr: u32,
+    dirattr: u32,
+    fileattr: u32,
+    forkattr: u32,
 }
 
 impl AttrList {
@@ -103,13 +102,13 @@ impl AttrList {
     const fn new() -> Self {
         Self {
             bitmapcount: ATTR_BIT_MAP_COUNT,
-            reserved:    0,
-            commonattr:  ATTR_CMN_RETURNED_ATTRS
+            reserved: 0,
+            commonattr: ATTR_CMN_RETURNED_ATTRS
                 | ATTR_CMN_NAME
                 | ATTR_CMN_OBJTYPE
                 | ATTR_CMN_MODTIME,
-            volattr:  0,
-            dirattr:  0,
+            volattr: 0,
+            dirattr: 0,
             fileattr: ATTR_FILE_DATALENGTH,
             forkattr: 0,
         }
@@ -120,9 +119,9 @@ impl AttrList {
 
 /// Parsed fields from a single `getattrlistbulk` record.
 struct BulkEntry {
-    name:   String,
+    name: String,
     is_dir: bool,
-    size:   Option<u64>,
+    size: Option<u64>,
 }
 
 /// Parses one variable-length record from the `getattrlistbulk` output buffer.
@@ -169,21 +168,21 @@ fn parse_record(record: &[u8]) -> Option<BulkEntry> {
     // which is 5 × u32 = 20 bytes on all architectures; no padding to 32.
     let _common_returned = read_u32_le(record, cursor)?;
     cursor += 4;
-    let _vol_returned    = read_u32_le(record, cursor)?;
+    let _vol_returned = read_u32_le(record, cursor)?;
     cursor += 4;
-    let _dir_returned    = read_u32_le(record, cursor)?;
+    let _dir_returned = read_u32_le(record, cursor)?;
     cursor += 4;
-    let _file_returned   = read_u32_le(record, cursor)?;
+    let _file_returned = read_u32_le(record, cursor)?;
     cursor += 4;
-    let _fork_returned   = read_u32_le(record, cursor)?;
+    let _fork_returned = read_u32_le(record, cursor)?;
     cursor += 4;
     // Total consumed for returned_attrs: 20 bytes.
 
     // --- name_ref: attrreference_t (i32 offset + u32 length) = 8 bytes ------
     let name_ref_pos = cursor; // position of the attrreference_t itself
-    let name_offset  = read_i32_le(record, cursor)? as isize;
+    let name_offset = read_i32_le(record, cursor)? as isize;
     cursor += 4;
-    let name_length  = read_u32_le(record, cursor)? as usize;
+    let name_length = read_u32_le(record, cursor)? as usize;
     cursor += 4;
 
     // --- obj_type: u32 -------------------------------------------------------
@@ -206,8 +205,10 @@ fn parse_record(record: &[u8]) -> Option<BulkEntry> {
     // --- Name: located via name_ref ------------------------------------------
     // The offset in `attrreference_t` is relative to the address of the
     // `attrreference_t` field itself (i.e., `name_ref_pos`).
-    let name_start =
-        name_ref_pos.cast_signed().checked_add(name_offset)?.cast_unsigned();
+    let name_start = name_ref_pos
+        .cast_signed()
+        .checked_add(name_offset)?
+        .cast_unsigned();
     let name_end = name_start.checked_add(name_length)?;
 
     if name_end > record.len() || name_length == 0 {
@@ -225,7 +226,7 @@ fn parse_record(record: &[u8]) -> Option<BulkEntry> {
     Some(BulkEntry {
         name,
         is_dir: obj_type == VDIR,
-        size:   size_bytes,
+        size: size_bytes,
     })
 }
 
@@ -288,14 +289,7 @@ impl DirWalkerPort for MacosBulkWalker {
         let max_depth = opts.max_depth;
 
         tokio::task::spawn_blocking(move || {
-            walk_bulk_recursive(
-                &root_path,
-                max_depth,
-                0,
-                &tx,
-                &cancel,
-                &mut 0usize,
-            );
+            walk_bulk_recursive(&root_path, max_depth, 0, &tx, &cancel, &mut 0usize);
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -319,9 +313,7 @@ fn walk_bulk_recursive(
     }
 
     // Open the directory.
-    let Ok(path_cstr) =
-        std::ffi::CString::new(dir_path.as_os_str().as_encoded_bytes())
-    else {
+    let Ok(path_cstr) = std::ffi::CString::new(dir_path.as_os_str().as_encoded_bytes()) else {
         tracing::debug!(path = %dir_path.display(), "macos walker: path contains NUL");
         return;
     };
@@ -356,7 +348,9 @@ fn walk_bulk_recursive(
         let entry_count = unsafe {
             libc::getattrlistbulk(
                 fd,
-                std::ptr::addr_of!(attrlist).cast::<libc::c_void>().cast_mut(),
+                std::ptr::addr_of!(attrlist)
+                    .cast::<libc::c_void>()
+                    .cast_mut(),
                 buf.as_mut_ptr().cast::<libc::c_void>(),
                 buf.len(),
                 0,
@@ -407,8 +401,8 @@ fn walk_bulk_recursive(
 
                 if tx
                     .blocking_send(Ok(DirEntry {
-                        path:       jailed,
-                        is_dir:     entry.is_dir,
+                        path: jailed,
+                        is_dir: entry.is_dir,
                         size_bytes: entry.size,
                     }))
                     .is_err()
@@ -486,8 +480,14 @@ mod tests {
             paths.iter().any(|p| p.ends_with("alpha.txt")),
             "alpha.txt not found; got {paths:?}"
         );
-        assert!(paths.iter().any(|p| p.ends_with("beta.txt")), "beta.txt not found; got {paths:?}");
-        assert!(paths.iter().any(|p| p.ends_with("gamma.txt")), "gamma.txt not found; got {paths:?}");
+        assert!(
+            paths.iter().any(|p| p.ends_with("beta.txt")),
+            "beta.txt not found; got {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.ends_with("gamma.txt")),
+            "gamma.txt not found; got {paths:?}"
+        );
     }
 
     #[test]
