@@ -278,6 +278,10 @@ impl ToolDispatcher {
             },
             "fs_copy" => self.dispatch_fs_copy(args, cancel, client_id).await,
             "fs_rename" => {
+                // Security-first traversal check per ADR-0035: `src` is checked
+                // before schema parsing so a traversal path returns
+                // SUBSTRATE_PATH_TRAVERSAL_BLOCKED before SUBSTRATE_INVALID_ARGUMENT.
+                pre_validate_field_for_traversal(&args, "src")?;
                 let root = self.primary_root()?;
                 let req = parse(args)?;
                 substrate_fs_mutation::handle_fs_rename(req, &self.fs_mutation, root)
@@ -285,6 +289,8 @@ impl ToolDispatcher {
                     .map(from_fs_mutation)
             },
             "fs_remove" => {
+                // Security-first traversal check per ADR-0035.
+                pre_validate_field_for_traversal(&args, "path")?;
                 let root = self.primary_root()?;
                 let req = parse(args)?;
                 substrate_fs_mutation::handle_fs_remove(req, &self.fs_mutation, root)
@@ -437,6 +443,10 @@ impl ToolDispatcher {
                 .await
             },
             "archive_tar_extract" => {
+                // Security-first traversal check per ADR-0035: both `archive` and
+                // `dest` are checked before schema parsing.
+                pre_validate_field_for_traversal(&args, "archive")?;
+                pre_validate_field_for_traversal(&args, "dest")?;
                 let req: substrate_archive::tar_extract::TarExtractRequest = parse(args.clone())?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: see archive_tar_create comment above.
@@ -462,6 +472,8 @@ impl ToolDispatcher {
                 .await
             },
             "archive_zip_create" => {
+                // Security-first traversal check per ADR-0035: scan `sources` array.
+                pre_validate_sources_for_traversal(&args)?;
                 let req: substrate_archive::zip_create::ZipCreateRequest = parse(args.clone())?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: see archive_tar_create comment above.
@@ -487,6 +499,9 @@ impl ToolDispatcher {
                 .await
             },
             "archive_zip_extract" => {
+                // Security-first traversal check per ADR-0035.
+                pre_validate_field_for_traversal(&args, "archive")?;
+                pre_validate_field_for_traversal(&args, "dest")?;
                 let req: substrate_archive::zip_extract::ZipExtractRequest = parse(args.clone())?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: see archive_tar_create comment above.
@@ -716,6 +731,12 @@ impl ToolDispatcher {
         cancel: CancellationToken,
         client_id: ClientId,
     ) -> SubstrateResult<DispatchedResponse> {
+        // Security-first traversal check per ADR-0035: `src` and `dest` are
+        // checked before schema parsing so a traversal path in either field
+        // returns SUBSTRATE_PATH_TRAVERSAL_BLOCKED before SUBSTRATE_INVALID_ARGUMENT.
+        pre_validate_field_for_traversal(&args, "src")?;
+        pre_validate_field_for_traversal(&args, "dest")?;
+
         let threshold = self
             .config
             .jobs
@@ -893,6 +914,11 @@ impl ToolDispatcher {
         cancel: CancellationToken,
         client_id: ClientId,
     ) -> SubstrateResult<DispatchedResponse> {
+        // Security-first traversal check per ADR-0035: `source` and `dest` checked
+        // before schema parsing so traversal paths return SUBSTRATE_PATH_TRAVERSAL_BLOCKED.
+        pre_validate_field_for_traversal(&args, "source")?;
+        pre_validate_field_for_traversal(&args, "dest")?;
+
         let threshold = self
             .config
             .jobs
@@ -952,6 +978,10 @@ impl ToolDispatcher {
         cancel: CancellationToken,
         client_id: ClientId,
     ) -> SubstrateResult<DispatchedResponse> {
+        // Security-first traversal check per ADR-0035.
+        pre_validate_field_for_traversal(&args, "source")?;
+        pre_validate_field_for_traversal(&args, "dest")?;
+
         let threshold = self
             .config
             .jobs
@@ -1228,8 +1258,7 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> SubstrateResult<T> {
 /// error-code precedence rule (security > schema) is visible at the dispatcher
 /// boundary even before the request is handed to the adapter.
 ///
-/// A component is considered a traversal attempt when it equals `".."` or
-/// when the path starts with `"/"` (absolute path outside allowlist).
+/// A component is considered a traversal attempt when it equals `".."`.
 /// The adapter's full `PathJailPort` check runs after this guard.
 fn pre_validate_sources_for_traversal(args: &Value) -> SubstrateResult<()> {
     let Some(sources) = args.get("sources").and_then(Value::as_array) else {
@@ -1238,18 +1267,48 @@ fn pre_validate_sources_for_traversal(args: &Value) -> SubstrateResult<()> {
     };
     for source in sources {
         let path_str = source.as_str().unwrap_or("");
-        let path = std::path::Path::new(path_str);
-        // Reject any component that is "..".
-        for component in path.components() {
-            if component == std::path::Component::ParentDir {
-                return Err(SubstrateError::PathTraversalBlocked {
-                    path: path_str.to_owned(),
-                    correlation_id: None,
-                });
-            }
+        check_path_for_traversal(path_str)?;
+    }
+    Ok(())
+}
+
+/// Checks a single raw path string for `".."` components.
+///
+/// Returns `SUBSTRATE_PATH_TRAVERSAL_BLOCKED` if any path component equals
+/// `".."`. Absolute paths are allowed here; the path-jail (`PathJailPort`) is
+/// the canonical allowlist-scope guard and runs after this pre-parse check.
+///
+/// Per ADR-0035: security checks run before schema validation so that a
+/// request with a traversal path in any field returns
+/// `SUBSTRATE_PATH_TRAVERSAL_BLOCKED` rather than `SUBSTRATE_INVALID_ARGUMENT`
+/// regardless of which other fields are missing.
+fn check_path_for_traversal(path_str: &str) -> SubstrateResult<()> {
+    let path = std::path::Path::new(path_str);
+    for component in path.components() {
+        if component == std::path::Component::ParentDir {
+            return Err(SubstrateError::PathTraversalBlocked {
+                path: path_str.to_owned(),
+                correlation_id: None,
+            });
         }
     }
     Ok(())
+}
+
+/// Security-first traversal guard for a single string field in `args`.
+///
+/// Extracts `field` from the raw `args` JSON and calls
+/// [`check_path_for_traversal`]. If the field is absent or not a string the
+/// check is skipped (schema validation will report the missing field).
+///
+/// Per ADR-0035: this pre-parse guard runs before `parse(args)?` so the
+/// error-code precedence rule (security > schema) is enforced uniformly across
+/// all mutation and archive tools.
+fn pre_validate_field_for_traversal(args: &Value, field: &str) -> SubstrateResult<()> {
+    let Some(path_str) = args.get(field).and_then(Value::as_str) else {
+        return Ok(());
+    };
+    check_path_for_traversal(path_str)
 }
 
 /// Attempts to extract a client-supplied idempotency key from the raw args

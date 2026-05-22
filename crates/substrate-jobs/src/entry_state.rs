@@ -93,6 +93,14 @@ impl JobSlot {
     /// Used by the registry submit path to allow capturing the sender in the
     /// worker spawn closure before the full `Arc<JobSlot>` exists — required
     /// because `AbortHandle` is only available after `tokio::spawn` returns.
+    ///
+    /// Superseded by [`from_shared_entry`] which shares the entry mutex with
+    /// the worker for live state visibility; retained for test helpers and
+    /// Wave G+ paths that do not need a separate worker_entry Arc.
+    #[expect(
+        dead_code,
+        reason = "superseded by from_shared_entry for production submit path; retained for test helpers and Wave G+ paths"
+    )]
     pub(crate) fn from_parts(
         entry: JobEntry,
         cancel: CancellationToken,
@@ -102,6 +110,32 @@ impl JobSlot {
     ) -> Arc<Self> {
         Arc::new(Self {
             entry: Arc::new(parking_lot::Mutex::new(entry)),
+            result_tx,
+            result_rx,
+            cancel,
+            abort,
+            sequence: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    /// Creates a `JobSlot` sharing an existing `Arc<parking_lot::Mutex<JobEntry>>`.
+    ///
+    /// Used by the registry submit path so the worker task and the slot both
+    /// mutate the **same** `JobEntry` under the same mutex. Without this sharing,
+    /// `status()` reads a stale `Pending` state even after the worker has
+    /// transitioned to `Running`, `Succeeded`, or `Cancelled`.
+    ///
+    /// This is the canonical fix for the state-visibility race described in the
+    /// registry submit path comments (gap #2 per ADR-0040 Race Resolution).
+    pub(crate) fn from_shared_entry(
+        entry: Arc<parking_lot::Mutex<JobEntry>>,
+        cancel: CancellationToken,
+        abort: AbortHandle,
+        result_tx: watch::Sender<Option<JobResult>>,
+        result_rx: watch::Receiver<Option<JobResult>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            entry,
             result_tx,
             result_rx,
             cancel,

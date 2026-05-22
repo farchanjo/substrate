@@ -54,7 +54,13 @@ use service::SubstrateService;
 /// rmcp initialization handshake fails (e.g. client sends a wrong first
 /// message before `initialize`).
 pub(crate) async fn run_stdio_server(rt: RuntimeComponents) -> SubstrateResult<()> {
-    let jobs_wired = rt.config.jobs.is_some();
+    // The async job control-plane is ALWAYS wired (ADR-0040). The composition
+    // root unconditionally constructs `InMemoryJobRegistry` regardless of whether
+    // the operator supplied a `[jobs]` TOML section — absent config falls back to
+    // `JobConfig::default()`. Setting this to `rt.config.jobs.is_some()` was wrong:
+    // it returned `false` for default-config deployments, causing Cucumber's
+    // `capabilities.experimental.substrate.jobs` assertion to fail.
+    let jobs_wired = true;
 
     tracing::info!(
         max_in_flight = rt.config.protocol.max_in_flight_requests,

@@ -334,45 +334,22 @@ impl JobRegistryPort for InMemoryJobRegistry {
         });
         let abort = worker_handle.abort_handle();
 
-        // Assemble the slot from the pre-created channels so the worker entry
-        // writes are reflected in the slot snapshot (they share the same Arc<Mutex>).
-        // Note: `JobSlot::from_parts` takes ownership of the result_tx/rx created
-        // above; the worker captured a clone of result_tx for the terminal write.
-        // The entry in the slot is a separate Mutex wrapping the same initial value —
-        // the worker updates `worker_entry_clone`; the slot holds its own mutex copy.
-        // To share state properly, pass the worker_entry Arc into the slot rather
-        // than a new Mutex — but JobSlot uses parking_lot::Mutex<JobEntry> directly.
+        // Assemble the slot sharing the same `Arc<parking_lot::Mutex<JobEntry>>`
+        // that the worker closure captured. This ensures `slot.snapshot()` (called
+        // by `status()`) always reflects the live worker state — `running`,
+        // `succeeded`, `cancelled` — rather than staying `pending` until the slot
+        // is evicted. Without this sharing, `tasks/get` returns an empty state
+        // string because the slot holds a separate, never-updated mutex copy.
         //
-        // Simpler approach: use the worker_entry Arc as the slot's entry by having
-        // `from_parts` accept `Arc<parking_lot::Mutex<JobEntry>>`.
-        // For now, the snapshot() used by status() reads the slot's own entry
-        // mutex, which won't reflect worker updates. We address this by having the
-        // worker update a shared entry that the slot also holds.
-        //
-        // To share the entry Arc between worker and slot, JobSlot needs a refactor.
-        // Since JobSlot.entry is not Arc-wrapped (it's a direct Mutex), we use the
-        // simplest approach: re-expose the existing `worker_entry` Arc as a slot.
-        let slot = {
-            // Re-use the worker_entry Arc so slot.snapshot() reflects running state.
-            // `JobSlot::from_parts` accepts an Arc<Mutex<JobEntry>> so we pass
-            // the same arc the worker captured.
-            // Since `entry_state::JobSlot` embeds `parking_lot::Mutex<JobEntry>`
-            // (not Arc), we share state by routing through `Arc<JobSlot>` where
-            // both the worker and the status reader lock the same Arc.
-            //
-            // Pragmatic solution: create the slot with its own entry copy (not
-            // sharing with worker), and have the worker update via a second
-            // `Arc<parking_lot::Mutex<JobEntry>>` captured separately. The slot's
-            // `snapshot()` returns stale data but `result_rx` is shared so
-            // `job_result` still works. For `job_status`, which reads `entry.state`,
-            // we need to keep the slot entry in sync.
-            //
-            // Final approach: use `JobSlot::from_parts` with the `worker_entry` Arc
-            // reinterpreted. Since we can't easily share the inner Mutex, we accept
-            // the limitation: `job_status` may show stale `state` until terminal,
-            // but `job_result` with wait_ms works correctly because the watch fires.
-            JobSlot::from_parts(entry, job_cancel, abort, result_tx, result_rx)
-        };
+        // `JobSlot::from_shared_entry` was added specifically for this pattern
+        // (ADR-0040 Race Resolution section, gap #2 fix).
+        let slot = JobSlot::from_shared_entry(
+            Arc::clone(&worker_entry),
+            job_cancel,
+            abort,
+            result_tx,
+            result_rx,
+        );
 
         // --- Step 4: insert slot, register idempotency key, commit quotas ---
         self.jobs.insert(job_id.clone(), Arc::clone(&slot));

@@ -29,39 +29,78 @@ use crate::response::{FsMutationDeps, ToolResponse};
 
 /// Validates a path that may not yet exist.
 ///
-/// When the target does not exist, the kernel jail rejects it with
+/// When the target does not exist the kernel jail rejects it with
 /// `SUBSTRATE_NOT_FOUND` because `canonicalize` cannot resolve a missing path.
-/// This helper jails the *parent* directory (which must exist and be within the
-/// allowlist) and then reconstructs the full target path.
+/// This helper walks up the ancestor chain to find the deepest existing ancestor,
+/// jails that ancestor, and then reconstructs the full target path by appending
+/// the non-existent suffix. This is needed for `fs.mkdir` with `parents = true`
+/// when multiple intermediate directories (e.g. `src/new_module`) also do not
+/// exist yet — peeling only one parent level is insufficient in those cases.
+///
+/// Security: only the existing ancestor is jailed (canonicalized + allowlist
+/// checked). The non-existent suffix is appended raw; `..` components are
+/// rejected by the dispatcher-level `pre_validate_field_for_traversal` guard
+/// before this function is reached (ADR-0035).
 fn jail_for_new_path(
     raw: &str,
     deps: &FsMutationDeps,
     root: &JailedPath,
 ) -> SubstrateResult<JailedPath> {
+    use std::path::PathBuf;
+
     let target = Path::new(raw);
+
     // If the target already exists (e.g. `parents = true` on an existing tree),
     // the standard jail path works and resolves symlinks safely.
     if target.exists() {
         return deps.jail.jail(root, target);
     }
-    let parent = target
-        .parent()
-        .ok_or_else(|| SubstrateError::InvalidArgument {
-            offending_field: "path".into(),
-            reason: "Path has no parent directory.".into(),
-            correlation_id: None,
-        })?;
-    let jailed_parent = deps.jail.jail(root, parent)?;
-    let file_name = target
-        .file_name()
-        .ok_or_else(|| SubstrateError::InvalidArgument {
-            offending_field: "path".into(),
-            reason: "Path has no file name component.".into(),
-            correlation_id: None,
-        })?;
-    Ok(JailedPath::new_jailed(
-        jailed_parent.as_path().join(file_name),
-    ))
+
+    // Walk up ancestors to find the deepest one that exists on disk.
+    // Build the suffix (relative path from that ancestor to the target) as we go.
+    let mut suffix: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut cursor: &Path = target;
+
+    let existing_ancestor = loop {
+        // Push the current node's last component onto the suffix stack.
+        if let Some(name) = cursor.file_name() {
+            suffix.push(name);
+        }
+
+        let parent = match cursor.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => {
+                // Reached the filesystem root without finding an existing ancestor.
+                // Let the jail handle the original path (returns NOT_FOUND or
+                // PATH_OUTSIDE_ALLOWLIST).
+                break None;
+            },
+        };
+
+        if parent.exists() {
+            break Some(parent);
+        }
+
+        cursor = parent;
+    };
+
+    let Some(ancestor) = existing_ancestor else {
+        // Fallback: let the jail reject naturally.
+        return deps.jail.jail(root, target);
+    };
+
+    // Jail the existing ancestor (canonicalization + allowlist check).
+    let jailed_ancestor = deps.jail.jail(root, ancestor)?;
+
+    // Reconstruct: jailed_ancestor + suffix components in top-down order.
+    // `suffix` was built bottom-up, so reverse before appending.
+    suffix.reverse();
+    let mut full: PathBuf = jailed_ancestor.as_path().to_path_buf();
+    for comp in &suffix {
+        full.push(comp);
+    }
+
+    Ok(JailedPath::new_jailed(full))
 }
 
 // ---- Request -----------------------------------------------------------------

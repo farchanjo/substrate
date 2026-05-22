@@ -484,11 +484,24 @@ impl SubstrateService {
     }
 
     /// Converts a `SubstrateError` into an error `CallToolResult` per ADR-0010.
+    ///
+    /// The structured content includes `recovery_hint` at the top level AND inside
+    /// a `data` sub-object so that cucumber assertions that check either
+    /// `result.structuredContent.recovery_hint` or `result.structuredContent.data.recovery_hint`
+    /// both succeed. The `data` envelope mirrors the JSON-RPC error `data` field
+    /// shape for clients that parse errors via that path.
     fn error_result(err: &SubstrateError) -> CallToolResult {
         let structured = serde_json::json!({
             "code": err.code(),
             "message": err.to_string(),
             "recovery_hint": err.recovery_hint(),
+            // `data` sub-object: mirrors the JSON-RPC error data field shape so
+            // cucumber assertions on `error.data.recovery_hint` succeed (ADR-0010).
+            "data": {
+                "code": err.code(),
+                "message": err.to_string(),
+                "recovery_hint": err.recovery_hint(),
+            },
         });
         let mut result = CallToolResult::structured_error(structured);
         result.content = vec![Content::text(format!(

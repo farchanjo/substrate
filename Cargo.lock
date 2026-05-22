@@ -2460,6 +2460,7 @@ dependencies = [
  "substrate-signal-sys",
  "substrate-system-info",
  "substrate-text",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "time",
