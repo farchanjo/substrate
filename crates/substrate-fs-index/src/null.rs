@@ -32,6 +32,10 @@ pub(crate) struct NullFsIndex;
 impl NullFsIndex {
     /// Constructs a new `NullFsIndex`.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "called only from the cfg(not(feature = \"fs-index\")) path in FsIndexFactory"
+    )]
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self)
     }

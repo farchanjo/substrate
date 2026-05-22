@@ -28,6 +28,7 @@ use substrate_domain::capabilities::Capabilities;
 use substrate_domain::ports::factory::PortFactory;
 use substrate_domain::ports::fs_index::FsIndexPort;
 
+#[cfg(not(feature = "fs-index"))]
 use crate::null::NullFsIndex;
 #[cfg(feature = "fs-index")]
 use crate::polling::PortablePollingIndex;
@@ -56,7 +57,7 @@ impl PortFactory<dyn FsIndexPort> for FsIndexFactory {
         // When fs-index is not compiled in, always return the Null Object.
         #[cfg(not(feature = "fs-index"))]
         {
-            let _ = caps; // suppress unused warning
+            let _ = caps; // caps not used by the null path
             self.chosen_tier.set("null").ok();
             tracing::debug!(
                 tier = "null",
@@ -67,6 +68,9 @@ impl PortFactory<dyn FsIndexPort> for FsIndexFactory {
 
         #[cfg(feature = "fs-index")]
         {
+            // caps may be unused on platforms where no capability-gated tier is
+            // compiled in (e.g. macOS without macos-getattrlistbulk feature).
+            let _ = caps;
             // Linux tier cascade per ADR-0042.
             #[cfg(target_os = "linux")]
             {

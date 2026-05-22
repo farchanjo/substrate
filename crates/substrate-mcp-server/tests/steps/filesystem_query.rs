@@ -7,6 +7,21 @@
 //!   fs-stat-symlink-loop.
 
 #![allow(unused_variables)]
+#![expect(
+    clippy::expect_used,
+    clippy::needless_pass_by_ref_mut,
+    clippy::unused_async,
+    clippy::trivial_regex,
+    clippy::needless_raw_string_hashes,
+    clippy::redundant_clone,
+    clippy::unnecessary_map_or,
+    clippy::or_fun_call,
+    clippy::needless_return,
+    clippy::unimplemented,
+    reason = "cucumber step functions require &mut World and async signatures; \
+              raw strings and regex patterns are idiomatic in step definitions; \
+              unimplemented!() stubs are tracked separately"
+)]
 
 use cucumber::{given, then, when};
 

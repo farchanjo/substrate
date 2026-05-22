@@ -47,11 +47,7 @@ impl PortablePollingIndex {
     /// The warning communicates to operators that the native-tier index is
     /// unavailable on this platform or kernel, and that index performance
     /// will be limited by the `ignore`-crate walk speed per ADR-0042.
-    // Wave G+: wired by FsIndexFactory::build (feature = "fs-index" path)
-    #[expect(
-        dead_code,
-        reason = "Wave G+: wired by FsIndexFactory build when fs-index feature is active"
-    )]
+    /// Wired by `FsIndexFactory::build` when the `fs-index` feature is active.
     #[must_use]
     pub(crate) fn new() -> Arc<Self> {
         tracing::warn!(

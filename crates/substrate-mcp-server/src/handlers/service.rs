@@ -828,6 +828,8 @@ impl ServerHandler for SubstrateService {
         async move {
             use substrate_domain::jobs::bucket::JobBucket;
             use substrate_domain::ports::job_registry::JobSubmitRequest;
+            use time::format_description::well_known::Rfc3339;
+            use time::OffsetDateTime;
 
             let client_id = Self::client_id_from_context(&context);
             let per_request_cancel = context.ct.child_token();
@@ -868,9 +870,6 @@ impl ServerHandler for SubstrateService {
                     .map_or_else(|| serde_json::Value::Object(Map::new()), serde_json::Value::Object),
                 execute,
             };
-
-            use time::OffsetDateTime;
-            use time::format_description::well_known::Rfc3339;
 
             match self.dispatcher.jobs.submit(submit_req).await {
                 Ok(job_id) => {
@@ -1025,10 +1024,8 @@ impl ServerHandler for SubstrateService {
                     let _ = self.dispatcher.jobs.cancel(&job_id).await;
                     // Re-fetch updated state for the response; fall back to the
                     // pre-cancel snapshot on error (idempotent cancel already fired).
-                    let task = match self.dispatcher.jobs.status(&job_id).await {
-                        Ok(updated) => Self::job_entry_to_task(&updated),
-                        Err(_) => Self::job_entry_to_task(&entry),
-                    };
+                    let task = self.dispatcher.jobs.status(&job_id).await
+                        .map_or_else(|_| Self::job_entry_to_task(&entry), |updated| Self::job_entry_to_task(&updated));
                     Ok(CancelTaskResult { meta: None, task })
                 },
                 Err(err) => Err(McpErrorData::internal_error(

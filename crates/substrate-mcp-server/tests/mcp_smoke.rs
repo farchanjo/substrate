@@ -7,6 +7,23 @@
 //! integration-test carve-out) and use `std::process::Command` only for the
 //! binary under test.
 //!
+//! # Lint relaxations (integration-test carve-out)
+//!
+//! - `expect_used` / `unwrap_used`: panicking assertions are idiomatic in tests.
+//! - `disallowed_types` / `disallowed_methods`: `std::process::Command` and
+//!   `Child` are allowed here per the ADR-0044 integration-test exception.
+//! - `missing_docs`: integration-test binary; no public API to document.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::redundant_closure_for_method_calls,
+    reason = "integration-test carve-out per ADR-0044: \
+              panicking assertions and std::process::Command are idiomatic here; \
+              redundant_closure suppressed for PoisonError::into_inner pattern"
+)]
+//!
 //! # Config strategy
 //!
 //! Each test writes a minimal `substrate.toml` in the `TempDir` and sets

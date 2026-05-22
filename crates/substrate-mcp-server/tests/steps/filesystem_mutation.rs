@@ -6,6 +6,18 @@
 //!   fs-set-permissions-outside-allowlist, fs-write-enospc.
 
 #![allow(unused_variables)]
+#![expect(
+    clippy::expect_used,
+    clippy::needless_pass_by_ref_mut,
+    clippy::unused_async,
+    clippy::trivial_regex,
+    clippy::needless_raw_string_hashes,
+    clippy::unnecessary_debug_formatting,
+    clippy::unimplemented,
+    reason = "cucumber step functions require &mut World and async signatures; \
+              raw strings and regex patterns are idiomatic in step definitions; \
+              unimplemented!() stubs are tracked separately"
+)]
 
 use cucumber::{given, then, when};
 

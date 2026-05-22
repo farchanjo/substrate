@@ -368,8 +368,8 @@ mod tests {
         assert_eq!(lines, vec!["gamma", "delta"]);
     }
 
-    /// Proptest: for any file content and any n, the head+tail counts must
-    /// together be <= 2*n and <= total lines (they may overlap on short files).
+    // Proptest: for any file content and any n, the head+tail counts must
+    // together be <= 2*n and <= total lines (they may overlap on short files).
     proptest::proptest! {
         #![proptest_config(proptest::prelude::ProptestConfig::with_cases(30))]
         #[test]
@@ -386,8 +386,7 @@ mod tests {
             let head_lines = {
                 // Simulate Zone A head: first n lines.
                 let text = std::str::from_utf8(&buf).expect("utf8");
-                let all: Vec<&str> = text.lines().collect();
-                all.len().min(n)
+                text.lines().count().min(n)
             };
             let tail_lines = last_n_lines_from_bytes(&buf, n).len();
 

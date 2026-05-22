@@ -3,6 +3,15 @@
 //! Covers features: sys-info-happy-path.
 
 #![allow(unused_variables)]
+#![expect(
+    clippy::expect_used,
+    clippy::needless_pass_by_ref_mut,
+    clippy::unused_async,
+    clippy::trivial_regex,
+    clippy::needless_raw_string_hashes,
+    reason = "cucumber step functions require &mut World and async signatures; \
+              raw strings and regex patterns are idiomatic in step definitions"
+)]
 
 use cucumber::{given, then, when};
 

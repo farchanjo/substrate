@@ -760,6 +760,10 @@ mod ttl_tests {
     /// Drives a freshly submitted job slot to `Succeeded` terminal state.
     ///
     /// Mirrors the manual state injection pattern in `cancel_on_terminal_job_is_idempotent`.
+    #[expect(
+        clippy::unused_async,
+        reason = "declared async so callers can .await it uniformly with other async helpers"
+    )]
     async fn drive_to_succeeded(
         registry: &Arc<InMemoryJobRegistry>,
         job_id: &substrate_domain::value_objects::JobId,
@@ -772,6 +776,10 @@ mod ttl_tests {
         slot.set_result(JobResult::Succeeded(serde_json::Value::Null));
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "declared async so callers can .await it uniformly with other async helpers"
+    )]
     async fn drive_to_cancelled(
         registry: &Arc<InMemoryJobRegistry>,
         job_id: &substrate_domain::value_objects::JobId,
@@ -784,6 +792,10 @@ mod ttl_tests {
         slot.set_result(JobResult::Cancelled);
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "declared async so callers can .await it uniformly with other async helpers"
+    )]
     async fn drive_to_failed(
         registry: &Arc<InMemoryJobRegistry>,
         job_id: &substrate_domain::value_objects::JobId,
@@ -808,10 +820,15 @@ mod ttl_tests {
         job_id: &substrate_domain::value_objects::JobId,
         ttl_secs: u64,
     ) {
+        // Acquire slot reference and immediately clone/deref what we need so the
+        // DashMap guard is released before taking the entry lock (avoids holding
+        // two significant Drop temporaries simultaneously).
         let slot = registry.jobs.get(job_id).expect("slot must exist for backdating");
-        let mut entry = slot.entry.lock();
+        let entry_ref = Arc::clone(&slot.entry);
+        drop(slot);
+        let mut entry = entry_ref.lock();
         let past = time::OffsetDateTime::now_utc()
-            - time::Duration::seconds((ttl_secs + 10) as i64);
+            - time::Duration::seconds((ttl_secs + 10).cast_signed());
         entry.terminal_at = Some(past);
     }
 
@@ -1165,23 +1182,23 @@ mod idempotency_tests {
     #[tokio::test]
     async fn different_keys_create_separate_tasks() {
         let registry = make_registry();
-        let ik_a = IdempotencyKey::now_v7();
-        let ik_b = IdempotencyKey::now_v7();
+        let key_a = IdempotencyKey::now_v7();
+        let key_b = IdempotencyKey::now_v7();
 
-        let req_a = make_request_with_key("client-idem-3", Some(ik_a));
-        let req_b = make_request_with_key("client-idem-3", Some(ik_b));
+        let req_a = make_request_with_key("client-idem-3", Some(key_a));
+        let req_b = make_request_with_key("client-idem-3", Some(key_b));
 
-        let id_a = registry
+        let job_a = registry
             .submit(req_a)
             .await
             .expect("submit A must succeed");
-        let id_b = registry
+        let job_b = registry
             .submit(req_b)
             .await
             .expect("submit B must succeed");
 
         assert_ne!(
-            id_a, id_b,
+            job_a, job_b,
             "different idempotency keys must produce distinct JobIds"
         );
     }

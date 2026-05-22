@@ -261,16 +261,16 @@ mod tests {
             let mins  = (secs % 3_600) / 60;
             let ss    = secs % 60;
             if days > 0 {
-                let expected = format!("{0}d", days);
+                let expected = format!("{days}d");
                 proptest::prop_assert!(s.contains(&expected));
             } else if hours > 0 {
-                let expected = format!("{0}h", hours);
+                let expected = format!("{hours}h");
                 proptest::prop_assert!(s.contains(&expected));
             } else if mins > 0 {
-                let expected = format!("{0}m", mins);
+                let expected = format!("{mins}m");
                 proptest::prop_assert!(s.contains(&expected));
             } else {
-                let expected = format!("{0}s", ss);
+                let expected = format!("{ss}s");
                 proptest::prop_assert!(s.contains(&expected));
             }
         }

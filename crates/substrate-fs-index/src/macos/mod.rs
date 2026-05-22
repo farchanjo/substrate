@@ -18,14 +18,23 @@
 //!
 //! - Rebuild walk: Zone B (`spawn_blocking`); can block for seconds on large trees.
 //! - `getattrlistbulk` calls within the walk: Zone B (already inside `spawn_blocking`).
-//! - Snapshot swap: wait-free for readers (ArcSwap); no blocking.
+//! - Snapshot swap: wait-free for readers (`ArcSwap`); no blocking.
 //!
 //! # TODO (future adapter wave)
 //!
 //! - Implement the `getattrlistbulk` inner loop in `getattrlistbulk.rs`
 //!   (the submodule skeleton below contains the FFI declarations but not the
 //!   parsing logic for the returned attrlist buffer).
-//! - Wire FSEvents watcher (Layer 2) when `fs-index-watch` feature is active.
+//! - Wire `FSEvents` watcher (Layer 2) when `fs-index-watch` feature is active.
+
+// MacOsBulkIndex is pub(crate) inside a private module; clippy::redundant_pub_crate
+// fires because the enclosing `mod macos` is private, but unreachable_pub fires on
+// bare `pub`. Suppress redundant_pub_crate at module level and use pub(crate).
+#![expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) in private module avoids unreachable_pub; \
+              MacOsBulkIndex is referenced from sibling modules in the same crate"
+)]
 
 use std::sync::Arc;
 
@@ -71,19 +80,19 @@ struct attrlist {
 /// (macOS 10.10+) and the `macos-getattrlistbulk` Cargo feature is compiled in.
 /// Falls back to `PortablePollingIndex` otherwise.
 #[derive(Debug)]
-pub struct MacOsBulkIndex {
+pub(crate) struct MacOsBulkIndex {
     slot: SnapshotSlot,
-    #[expect(
-        dead_code,
-        reason = "held for ownership; callers borrow via write_through_handle()"
-    )]
     write_through: WriteThroughHandle,
 }
 
 impl MacOsBulkIndex {
     /// Constructs a new `MacOsBulkIndex`.
     #[must_use]
-    pub fn new() -> Arc<Self> {
+    #[expect(
+        dead_code,
+        reason = "called only when macos-getattrlistbulk feature is active"
+    )]
+    pub(crate) fn new() -> Arc<Self> {
         let slot: SnapshotSlot = Arc::new(ArcSwap::from_pointee(IndexSnapshot::default()));
         let write_through = WriteThroughHandle::new(Arc::clone(&slot));
         Arc::new(Self {
@@ -94,7 +103,11 @@ impl MacOsBulkIndex {
 
     /// Returns a clone of the `WriteThroughHandle` for use by mutation crates.
     #[must_use]
-    pub fn write_through_handle(&self) -> WriteThroughHandle {
+    #[expect(
+        dead_code,
+        reason = "called only by fs-mutation adapter when macos-getattrlistbulk feature is active"
+    )]
+    pub(crate) fn write_through_handle(&self) -> WriteThroughHandle {
         self.write_through.clone()
     }
 }
@@ -104,17 +117,20 @@ impl FsIndexPort for MacOsBulkIndex {
     #[instrument(skip(self, query), fields(root = ?query.root, glob = ?query.glob))]
     async fn lookup(&self, query: &IndexQuery) -> SubstrateResult<Vec<JailedPath>> {
         let snap = self.slot.load();
-        let candidates: Vec<JailedPath> = if let Some(glob) = &query.glob {
-            snap.lookup_by_name(glob)
-                .iter()
-                .map(|e| e.path.clone())
-                .collect()
-        } else {
-            snap.lookup_by_root(&query.root)
-                .iter()
-                .map(|e| e.path.clone())
-                .collect()
-        };
+        let candidates: Vec<JailedPath> = query.glob.as_ref().map_or_else(
+            || {
+                snap.lookup_by_root(&query.root)
+                    .iter()
+                    .map(|e| e.path.clone())
+                    .collect()
+            },
+            |glob| {
+                snap.lookup_by_name(glob)
+                    .iter()
+                    .map(|e| e.path.clone())
+                    .collect()
+            },
+        );
         let results = if query.limit == 0 {
             candidates
         } else {

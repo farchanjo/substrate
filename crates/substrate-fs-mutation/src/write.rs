@@ -365,7 +365,7 @@ mod tests {
         // The parent directory must contain only the target file, no temp files.
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .expect("read dir")
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
         let tmp_files: Vec<_> = entries
             .iter()

@@ -2,7 +2,7 @@
 //!
 //! Tests the Bucket C async job flow over real STDIO:
 //!   1. Submit `archive_tar_create` with a small source directory.
-//!   2. Receive job_id in structuredContent.
+//!   2. Receive `job_id` in `structuredContent`.
 //!   3. Poll `job_status` until terminal or timeout.
 //!   4. Call `job_result` → succeeded with .tar artifact present on disk.
 //!
@@ -10,6 +10,23 @@
 //! verify `job_result` returns `Cancelled` state.
 //!
 //! Per ADR-0044 carve-out: `std::process::Command` is allowed in tests.
+//!
+//! # Lint relaxations (integration-test carve-out)
+//!
+//! - `expect_used` / `unwrap_used`: panicking assertions are idiomatic in tests.
+//! - `disallowed_types` / `disallowed_methods`: `std::process::Command` and
+//!   `Child` are allowed here per the ADR-0044 integration-test exception.
+//! - `missing_docs`: integration-test binary; no public API to document.
+#![expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::redundant_closure_for_method_calls,
+    reason = "integration-test carve-out per ADR-0044: \
+              panicking assertions and std::process::Command are idiomatic here; \
+              redundant_closure suppressed for PoisonError::into_inner pattern"
+)]
 
 use std::{
     io::{BufRead, BufReader, Write},
