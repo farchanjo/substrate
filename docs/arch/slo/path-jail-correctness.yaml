@@ -1,0 +1,44 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-pathjail-correctness
+  displayName: PathJail correctness rate
+  labels:
+    bounded_context: cross-cutting
+    security: critical
+spec:
+  description: |
+    PathJail (per ADR-0035 with openat2(RESOLVE_BENEATH|NO_SYMLINKS)
+    on Linux / O_NOFOLLOW_ANY on macOS) MUST reject 100% of
+    out-of-allowlist paths. This is a correctness invariant, not a
+    performance SLO. Any violation indicates a tier-1 syscall
+    regression or an audit gap. ADR-0004 (defense-in-depth) and
+    ADR-0039 (SLI definitions) apply.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: pathjail-violations
+    spec:
+      ratioMetric:
+        counter: true
+        good:
+          metricSource:
+            metricSourceRef: prometheus-substrate
+            type: prometheus
+            spec:
+              query: sum(rate(substrate_pathjail_blocked_total[1h]))
+        total:
+          metricSource:
+            metricSourceRef: prometheus-substrate
+            type: prometheus
+            spec:
+              query: >-
+                sum(rate(substrate_pathjail_evaluation_total[1h]))
+  timeWindow:
+    - duration: 30d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: 100% block rate
+      target: 1.0

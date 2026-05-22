@@ -1,0 +1,42 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-mcp-availability
+  displayName: substrate MCP server availability
+  labels:
+    bounded_context: cross-cutting
+spec:
+  description: |
+    substrate MCP STDIO server SHOULD respond to >= 99.5% of
+    tools/list and initialize requests with a non-error result
+    within 50 ms. SLI sourced from audit log per ADR-0039
+    (audit-log-derived SLIs). Cancelled and timeout outcomes
+    excluded from denominator per ADR-0039. Service:
+    substrate-mcp-server per ADR-0005 (STDIO transport).
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: tools-list-success-rate
+    spec:
+      ratioMetric:
+        counter: true
+        good:
+          metricSource:
+            metricSourceRef: prometheus-substrate
+            type: prometheus
+            spec:
+              query: sum(rate(substrate_tools_list_success_total[1h]))
+        total:
+          metricSource:
+            metricSourceRef: prometheus-substrate
+            type: prometheus
+            spec:
+              query: sum(rate(substrate_tools_list_total[1h]))
+  timeWindow:
+    - duration: 30d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: 99.5% availability
+      target: 0.995

@@ -1,0 +1,7 @@
+---
+extends: spelling
+message: "'%s' is a possible spelling error."
+level: suggestion
+filters:
+  - '\b(BLAKE3|UUIDv7|openat2|getdents64|getattrlistbulk|fsevent|sysctl|libdeflater|cargo|spec|tokio|rmcp|MCP|JSON-RPC|MADR|ADR|CUE|Gherkin|Structurizr|Rego|SemVer|substrate|ARCH-?[0-9]+)\b'
+custom: true

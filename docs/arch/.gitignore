@@ -1,0 +1,4 @@
+# Vale: do not commit downloaded community styles
+styles/Vale/
+styles/Microsoft/
+styles/write-good/

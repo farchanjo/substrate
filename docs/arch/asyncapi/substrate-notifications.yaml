@@ -1,0 +1,180 @@
+---
+asyncapi: 3.0.0
+info:
+  title: substrate MCP notifications
+  version: 0.1.0
+  description: |
+    Server-emitted notifications over the MCP STDIO transport.
+    Per ADR-0005 (STDIO sanctity), ADR-0040 (async job control-plane),
+    ADR-0013 (MCP protocol version 2025-11-25).
+  license:
+    name: MIT OR Apache-2.0
+servers:
+  stdio:
+    host: localhost
+    protocol: stdio
+    description: STDIO transport (per ADR-0005)
+channels:
+  notificationsProgress:
+    address: notifications/progress
+    description: |
+      Server emits throttled progress updates for a long-running job
+      per ADR-0040 section 4. Events suppressed unless 250 ms elapsed
+      since last emission OR progress delta >= 1 percentage point.
+      progressToken equals job_id equals correlation_id
+      (triple equality per ADR-0040).
+    messages:
+      progressEvent:
+        $ref: '#/components/messages/ProgressEvent'
+  notificationsCancelled:
+    address: notifications/cancelled
+    description: |
+      Client requests cancellation of an in-flight tools/call per
+      ADR-0037. The MCP dispatch layer MUST map the requestId to
+      job.cancel(progressToken) per ADR-0040 CancellationToken
+      propagation rules.
+    messages:
+      cancelEvent:
+        $ref: '#/components/messages/CancelEvent'
+  notificationsLog:
+    address: notifications/log
+    description: |
+      Diagnostic structured logs forwarded to the client per ADR-0036
+      error taxonomy. All substrate logging goes to stderr via
+      tracing_subscriber per ADR-0005; this channel forwards a
+      structured subset to the MCP client for observability.
+    messages:
+      logEvent:
+        $ref: '#/components/messages/LogEvent'
+operations:
+  emitProgress:
+    action: send
+    channel:
+      $ref: '#/channels/notificationsProgress'
+    summary: >-
+      Server emits throttled progress update for an async job
+      (ADR-0040 section 4).
+  receiveCancel:
+    action: receive
+    channel:
+      $ref: '#/channels/notificationsCancelled'
+    summary: >-
+      Server receives client cancellation; maps to job.cancel per
+      ADR-0040.
+  emitLog:
+    action: send
+    channel:
+      $ref: '#/channels/notificationsLog'
+    summary: Server emits diagnostic structured log entry per ADR-0036.
+components:
+  messages:
+    ProgressEvent:
+      name: ProgressEvent
+      summary: >-
+        Throttled progress update (250 ms or 1% delta per ADR-0040
+        section 4).
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - progressToken
+          - progress
+        properties:
+          progressToken:
+            description: |
+              UUIDv7 Crockford base32 (26 chars); equals job_id equals
+              correlation_id per ADR-0040 triple-equality contract.
+            type: string
+            pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+          progress:
+            description: Current progress percentage (0-100 integer).
+            type: integer
+            minimum: 0
+            maximum: 100
+          total:
+            description: >-
+              Total units (always 100 for percentage-based reporting).
+            type: integer
+            default: 100
+          message:
+            description: Human-readable status message (max 120 chars).
+            type: string
+            maxLength: 120
+          sequence_number:
+            description: |
+              Monotonic per-job counter sourced from AtomicU64 per
+              ADR-0040. Clients MUST use this to detect dropped events
+              and reorder out-of-order deliveries.
+            type: integer
+            minimum: 0
+          job_id:
+            description: >-
+              UUIDv7 of the job; equals progressToken per ADR-0040
+              triple-equality.
+            type: string
+            pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+          job_state:
+            description: >-
+              Current JobState at time of emission per ADR-0040 state
+              machine.
+            type: string
+            enum:
+              - Pending
+              - Running
+              - Succeeded
+              - Failed
+              - Cancelled
+              - TimedOut
+    CancelEvent:
+      name: CancelEvent
+      summary: >-
+        Client-initiated cancellation of an in-flight tool call.
+        Mapped to job.cancel(progressToken) per ADR-0040
+        CancellationToken propagation.
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - requestId
+        properties:
+          requestId:
+            description: |
+              The MCP requestId of the in-flight tools/call to cancel.
+              The dispatch layer resolves this to the job_id via the
+              progressToken.
+            type: string
+          reason:
+            description: Optional human-readable cancellation reason.
+            type: string
+    LogEvent:
+      name: LogEvent
+      summary: >-
+        Diagnostic structured log entry per ADR-0036 error taxonomy.
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - level
+          - logger
+        properties:
+          level:
+            description: Log severity matching tracing crate conventions.
+            type: string
+            enum:
+              - trace
+              - debug
+              - info
+              - warn
+              - error
+          logger:
+            description: Logger or module name (e.g., substrate_fs_query::find).
+            type: string
+          data:
+            description: Arbitrary structured key-value data for the log event.
+            type: object
+          correlation_id:
+            description: |
+              UUIDv7 Crockford base32 correlation ID per ADR-0036.
+              Equals job_id when scoped to an async job per ADR-0040.
+            type: string
+            pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'

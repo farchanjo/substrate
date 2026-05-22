@@ -1,0 +1,15 @@
+---
+extends: substitution
+message: "Prefer '%s' over '%s' for consistency."
+level: warning
+nonword: false
+action:
+  name: replace
+ignorecase: true
+swap:
+  filesystem: filesystem
+  file system: filesystem
+  back-end: backend
+  front-end: frontend
+  e\.g\.: 'e.g.,'
+  i\.e\.: 'i.e.,'

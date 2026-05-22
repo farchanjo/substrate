@@ -1,0 +1,8 @@
+---
+extends: occurrence
+message: "Sentence is too long (%s words); consider splitting."
+level: suggestion
+scope: sentence
+ignorecase: false
+max: 40
+token: \b\w+\b

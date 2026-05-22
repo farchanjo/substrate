@@ -1,0 +1,41 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-cancellation-latency
+  displayName: Cancellation response latency
+  labels:
+    bounded_context: job
+spec:
+  description: |
+    Client notifications/cancelled SHOULD propagate to worker task
+    CancellationToken cancellation within p99 < 1 s per ADR-0040
+    (CancellationToken propagation) and ADR-0037 (biased select
+    async cancellation patterns). Validated by Gherkin feature
+    cancellation-on-cancel-request.feature (ADR-0042). SLI sourced
+    from substrate_cancellation_latency_seconds_bucket per ADR-0039.
+    Cancelled outcomes excluded from latency SLI denominator.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: cancellation-latency
+    spec:
+      thresholdMetric:
+        metricSource:
+          metricSourceRef: prometheus-substrate
+          type: prometheus
+          spec:
+            query: >-
+              histogram_quantile(0.99,
+                sum(rate(
+                  substrate_cancellation_latency_seconds_bucket[5m]))
+                by (le))
+  timeWindow:
+    - duration: 7d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: p99 cancel latency under 1s
+      target: 0.99
+      op: lte
+      value: 1.0

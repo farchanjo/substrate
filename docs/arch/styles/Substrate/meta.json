@@ -1,0 +1,4 @@
+{
+  "feed": "https://raw.githubusercontent.com/substrate/vale-styles/main/feed.xml",
+  "vale_version": ">=3.0"
+}

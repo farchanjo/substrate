@@ -1,0 +1,41 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-job-completion-latency
+  displayName: Bucket B job completion latency
+  labels:
+    bounded_context: job
+spec:
+  description: |
+    Bucket B jobs (fs.find, fs.read, fs.hash, fs.copy,
+    text.search, text.count_lines, archive.gzip.compress/decompress,
+    archive.hash) SHOULD complete within p95 < 2 s for inputs below
+    the inline_max_bytes threshold per ADR-0040 section 1.B.
+    SLI sourced from audit log duration_ms field per ADR-0039
+    (5-minute rolling window; 10-minute for archive operations).
+    Cancelled and timeout outcomes excluded per ADR-0039.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: job-bucket-b-latency
+    spec:
+      thresholdMetric:
+        metricSource:
+          metricSourceRef: prometheus-substrate
+          type: prometheus
+          spec:
+            query: >-
+              histogram_quantile(0.95,
+                sum(rate(
+                  substrate_job_duration_seconds_bucket{bucket="B"}
+                  [5m])) by (le))
+  timeWindow:
+    - duration: 7d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: p95 latency under 2s
+      target: 0.95
+      op: lte
+      value: 2.0
