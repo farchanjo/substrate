@@ -27,13 +27,34 @@
 //! The composition root (dispatcher) uses the default constructor (no prime) to
 //! keep first-call latency low. Tests or callers that specifically need accurate
 //! first-call CPU% should use `with_prime()`.
+//!
+//! # Process start time
+//!
+//! `/proc/<pid>/stat` field `starttime` is in clock ticks (jiffies) since boot,
+//! NOT a Unix timestamp. To convert to epoch seconds:
+//!
+//! ```text
+//! start_time_unix = boot_time_unix + (starttime / CLK_TCK)
+//! ```
+//!
+//! `boot_time_unix` is derived from `/proc/uptime` (first field = seconds since
+//! boot as a float) and `SystemTime::now()`. Both values are cached in
+//! module-scoped `OnceLock`s to avoid repeated syscalls on every process entry.
+//!
+//! ## Container / PID-namespace caveat
+//!
+//! Inside a container, `/proc/uptime` reflects the container's uptime (from
+//! the kernel's perspective of the container's PID namespace), not the host
+//! uptime. `start_time_unix` for processes started before the container will
+//! therefore be incorrect. This is a known limitation; no workaround is
+//! implemented (out of scope per ADR-0003 / ADR-0044).
 
 use std::collections::HashMap;
 use std::sync::{
-    Mutex,
+    Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use procfs::process::{Process, all_processes};
 use tracing::warn;
@@ -41,6 +62,83 @@ use tracing::warn;
 use super::ProcessScannerPort;
 use crate::process_info::ProcessInfo;
 use substrate_domain::{SubstrateError, SubstrateResult};
+
+/// Cached boot time in seconds since the Unix epoch.
+///
+/// Populated on first call to [`boot_time_unix`]; subsequent calls return the
+/// cached value without re-reading `/proc/uptime`.
+static BOOT_TIME_UNIX: OnceLock<u64> = OnceLock::new();
+
+/// Cached clock-tick frequency (`CLK_TCK`) in ticks per second.
+///
+/// Populated on first call to [`clk_tck`]; subsequent calls return the cached
+/// value without calling into `procfs::ticks_per_second()` again.
+static CLK_TCK: OnceLock<u64> = OnceLock::new();
+
+/// Returns the Unix timestamp (seconds) of the system boot, cached after the
+/// first successful read.
+///
+/// Reads `/proc/uptime` (first field = seconds since boot as a float) and
+/// subtracts from `SystemTime::now()`. On read failure, logs a warning and
+/// returns `0` (equivalent to the previous behaviour of leaving `start_time_unix`
+/// as `None`).
+fn boot_time_unix() -> u64 {
+    *BOOT_TIME_UNIX.get_or_init(|| {
+        read_boot_time_unix().unwrap_or_else(|e| {
+            warn!(error = %e, "failed to read /proc/uptime; start_time_unix will be inaccurate");
+            0
+        })
+    })
+}
+
+/// Reads `/proc/uptime` and computes the boot-epoch timestamp.
+///
+/// Returns an error string on any parse or I/O failure so the caller can log
+/// it and fall back gracefully.
+fn read_boot_time_unix() -> Result<u64, String> {
+    let content = std::fs::read_to_string("/proc/uptime")
+        .map_err(|e| format!("read /proc/uptime: {e}"))?;
+    let uptime_secs_str = content
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "empty /proc/uptime".to_owned())?;
+    let uptime_secs: f64 = uptime_secs_str
+        .parse()
+        .map_err(|e| format!("parse uptime float '{uptime_secs_str}': {e}"))?;
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("SystemTime before UNIX_EPOCH: {e}"))?
+        .as_secs();
+    Ok(now_secs.saturating_sub(uptime_secs.floor() as u64))
+}
+
+/// Returns the clock-tick frequency (`CLK_TCK`) in ticks per second, cached
+/// after the first call.
+///
+/// Delegates to `procfs::ticks_per_second()` which reads `_SC_CLK_TCK` via
+/// `sysconf(2)` internally. Guaranteed to return at least 1 to avoid
+/// divide-by-zero if the kernel returns an unexpected value.
+fn clk_tck() -> u64 {
+    *CLK_TCK.get_or_init(|| {
+        let hz = procfs::ticks_per_second();
+        u64::try_from(hz).unwrap_or(100).max(1)
+    })
+}
+
+/// Converts a `starttime` field (ticks since boot) from `/proc/<pid>/stat` to
+/// a Unix epoch timestamp in seconds.
+///
+/// Returns `None` when `boot_time_unix()` returned `0` (i.e., the boot-time
+/// read failed) to preserve the previous undefined semantics.
+fn starttime_to_unix(starttime_ticks: u64) -> Option<i64> {
+    let boot = boot_time_unix();
+    if boot == 0 {
+        return None;
+    }
+    let hz = clk_tck();
+    let start_unix = boot.saturating_add(starttime_ticks / hz);
+    i64::try_from(start_unix).ok()
+}
 
 /// Per-process tick snapshot for CPU% delta calculation.
 #[derive(Debug, Clone, Copy)]
@@ -189,10 +287,10 @@ fn read_process(
     let rss_kb = stat.rss_bytes().ok().map(|b| b / 1024).unwrap_or(0) as u64;
     let vm_kb = stat.vsize / 1024;
 
-    // start_time: ticks since boot → not yet converted to epoch seconds in MVP.
-    // TODO Wave G: convert stat.starttime (jiffies) via sysconf(_SC_CLK_TCK)
-    // and /proc/stat btime to absolute Unix epoch.
-    let start_time_unix: Option<i64> = None;
+    // Convert starttime (jiffies since boot) to Unix epoch seconds.
+    // boot_time_unix() + (starttime / CLK_TCK) gives the absolute epoch.
+    // Returns None only when /proc/uptime was unreadable (boot_time == 0).
+    let start_time_unix: Option<i64> = starttime_to_unix(stat.starttime);
 
     // Total scheduler ticks consumed by this process (user + kernel).
     let current_ticks = stat.utime.saturating_add(stat.stime);
@@ -305,5 +403,91 @@ impl ProcessScannerPort for LinuxProcessScanner {
         *guard = new_sample;
 
         Ok(result)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{CLK_TCK, BOOT_TIME_UNIX, boot_time_unix, clk_tck, starttime_to_unix};
+    use crate::scanner::ProcessScannerPort;
+    use crate::scanner::linux::LinuxProcessScanner;
+
+    /// Calling `boot_time_unix()` twice must return the identical cached value
+    /// (the `OnceLock` must not recompute on the second call).
+    #[test]
+    fn boot_time_cached_once() {
+        let first = boot_time_unix();
+        let second = boot_time_unix();
+        assert_eq!(first, second, "boot_time_unix must return a stable cached value");
+        // Must also be non-zero on a real Linux host with a readable /proc/uptime.
+        assert!(first > 0, "boot_time_unix must be non-zero on a live Linux host");
+    }
+
+    /// `clk_tck()` must return a positive value (the kernel always reports >= 1).
+    #[test]
+    fn clk_tck_returns_positive() {
+        let hz = clk_tck();
+        assert!(hz > 0, "CLK_TCK must be positive; got {hz}");
+    }
+
+    /// Given two synthetic starttime values `t1 < t2` (both in ticks), the
+    /// resulting Unix timestamps must satisfy `ts2 >= ts1` (monotonic ordering
+    /// is preserved through the linear conversion).
+    #[test]
+    fn starttime_conversion_monotonic() {
+        // Force cache warm-up so both calls see the same boot_time / clk_tck.
+        let _ = boot_time_unix();
+        let _ = clk_tck();
+
+        let t1_ticks: u64 = 1_000;
+        let t2_ticks: u64 = 2_000;
+
+        let ts1 = starttime_to_unix(t1_ticks).expect("t1 conversion must succeed");
+        let ts2 = starttime_to_unix(t2_ticks).expect("t2 conversion must succeed");
+
+        assert!(
+            ts2 >= ts1,
+            "later starttime ({t2_ticks} ticks) must produce a >= Unix ts ({ts2}) than earlier ({t1_ticks} ticks → {ts1})"
+        );
+    }
+
+    /// `proc.list` on the live system must return the current process with a
+    /// `start_time_unix` within ±60 seconds of `SystemTime::now()` (generous
+    /// margin for slow CI environments) and strictly greater than zero.
+    ///
+    /// We look up the current PID in the scan result and inspect its
+    /// `start_time_unix`. The current process was started very recently relative
+    /// to the test run, so its start time must be close to `now`.
+    #[test]
+    fn proc_list_populates_start_time() {
+        let scanner = LinuxProcessScanner::new();
+        let processes = scanner.scan_all().expect("scan_all must succeed on Linux");
+
+        let our_pid = std::process::id();
+        let entry = processes
+            .iter()
+            .find(|p| p.pid == our_pid)
+            .unwrap_or_else(|| panic!("current PID {our_pid} must appear in proc.list output"));
+
+        let start_time = entry
+            .start_time_unix
+            .unwrap_or_else(|| panic!("start_time_unix must be Some for PID {our_pid}"));
+
+        assert!(start_time > 0, "start_time_unix must be positive; got {start_time}");
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after UNIX_EPOCH")
+            .as_secs() as i64;
+
+        // The test process was started at most 60 seconds ago (generous for CI).
+        let delta = now_secs - start_time;
+        assert!(
+            delta >= 0 && delta <= 60,
+            "start_time_unix delta from now should be 0..=60 s; got {delta} s \
+             (start={start_time}, now={now_secs})"
+        );
     }
 }
