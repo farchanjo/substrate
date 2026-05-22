@@ -101,6 +101,17 @@ pub struct SubstrateWorld {
     /// Timestamp of the last call to `drain_until_response`, used by assertions
     /// that need to scope notifications to "after the current operation started".
     pub operation_start: Option<Instant>,
+
+    // -----------------------------------------------------------------------
+    // Stderr capture (feature: audit-log-write-failure, protocol-version-rejection)
+    // -----------------------------------------------------------------------
+
+    /// All lines received from the server's stderr since spawn.
+    ///
+    /// A background thread reads the subprocess stderr pipe line-by-line and
+    /// appends each line here.  Steps that need audit events or WARN lines can
+    /// query this buffer without blocking the main test thread.
+    pub stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
 // The `#[derive(World)]` macro from cucumber generates the WorldInventory
@@ -142,13 +153,16 @@ impl SubstrateWorld {
     }
 
     /// Spawns the substrate binary with cwd = `dir` (where `substrate.toml`
-    /// lives) and wires stdin/stdout pipes.
+    /// lives) and wires stdin/stdout/stderr pipes.
+    ///
+    /// Stderr is captured (not null) so that background audit/WARN lines can be
+    /// read by `stderr_lines_matching` and `wait_for_stderr_line`.
     pub fn spawn_server(dir: &Path) -> Child {
         Command::new(Self::binary_path())
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("failed to spawn substrate binary")
     }
@@ -160,11 +174,24 @@ impl SubstrateWorld {
         let mut child = Self::spawn_server(tmp.path());
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
+        let stderr = child.stderr.take().expect("child stderr");
         self.sandbox = Some(tmp);
         self.allowlist_root = Some(root);
         self.stdin_writer = Some(stdin);
         self.stdout_reader = Some(BufReader::new(stdout));
         self.child = Some(child);
+        // Spawn a background thread that reads stderr line-by-line and appends
+        // each line to the shared buffer.  The thread exits when the pipe closes
+        // (i.e., when the subprocess exits).
+        let stderr_buf = Arc::clone(&self.stderr_lines);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for l in reader.lines().map_while(Result::ok) {
+                if let Ok(mut guard) = stderr_buf.lock() {
+                    guard.push(l);
+                }
+            }
+        });
         self.perform_initialize();
     }
 
@@ -202,11 +229,21 @@ impl SubstrateWorld {
         let mut child = Self::spawn_server(tmp.path());
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
+        let stderr = child.stderr.take().expect("child stderr");
         self.sandbox = Some(tmp);
         self.allowlist_root = Some(root.to_path_buf());
         self.stdin_writer = Some(stdin);
         self.stdout_reader = Some(BufReader::new(stdout));
         self.child = Some(child);
+        let stderr_buf = Arc::clone(&self.stderr_lines);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for l in reader.lines().map_while(Result::ok) {
+                if let Ok(mut guard) = stderr_buf.lock() {
+                    guard.push(l);
+                }
+            }
+        });
         self.perform_initialize();
     }
 
@@ -323,6 +360,70 @@ impl SubstrateWorld {
             "params": { "id": request_id }
         });
         self.write_line(&msg.to_string());
+    }
+
+    /// Waits up to `timeout` for the server's stdout pipe to return EOF (i.e.,
+    /// the subprocess closes its stdout, which signals a clean server shutdown
+    /// or connection-close).
+    ///
+    /// Returns `true` if EOF was detected within the timeout, `false` otherwise.
+    /// Used by `then_server_closes_session` and `then_connection_closed` steps.
+    pub fn wait_for_eof(&mut self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        // Drop the stdin writer so the server sees EOF on its stdin pipe, which
+        // is the standard way to request a graceful shutdown.
+        drop(self.stdin_writer.take());
+
+        // Poll the stdout reader for EOF.  A successful read of 0 bytes means
+        // the pipe is closed.  We use a tight poll to avoid adding a hard sleep.
+        while Instant::now() < deadline {
+            if let Some(ref mut reader) = self.stdout_reader {
+                let mut buf = String::new();
+                match reader.read_line(&mut buf) {
+                    Ok(0) | Err(_) => return true, // EOF or broken pipe — connection closed
+                    Ok(_) => {}                    // More data arrived; keep polling
+                }
+            } else {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// Returns all lines captured from the server's stderr that contain `pattern`
+    /// as a substring.
+    pub fn stderr_lines_matching(&self, pattern: &str) -> Vec<String> {
+        self.stderr_lines
+            .lock()
+            .expect("stderr_lines mutex poisoned")
+            .iter()
+            .filter(|l| l.contains(pattern))
+            .cloned()
+            .collect()
+    }
+
+    /// Waits up to `timeout` for at least one stderr line containing `pattern`.
+    ///
+    /// Returns the first matching line, or `None` if the timeout expires before
+    /// any matching line arrives.
+    pub fn wait_for_stderr_line(&self, pattern: &str, timeout: Duration) -> Option<String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            {
+                let guard = self
+                    .stderr_lines
+                    .lock()
+                    .expect("stderr_lines mutex poisoned");
+                if let Some(line) = guard.iter().find(|l| l.contains(pattern)) {
+                    return Some(line.clone());
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Kills the subprocess if still running.
