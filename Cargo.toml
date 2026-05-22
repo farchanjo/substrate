@@ -99,7 +99,7 @@ tokio-tar = "0.3"
 # Archiving (Zone B/C sync — used inside spawn_blocking)
 tar = "0.4"
 flate2 = "1"
-zip = "2"
+zip = "8"
 
 # Hashing (Zone C)
 sha2 = "0.10"
