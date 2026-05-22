@@ -1,0 +1,40 @@
+[package]
+name = "substrate-jobs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "In-memory JobRegistry adapter for async control-plane (ADR-0040)."
+
+[lints]
+workspace = true
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+arc-swap = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+parking_lot = "0.12"
+
+[dev-dependencies]
+rstest     = { workspace = true }
+proptest   = { workspace = true }
+tempfile   = { workspace = true }
+tokio-test = "0.4"
+criterion  = { workspace = true }
+tokio      = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "registry_bench"
+harness = false
