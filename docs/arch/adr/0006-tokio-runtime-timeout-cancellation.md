@@ -62,12 +62,15 @@ tokio::time::timeout(tool_timeout, execute_tool(ctx, params))
 
 A `CancellationToken` is created per tool call invocation and threaded into the tool context:
 
-```
-MCP dispatch
-  └─ CancellationToken::new()
-       ├─ async tool fn  ←─ select! { result = work => ..., _ = token.cancelled() => Err(Cancelled) }
-       ├─ spawn_blocking(|| { ... token.is_cancelled() check between chunks ... })
-       └─ child process  ←─ kill_on_drop = true (see ADR-0031)
+```mermaid
+flowchart TD
+    D[MCP dispatch] --> T[CancellationToken::new]
+    T --> A[async tool fn]
+    T --> B[spawn_blocking closure]
+    T --> C[child process]
+    A -->|select!| AR["result = work OR token.cancelled => Err(Cancelled)"]
+    B -->|poll| BR[token.is_cancelled check between chunks]
+    C -->|drop| CR[kill_on_drop = true see ADR-0031]
 ```
 
 Async code uses `tokio::select!` to race the work future against `token.cancelled()`. Blocking closures poll `CancellationToken::is_cancelled()` between processing chunks (e.g., between each file in a directory walk, between each line batch in a grep pass). CPU-bound closures poll between computation units.

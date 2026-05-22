@@ -87,35 +87,13 @@ The index maintains correctness through four independent, complementary layers
 applied in order. No single layer is sufficient alone; all four are always active
 when `fs-index` is enabled (with `fs-index-watch` being additionally opt-in).
 
-```text
-+----------------------------------------------------------+
-| Layer 0 — Lazy lstat per hit (MANDATORY)                 |
-|  Every candidate returned by the snapshot passes through |
-|  an lstat syscall before being emitted to the client.    |
-|  Missing entry: silently evicted, never surfaced as      |
-|  NOT_FOUND unless the client requested that exact path.  |
-|  This layer is the inviolable invariant; it runs even    |
-|  when layers 1-3 have not yet fired.                     |
-+----------------------------------------------------------+
-| Layer 1 — Write-through for in-process mutations         |
-|  Every mutation tool (fs.mkdir, fs.write, fs.copy,       |
-|  fs.rename, fs.remove, fs.set_permissions, fs.symlink,   |
-|  fs.touch) updates the index at atomic-rename commit.    |
-|  Cost: zero extra I/O (runs on the already-open path).   |
-+----------------------------------------------------------+
-| Layer 2 — Watcher (opt-in: fs-index-watch)               |
-|  Linux: inotify recursive emulation.                     |
-|    IN_Q_OVERFLOW triggers a root rebuild via Zone B.     |
-|  macOS: FSEvents recursive (kFSEventStreamCreateFlag-    |
-|    FileEvents). Both platforms use pure-Rust crate        |
-|  bindings only; no shell invocation.                     |
-+----------------------------------------------------------+
-| Layer 3 — TTL fallback                                   |
-|  index.ttl_secs (default 60). On expiry, an incremental  |
-|  Zone B rebuild is triggered on the next lookup. The     |
-|  stale snapshot continues to serve reads (filtered by    |
-|  Layer 0 lstat) while the rebuild is in progress.        |
-+----------------------------------------------------------+
+```mermaid
+flowchart TB
+    L0["Layer 0 — Lazy lstat per hit (MANDATORY)<br/>every candidate passes through lstat before emission<br/>missing entry silently evicted, never surfaced as NOT_FOUND<br/>inviolable invariant; runs even when layers 1-3 have not fired"]
+    L1["Layer 1 — Write-through for in-process mutations<br/>fs.mkdir, fs.write, fs.copy, fs.rename, fs.remove,<br/>fs.set_permissions, fs.symlink, fs.touch update at commit<br/>cost: zero extra I/O (runs on already-open path)"]
+    L2["Layer 2 — Watcher (opt-in: fs-index-watch)<br/>Linux: inotify recursive emulation; IN_Q_OVERFLOW triggers Zone B rebuild<br/>macOS: FSEvents recursive (kFSEventStreamCreateFlagFileEvents)<br/>both platforms use pure-Rust crate bindings; no shell invocation"]
+    L3["Layer 3 — TTL fallback<br/>index.ttl_secs default 60<br/>on expiry, incremental Zone B rebuild triggered on next lookup<br/>stale snapshot continues serving (filtered by Layer 0 lstat)"]
+    L0 --> L1 --> L2 --> L3
 ```
 
 ### Native Primitives per Platform

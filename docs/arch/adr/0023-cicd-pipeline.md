@@ -44,8 +44,9 @@ Chosen option: "GitLab CI with DAG", because it keeps CI co-located with the pri
 
 ### Pipeline Stages and Jobs
 
-```
-validate --> lint --> test --> security --> build --> package --> release
+```mermaid
+flowchart LR
+    V[validate] --> L[lint] --> T[test] --> S[security] --> B[build] --> P[package] --> R[release]
 ```
 
 #### validate
