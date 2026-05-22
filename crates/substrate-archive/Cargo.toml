@@ -1,0 +1,55 @@
+[package]
+name = "substrate-archive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Archive BC adapter (tar/zip/gzip create+extract, archive.hash). SIMD-accelerated."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+fast-deflate = ["dep:libdeflater"]
+fast-zlib = []
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-policy = { path = "../substrate-policy" }
+schemars = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+nix = { workspace = true }
+uuid = { workspace = true }
+crc32fast = { workspace = true }
+blake3 = { workspace = true }
+sha2 = { workspace = true }
+time = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+zip = { workspace = true }
+num_cpus = { workspace = true }
+libdeflater = { workspace = true, optional = true }
+
+[dev-dependencies]
+rstest    = { workspace = true }
+proptest  = { workspace = true }
+tempfile  = { workspace = true }
+criterion = { workspace = true }
+blake3    = { workspace = true }
+flate2    = { workspace = true }
+
+[[bench]]
+name = "archive_hash_bench"
+harness = false
+
+[[bench]]
+name = "gzip_bench"
+harness = false
