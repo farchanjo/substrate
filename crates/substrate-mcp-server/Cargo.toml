@@ -1,0 +1,81 @@
+[package]
+name = "substrate-mcp-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "substrate MCP server binary. Composition root. STDIO transport only."
+default-run = "substrate"
+
+[lints]
+workspace = true
+
+[features]
+default = ["simd-baseline"]
+simd-baseline = []
+simd-avx2 = ["simd-baseline"]
+simd-avx512 = ["simd-avx2"]
+simd-neon = ["simd-baseline"]
+fast-json = []
+fast-zlib = []
+fast-deflate = []
+fs-index = ["substrate-fs-index/fs-index"]
+fs-index-watch = ["fs-index", "substrate-fs-index/fs-index-watch"]
+outbound-net = ["tokio/net"]
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-config = { path = "../substrate-config" }
+substrate-policy = { path = "../substrate-policy" }
+substrate-jobs = { path = "../substrate-jobs" }
+substrate-fs-index = { path = "../substrate-fs-index" }
+substrate-fs-query = { path = "../substrate-fs-query" }
+substrate-fs-mutation = { path = "../substrate-fs-mutation" }
+substrate-process = { path = "../substrate-process" }
+substrate-system-info = { path = "../substrate-system-info" }
+substrate-text = { path = "../substrate-text" }
+substrate-archive = { path = "../substrate-archive" }
+
+rmcp = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "io-util",
+    "time",
+    "sync",
+    "signal",
+    "fs",
+] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+figment = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+arc-swap = { workspace = true }
+dashmap = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+nix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rstest = { workspace = true }
+proptest = { workspace = true }
+insta = { workspace = true }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "substrate"
+path = "src/main.rs"
