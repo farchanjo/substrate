@@ -116,6 +116,31 @@ change to the markdownlint configuration is required. Renderers that
 do not understand Mermaid will display the source as a code block; the
 content remains readable.
 
+### Mermaid syntax validation (mmdc)
+
+Mermaid blocks MUST also pass `mmdc` (mermaid-cli) syntax validation.
+The project ships `scripts/lint-mermaid.sh` which:
+
+1. Walks every `*.md` under the repository (excluding `target/`,
+   `.git/`, `node_modules/`, `.venv/`, `.spec-cache/`).
+2. Extracts each ```` ```mermaid ```` fenced block via Perl regex.
+3. Pipes each block through `mmdc -i <block.mmd> -o /dev/null -q`.
+4. Reports per-file block counts plus any syntax failures with the
+   offending block index and the `mmdc` parser error trace.
+
+Operators invoke the validator via `just lint-mermaid`. Required
+binaries on the operator path: `mmdc` (mermaid-cli) and `perl`
+(present on every macOS install and most Linux distros).
+
+This validator is project-local. The spec framework's `lint_md`
+validator does not run `mmdc`; the project-local script does. When
+CI is reintroduced (per ADR-0023 deferral), the `just lint-mermaid`
+target SHOULD become a required gate alongside `spec validate`.
+
+Authoring hint: Mermaid `stateDiagram-v2` rejects parentheses inside
+state labels (treats them as composite-state markers). Use `--`
+or commas instead of `()` for parenthetical description in labels.
+
 ### Backward compatibility
 
 Existing ASCII art diagrams are NOT required to be converted. New

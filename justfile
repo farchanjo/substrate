@@ -30,6 +30,11 @@ fmt-check:
 spec-validate:
     spec validate --lane full
 
+# Validate every Mermaid block in every .md by piping each to mmdc (mermaid-cli).
+# Requires `mmdc` and `perl` on PATH. Per ADR-0047.
+lint-mermaid:
+    ./scripts/lint-mermaid.sh --keep-going
+
 # Install to /usr/local/bin with codesign on macOS, plain install on Linux.
 # Per ADR-0045 -- signs source AND destination on macOS. Set
 # SUBSTRATE_SIGN_IDENTITY to a Developer ID for Gatekeeper-trusted builds;

@@ -70,11 +70,11 @@ stateDiagram-v2
 
     Running --> Draining: SIGTERM or SIGINT received\nor BrokenPipe on stdout
 
-    Draining: Draining\n(root CancellationToken cancelled\nJobRegistry jobs cancelled)
+    Draining: Draining -- root CancellationToken cancelled, JobRegistry jobs cancelled
 
     Draining --> Draining: in-flight tools/jobs\nstill running
 
-    Draining --> Aborted: shutdown_drain_secs elapsed\nJoinSet::abort_all()
+    Draining --> Aborted: shutdown_drain_secs elapsed\nJoinSet abort_all
 
     Draining --> Exited0: all in-flight handlers resolved\nwithin drain window
 
