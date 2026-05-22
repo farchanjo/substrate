@@ -359,8 +359,11 @@ mod tests {
             let mut header = tar::Header::new_gnu();
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
+            let name_bytes = name.as_bytes();
+            assert!(name_bytes.len() < 100, "test path exceeds GNU tar name field");
+            header.as_old_mut().name[..name_bytes.len()].copy_from_slice(name_bytes);
             header.set_cksum();
-            builder.append_data(&mut header, name, *data).unwrap();
+            builder.append(&header, *data).unwrap();
         }
         builder.finish().unwrap();
     }
