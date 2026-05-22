@@ -1,0 +1,37 @@
+# rustfmt configuration — substrate MCP server
+# Stable options only (rustfmt 1.95 stable channel).
+# Nightly-only options are listed as comments for reference — enable only on nightly CI.
+
+edition = "2024"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+
+# Stable import ordering
+reorder_imports = true
+reorder_modules = true
+
+# Stable field/shorthand style
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Stable blank-line behavior
+empty_item_single_line = true
+
+# Stable trailing comma policy
+trailing_comma = "Vertical"
+
+# Stable match block formatting
+match_block_trailing_comma = true
+
+# Stable fn / struct single-line threshold
+fn_single_line = false
+struct_lit_single_line = true
+
+# --- Nightly-only options (commented out for stable CI) ---
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"
+# format_code_in_doc_comments = true
+# format_macro_matchers = true
+# format_strings = false

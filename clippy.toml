@@ -1,0 +1,25 @@
+# clippy.toml — substrate MCP server
+# Lint baseline per ADR-0014 and ADR-0043.
+# NOTE: workspace-level [workspace.lints.clippy] in Cargo.toml is the primary
+# enforcement mechanism. This file tunes thresholds and disallowed-methods/types.
+
+msrv = "1.95.0"
+
+# Complexity thresholds
+type-complexity-threshold = 250
+too-many-arguments-threshold = 7
+cognitive-complexity-threshold = 25
+
+# Forbidden methods — ADR-0044 no-subprocess policy.
+# Both std and tokio variants are blocked; use nix/libc syscalls directly.
+disallowed-methods = [
+  { path = "std::process::Command::new",   reason = "Forbidden by ADR-0044: no-subprocess policy. Use nix/libc syscalls." },
+  { path = "tokio::process::Command::new", reason = "Forbidden by ADR-0044: no-subprocess policy. Use nix/libc syscalls." },
+]
+
+# Forbidden types — complementary to the method bans above.
+disallowed-types = [
+  { path = "std::process::Command",   reason = "Forbidden by ADR-0044" },
+  { path = "tokio::process::Command", reason = "Forbidden by ADR-0044" },
+  { path = "std::process::Child",     reason = "Forbidden by ADR-0044 (result of spawning a subprocess)" },
+]

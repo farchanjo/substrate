@@ -1,0 +1,39 @@
+# Per ADR-0014 (panic=abort + LTO) and ADR-0043 (SIMD dispatch baseline).
+# target-cpu=native is FORBIDDEN for distributed release builds. Runtime
+# dispatch via is_x86_feature_detected!/is_aarch64_feature_detected! promotes
+# higher tiers on capable hardware without a per-CPU rebuild.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+    "-C", "link-arg=-fuse-ld=lld",
+]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = [
+    "-C", "target-cpu=neoverse-n1",
+]
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=apple-m1",
+]
+
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=x86-64-v2",
+]
+
+[build]
+# No global rustflags; per-target sections above handle each platform.
+rustflags = []
+
+[net]
+git-fetch-with-cli = true
+
+# [patch] table MUST remain empty on main branch (ADR-0014).

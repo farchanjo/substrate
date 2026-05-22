@@ -1,0 +1,43 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Local config
+.envrc.local
+.env.local
+
+# Coverage
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# Bench output
+criterion/
+
+# spec framework
+.spec-cache/
+.spec-reports/
+
+# mise local overrides
+.mise.local.toml
+
+# TLA+ jar (large binary; download instructions in tools/README.md)
+tools/tla2tools.jar

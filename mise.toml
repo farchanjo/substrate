@@ -1,0 +1,11 @@
+[tools]
+rust = "1.95.0"
+"cargo:cargo-nextest" = "0.9.96"
+"cargo:cargo-machete" = "0.7.0"
+"cargo:cargo-watch" = "latest"
+just = "1.42"
+
+[env]
+RUST_BACKTRACE = "1"
+RUST_LOG = "substrate=info,warn"
+TLA2TOOLS_JAR = "{{config_root}}/tools/tla2tools.jar"
