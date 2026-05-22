@@ -1,0 +1,22 @@
+[package]
+name = "substrate-signal-sys"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "FFI shim for POSIX signal handlers used by substrate-mcp-server. Not for public consumption."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# This crate deliberately does NOT inherit workspace lints (`[lints]
+# workspace = true` is omitted). The workspace lint table sets
+# `unsafe_code = "deny"`, which would conflict with the intentional unsafe
+# signal-handler installation in this shim. All unsafe blocks carry SAFETY
+# comments per ADR-0032. Per-crate override: only `missing_docs` is kept.
+[lints.rust]
+missing_docs = "warn"
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }

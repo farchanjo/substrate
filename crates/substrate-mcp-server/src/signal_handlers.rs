@@ -19,50 +19,23 @@ use tokio_util::sync::CancellationToken;
 
 // ---- SIGPIPE -----------------------------------------------------------------
 
-/// Sets SIGPIPE to `SIG_IGN` so broken-pipe conditions surface as `EPIPE` /
+/// Sets `SIGPIPE` to `SIG_IGN` so broken-pipe conditions surface as `EPIPE` /
 /// `io::ErrorKind::BrokenPipe` rather than terminating the process silently.
 ///
 /// Per ADR-0032: "SIGPIPE `SIG_IGN` converts broken pipe to EPIPE error for
-/// surface handling." This must be called in single-threaded context before
+/// surface handling." Must be called in single-threaded context before
 /// `tokio::runtime::Builder` spawns worker threads.
 ///
-/// # Implementation constraint (ADR-0032 + crate lint policy)
-///
-/// `main.rs` declares `#![cfg_attr(not(test), forbid(unsafe_code))]`, which
-/// prevents any `unsafe` block anywhere in this crate — including the
-/// `unsafe { nix::sys::signal::signal(...) }` call that installs `SIG_IGN`.
-/// Both `nix::sys::signal::signal` and `nix::sys::signal::sigaction` are
-/// `unsafe fn`, so no safe-Rust path exists without a separate crate or a
-/// `forbid` → `deny` relaxation in `main.rs`.
-///
-/// The correct fix (deferred to Wave D) is to extract the signal-setup logic
-/// into a dedicated `substrate-signal` crate with its own
-/// `[lints.rust] unsafe_code = "deny"` (workspace `forbid` overridden at
-/// crate level per Cargo lint precedence), include a SAFETY comment, and add
-/// a `miri` coverage test. Until that crate exists this function is a safe
-/// no-op: tokio converts `EPIPE` to `io::ErrorKind::BrokenPipe` on most
-/// platforms, which the MCP dispatch layer already handles gracefully.
-///
-/// Wave D action: move this into `substrate-signal` crate, relax `unsafe_code`
-/// to `"deny"` at crate level, then call:
-/// ```text
-///   // SAFETY: signal(SIGPIPE, SIG_IGN) is async-signal-safe and safe to call
-///   // in single-threaded context before the tokio worker pool is started.
-///   // SigHandler::SigIgn does not invoke a user-space handler; no re-entrancy
-///   // risk. ADR-0032: "SIGPIPE SIG_IGN converts broken pipe to EPIPE error
-///   // for surface handling."
-///   unsafe { nix::sys::signal::signal(Signal::SIGPIPE, SigHandler::SigIgn)?; }
-/// ```
+/// Delegates to `substrate_signal_sys::ignore_sigpipe`, which opts out of the
+/// workspace `unsafe_code = "deny"` lint so it may call the `unsafe`
+/// `nix::sys::signal::signal` syscall with a SAFETY comment. This crate retains
+/// `#![cfg_attr(not(test), forbid(unsafe_code))]` and is never modified.
 ///
 /// # Errors
 ///
-/// Always returns `Ok(())` (no-op; see constraint note above).
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Result signature preserved so call-site is unchanged when Wave D adds the real SIG_IGN install in substrate-signal"
-)]
-pub(crate) const fn ignore_sigpipe() -> Result<(), nix::Error> {
-    Ok(())
+/// Propagates `std::io::Error` if the underlying `signal(2)` syscall fails.
+pub(crate) fn ignore_sigpipe() -> std::io::Result<()> {
+    substrate_signal_sys::ignore_sigpipe()
 }
 
 // ---- SIGTERM / SIGINT / SIGHUP -----------------------------------------------

@@ -25,6 +25,7 @@ outbound-net = ["tokio/net"]
 
 [dependencies]
 substrate-domain = { path = "../substrate-domain" }
+substrate-signal-sys = { path = "../substrate-signal-sys" }
 substrate-config = { path = "../substrate-config" }
 substrate-policy = { path = "../substrate-policy" }
 substrate-jobs = { path = "../substrate-jobs" }
@@ -62,7 +63,6 @@ dashmap = { workspace = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 futures = { workspace = true }
-nix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

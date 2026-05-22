@@ -2442,7 +2442,6 @@ dependencies = [
  "futures",
  "insta",
  "libc",
- "nix",
  "proptest",
  "rmcp",
  "rstest",
@@ -2458,6 +2457,7 @@ dependencies = [
  "substrate-jobs",
  "substrate-policy",
  "substrate-process",
+ "substrate-signal-sys",
  "substrate-system-info",
  "substrate-text",
  "tempfile",
@@ -2506,6 +2506,13 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "substrate-signal-sys"
+version = "0.1.0"
+dependencies = [
+ "nix",
 ]
 
 [[package]]
