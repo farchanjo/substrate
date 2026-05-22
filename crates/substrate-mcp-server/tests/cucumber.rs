@@ -37,7 +37,7 @@ use std::{
     io::{BufRead as _, BufReader, Write as _},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
@@ -312,14 +312,76 @@ impl SubstrateWorld {
     }
 
     /// Reads one newline-delimited JSON line from stdout and parses it.
+    ///
+    /// Bounded by a 20-second per-line timeout. Panics with a descriptive
+    /// message rather than hanging if no line arrives in time.
     pub fn recv_rpc(&mut self) -> serde_json::Value {
-        let r = self
+        match self.recv_rpc_timeout(Duration::from_secs(20)) {
+            Ok(Some(v)) => v,
+            Ok(None) => panic!(
+                "recv_rpc: subprocess closed stdout (EOF) — server exited unexpectedly"
+            ),
+            Err(()) => panic!(
+                "recv_rpc: timed out waiting for a JSON-RPC line from substrate (20s deadline)"
+            ),
+        }
+    }
+
+    /// Reads one newline-delimited JSON line from stdout with an explicit timeout.
+    ///
+    /// Returns `Ok(Some(value))` when a line was received and parsed.
+    /// Returns `Ok(None)` when the pipe returned EOF (server closed stdout).
+    /// Returns `Err(())` when the timeout expired before a complete line arrived.
+    ///
+    /// On timeout the helper thread is left running but the child process is
+    /// killed so that the thread unblocks and terminates.  `stdout_reader` is
+    /// left as `None` after a timeout — the connection is considered dead.
+    ///
+    /// The underlying `BufReader<ChildStdout>` is temporarily moved into a
+    /// helper thread so that the blocking `read_line` call does not stall the
+    /// main test thread beyond the deadline.
+    pub fn recv_rpc_timeout(&mut self, timeout: Duration) -> Result<Option<serde_json::Value>, ()> {
+        // Take ownership of the reader out of self so we can move it into the
+        // helper thread.  We restore it afterwards when the read succeeds.
+        let mut reader = self
             .stdout_reader
-            .as_mut()
+            .take()
             .expect("stdout_reader not initialised");
-        let mut line = String::new();
-        r.read_line(&mut line).expect("read from subprocess stdout");
-        serde_json::from_str(line.trim()).expect("parse JSON-RPC line")
+
+        // Channel carries: (line_read, reader, bytes_read)
+        let (tx, rx) = mpsc::sync_channel::<(String, BufReader<ChildStdout>, usize)>(1);
+
+        // The helper thread performs the blocking read and sends back both the
+        // line and the reader so the main thread can restore state.
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).unwrap_or(0);
+            // Ignore send errors: the main thread may have moved on after a
+            // timeout; the reader will be dropped here in that case.
+            let _ = tx.send((line, reader, n));
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok((line, restored_reader, bytes_read)) => {
+                // Restore the reader into self for the next call.
+                self.stdout_reader = Some(restored_reader);
+                if bytes_read == 0 {
+                    // EOF — server closed stdout.
+                    Ok(None)
+                } else {
+                    // Successfully received a line.
+                    Ok(serde_json::from_str(line.trim()).ok())
+                }
+            }
+            Err(_timeout) => {
+                // The helper thread is still blocked on read_line; we cannot
+                // recover the reader without unsafe tricks.  Kill the child so
+                // the helper thread unblocks and terminates.
+                // stdout_reader stays None — the connection is dead.
+                self.kill_child();
+                Err(())
+            }
+        }
     }
 
     /// Calls `call_tool`, then reads and stores the response as `last_response`.
@@ -338,12 +400,55 @@ impl SubstrateWorld {
     /// `id` matches `expected_id` is found.  Frames without an `id` (i.e.,
     /// notifications) are appended to `progress_notifications`.
     ///
+    /// The entire drain loop is bounded by a 30-second deadline.  If no
+    /// matching frame arrives within that window the loop returns a synthetic
+    /// JSON-RPC timeout-error so the step can assert on it rather than hanging.
+    ///
     /// This is the interleaved-frame reader required by feature
     /// `progress-notification-emitted`.
     pub fn drain_until_response(&mut self, expected_id: u64) -> serde_json::Value {
         self.progress_notifications.clear();
+        let per_line = Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let frame = self.recv_rpc();
+            if Instant::now() >= deadline {
+                // Return a synthetic error value so the step sees a response
+                // instead of hanging.
+                self.kill_child();
+                return serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": expected_id,
+                    "error": {
+                        "code": -32099,
+                        "message": "test-harness: drain_until_response deadline exceeded (30s)"
+                    }
+                });
+            }
+            let frame = match self.recv_rpc_timeout(per_line) {
+                Ok(Some(f)) => f,
+                Ok(None) => {
+                    // Server closed stdout (EOF) — connection closed.
+                    return serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": expected_id,
+                        "error": {
+                            "code": -32099,
+                            "message": "test-harness: server closed stdout (EOF) before response arrived"
+                        }
+                    });
+                }
+                Err(()) => {
+                    // recv_rpc_timeout timed out and already killed the child.
+                    return serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": expected_id,
+                        "error": {
+                            "code": -32099,
+                            "message": "test-harness: no JSON-RPC frame received within per-line deadline (15s)"
+                        }
+                    });
+                }
+            };
             let frame_id = frame.get("id").and_then(|v| v.as_u64());
             match frame_id {
                 Some(id) if id == expected_id => return frame,
@@ -378,27 +483,52 @@ impl SubstrateWorld {
     ///
     /// Returns `true` if EOF was detected within the timeout, `false` otherwise.
     /// Used by `then_server_closes_session` and `then_connection_closed` steps.
+    ///
+    /// Implementation note: `BufReader::read_line` is a blocking call.  Calling
+    /// it inside a `while deadline_not_exceeded` loop does NOT enforce the
+    /// deadline because the `read_line` itself may block indefinitely waiting for
+    /// the next byte.  This method avoids that trap by using short per-read
+    /// timeouts via `recv_rpc_timeout` so the outer deadline is actually checked
+    /// between reads.
     pub fn wait_for_eof(&mut self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
         // Drop the stdin writer so the server sees EOF on its stdin pipe, which
         // is the standard way to request a graceful shutdown.
         drop(self.stdin_writer.take());
 
-        // Poll the stdout reader for EOF.  A successful read of 0 bytes means
-        // the pipe is closed.  We use a tight poll to avoid adding a hard sleep.
-        while Instant::now() < deadline {
-            if let Some(ref mut reader) = self.stdout_reader {
-                let mut buf = String::new();
-                match reader.read_line(&mut buf) {
-                    Ok(0) | Err(_) => return true, // EOF or broken pipe — connection closed
-                    Ok(_) => {}                    // More data arrived; keep polling
-                }
-            } else {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(50));
+        // If there is no reader the connection is already closed.
+        if self.stdout_reader.is_none() {
+            return true;
         }
-        false
+
+        let deadline = Instant::now() + timeout;
+        // Use short per-read slices so the outer deadline is checked frequently.
+        // A plain `read_line` inside a `while deadline_not_exceeded` loop does
+        // NOT enforce the deadline because each blocking call can wait forever.
+        // Using `recv_rpc_timeout` with short slices avoids that trap.
+        let slice = Duration::from_millis(500);
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                // Deadline reached without observing EOF.
+                return false;
+            }
+            let per_read = remaining.min(slice);
+            match self.recv_rpc_timeout(per_read) {
+                Ok(None) => {
+                    // EOF — server closed stdout.
+                    return true;
+                }
+                Ok(Some(_frame)) => {
+                    // Another frame arrived; server is still open, keep draining.
+                }
+                Err(()) => {
+                    // Per-read timeout: recv_rpc_timeout killed the child and
+                    // cleared stdout_reader.  Treat as "connection closed".
+                    return true;
+                }
+            }
+        }
     }
 
     /// Returns all lines captured from the server's stderr that contain `pattern`

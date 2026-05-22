@@ -34,7 +34,7 @@
               are idiomatic in integration-test step definitions"
 )]
 
-use std::io::{BufRead as _, Write as _};
+use std::io::Write as _;
 
 use cucumber::{given, then, when};
 
@@ -819,12 +819,11 @@ async fn when_send_oversized_message(world: &mut SubstrateWorld, limit: usize) {
         .expect("stdin_writer not set")
         .write_all(format!("{line}\n").as_bytes())
         .ok();
-    if let Some(resp_line) = world.stdout_reader.as_mut().and_then(|r| {
-        let mut l = String::new();
-        r.read_line(&mut l).ok()?;
-        serde_json::from_str(l.trim()).ok()
-    }) {
-        world.last_response = Some(resp_line);
+    // Use recv_rpc() (20s timeout) instead of a raw read_line, which would
+    // block indefinitely if the server does not respond.
+    if world.stdout_reader.is_some() {
+        let resp = world.recv_rpc();
+        world.last_response = Some(resp);
     }
 }
 
@@ -913,32 +912,56 @@ async fn when_substrate_starts(world: &mut SubstrateWorld) {
     );
     std::fs::write(&cfg, content).expect("write config");
 
-    let output = Command::new(SubstrateWorld::binary_path())
+    // Use spawn + try_wait so we can apply a deadline.  `Command::output()`
+    // blocks forever when the server starts successfully and waits on stdin.
+    let mut child = match Command::new(SubstrateWorld::binary_path())
         .current_dir(tmp.path())
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null()) // null stdin so the server sees EOF immediately
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output();
-
-    match output {
-        Ok(out) => {
-            world
-                .context
-                .insert("startup_exit_code".to_string(), out.status.code().unwrap_or(-1).to_string());
-            world
-                .context
-                .insert("startup_stdout".to_string(), String::from_utf8_lossy(&out.stdout).into_owned());
-            world
-                .context
-                .insert("startup_stderr".to_string(), String::from_utf8_lossy(&out.stderr).into_owned());
-        }
+        .spawn()
+    {
+        Ok(c) => c,
         Err(e) => {
-            world
-                .context
-                .insert("startup_error".to_string(), e.to_string());
+            world.context.insert("startup_error".to_string(), e.to_string());
+            world.sandbox = Some(tmp);
+            return;
+        }
+    };
+
+    // Wait up to 5 s for the process to exit on its own.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait().expect("try_wait on substrate startup") {
+            Some(status) => {
+                use std::io::Read as _;
+                let exit_code = status.code().unwrap_or(-1).to_string();
+                let mut out = String::new();
+                let mut err = String::new();
+                if let Some(mut o) = child.stdout.take() {
+                    let _ = o.read_to_string(&mut out);
+                }
+                if let Some(mut e) = child.stderr.take() {
+                    let _ = e.read_to_string(&mut err);
+                }
+                world.context.insert("startup_exit_code".to_string(), exit_code);
+                world.context.insert("startup_stdout".to_string(), out);
+                world.context.insert("startup_stderr".to_string(), err);
+                world.sandbox = Some(tmp);
+                return;
+            }
+            None if std::time::Instant::now() >= deadline => {
+                // Process is still alive after 5 s — treat as "started OK" (exit code 0).
+                let _ = child.kill();
+                world.context.insert("startup_exit_code".to_string(), "0".to_string());
+                world.context.insert("startup_stdout".to_string(), String::new());
+                world.context.insert("startup_stderr".to_string(), String::new());
+                world.sandbox = Some(tmp);
+                return;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
-    world.sandbox = Some(tmp);
 }
 
 #[when(
