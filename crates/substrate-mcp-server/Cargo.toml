@@ -11,7 +11,7 @@ default-run = "substrate"
 workspace = true
 
 [features]
-default = ["simd-baseline"]
+default = ["simd-baseline", "fs-index"]
 simd-baseline = []
 simd-avx2 = ["simd-baseline"]
 simd-avx512 = ["simd-avx2"]
@@ -19,7 +19,7 @@ simd-neon = ["simd-baseline"]
 fast-json = []
 fast-zlib = []
 fast-deflate = []
-fs-index = ["substrate-fs-index/fs-index"]
+fs-index = ["substrate-fs-index/fs-index", "substrate-fs-mutation/fs-index"]
 fs-index-watch = ["fs-index", "substrate-fs-index/fs-index-watch"]
 outbound-net = ["tokio/net"]
 
@@ -71,6 +71,7 @@ libc = "0.2"
 libc = "0.2"
 
 [dev-dependencies]
+cucumber = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
@@ -79,3 +80,7 @@ tempfile = { workspace = true }
 [[bin]]
 name = "substrate"
 path = "src/main.rs"
+
+[[test]]
+name = "cucumber"
+harness = false

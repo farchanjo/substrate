@@ -37,6 +37,7 @@ nix = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nix = { workspace = true }
+substrate-fs-index-macos-sys = { path = "../substrate-fs-index-macos-sys" }
 
 [dev-dependencies]
 rstest = { workspace = true }

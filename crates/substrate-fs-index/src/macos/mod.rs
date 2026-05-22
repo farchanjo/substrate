@@ -27,12 +27,6 @@
 //!   parsing logic for the returned attrlist buffer).
 //! - Wire FSEvents watcher (Layer 2) when `fs-index-watch` feature is active.
 
-#![allow(unsafe_code)]
-// JUSTIFICATION: `getattrlistbulk(2)` requires raw libc FFI which is inherently
-// unsafe. This is the sole exception to workspace-wide `forbid(unsafe_code)` per
-// ADR-0042 §macOS Native Primitive Exception and ADR-0044 (forthcoming).
-// Scope: confined to this module and its `getattrlistbulk` submodule only.
-
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -135,9 +129,15 @@ impl FsIndexPort for MacOsBulkIndex {
         let slot = Arc::clone(&self.slot);
         task::spawn_blocking(move || {
             let current = slot.load();
-            let mut new_snap = (*current).clone();
-            new_snap.evict_prefix(&path_clone);
-            slot.store(Arc::new(new_snap));
+            // `*current` dereferences the ArcSwap guard to `Arc<IndexSnapshot>`.
+            // Cloning an `Arc<T>` yields another `Arc<T>`, not a `T`, so no
+            // further wrapping is needed: `slot.store` accepts `Arc<IndexSnapshot>`.
+            let new_snap: Arc<IndexSnapshot> = Arc::clone(&*current);
+            // Build a mutable snapshot by cloning the inner value, evicting the
+            // prefix, then publishing the updated snapshot.
+            let mut updated = (*new_snap).clone();
+            updated.evict_prefix(&path_clone);
+            slot.store(Arc::new(updated));
         })
         .await
         .map_err(|e| substrate_domain::SubstrateError::InternalError {
