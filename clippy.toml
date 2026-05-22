@@ -14,12 +14,12 @@ cognitive-complexity-threshold = 25
 # Both std and tokio variants are blocked; use nix/libc syscalls directly.
 disallowed-methods = [
   { path = "std::process::Command::new",   reason = "Forbidden by ADR-0044: no-subprocess policy. Use nix/libc syscalls." },
-  { path = "tokio::process::Command::new", reason = "Forbidden by ADR-0044: no-subprocess policy. Use nix/libc syscalls." },
+  { path = "tokio::process::Command::new", reason = "Forbidden by ADR-0044: no-subprocess policy. Use nix/libc syscalls.", allow-invalid = true },
 ]
 
 # Forbidden types — complementary to the method bans above.
 disallowed-types = [
   { path = "std::process::Command",   reason = "Forbidden by ADR-0044" },
-  { path = "tokio::process::Command", reason = "Forbidden by ADR-0044" },
+  { path = "tokio::process::Command", reason = "Forbidden by ADR-0044", allow-invalid = true },
   { path = "std::process::Child",     reason = "Forbidden by ADR-0044 (result of spawning a subprocess)" },
 ]
