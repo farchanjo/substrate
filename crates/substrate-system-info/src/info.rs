@@ -64,6 +64,10 @@ pub struct SystemSnapshot {
     /// CPU load averages.
     pub load_average: LoadAverage,
     /// Physical memory statistics.
+    ///
+    /// Serialised as `"mem"` (not `"memory"`) to match the structured-content
+    /// field name expected by the cucumber assertion steps (`system_info.rs`).
+    #[serde(rename = "mem")]
     pub memory: MemoryStats,
 }
 

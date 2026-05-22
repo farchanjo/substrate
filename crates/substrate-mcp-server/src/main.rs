@@ -39,6 +39,7 @@ pub(crate) mod composition;
 pub(crate) mod config_loader;
 pub(crate) mod handlers;
 pub(crate) mod logging;
+pub(crate) mod null_id_shim;
 pub(crate) mod signal_handlers;
 pub(crate) mod stub_ports;
 

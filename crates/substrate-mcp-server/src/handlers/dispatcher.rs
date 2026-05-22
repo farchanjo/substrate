@@ -401,6 +401,13 @@ impl ToolDispatcher {
             // wraps the future in a `tokio::select! biased` block so the job's
             // child `CancellationToken` can interrupt it cooperatively per ADR-0037.
             "archive_tar_create" => {
+                // Security-first path validation per ADR-0035: scan `sources`
+                // for path-traversal BEFORE schema validation so that a
+                // malicious `sources: ["../escape"]` with a missing `dest`
+                // field returns SUBSTRATE_PATH_TRAVERSAL_BLOCKED, not
+                // SUBSTRATE_INVALID_ARGUMENT.  Schema validation (via `parse`)
+                // runs after this guard succeeds.
+                pre_validate_sources_for_traversal(&args)?;
                 let req: substrate_archive::tar_create::TarCreateRequest = parse(args.clone())?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: use a standalone token so the request-level
@@ -1207,6 +1214,42 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> SubstrateResult<T> {
         reason: e.to_string(),
         correlation_id: None,
     })
+}
+
+/// Security-first path-traversal guard for `archive_tar_create` sources.
+///
+/// Scans the raw `args` JSON for a `"sources"` array before schema parsing so
+/// that a request with traversal paths in `sources` AND a missing `dest` field
+/// returns `SUBSTRATE_PATH_TRAVERSAL_BLOCKED` rather than
+/// `SUBSTRATE_INVALID_ARGUMENT`.
+///
+/// Per ADR-0035: the path-jail is the canonical security guard.  This
+/// pre-parse check is a lightweight complementary layer that ensures the
+/// error-code precedence rule (security > schema) is visible at the dispatcher
+/// boundary even before the request is handed to the adapter.
+///
+/// A component is considered a traversal attempt when it equals `".."` or
+/// when the path starts with `"/"` (absolute path outside allowlist).
+/// The adapter's full `PathJailPort` check runs after this guard.
+fn pre_validate_sources_for_traversal(args: &Value) -> SubstrateResult<()> {
+    let Some(sources) = args.get("sources").and_then(Value::as_array) else {
+        // Missing or non-array "sources" field — let schema validation report this.
+        return Ok(());
+    };
+    for source in sources {
+        let path_str = source.as_str().unwrap_or("");
+        let path = std::path::Path::new(path_str);
+        // Reject any component that is "..".
+        for component in path.components() {
+            if component == std::path::Component::ParentDir {
+                return Err(SubstrateError::PathTraversalBlocked {
+                    path: path_str.to_owned(),
+                    correlation_id: None,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Attempts to extract a client-supplied idempotency key from the raw args

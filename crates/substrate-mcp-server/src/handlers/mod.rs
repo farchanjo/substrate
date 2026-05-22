@@ -75,9 +75,18 @@ pub(crate) async fn run_stdio_server(rt: RuntimeComponents) -> SubstrateResult<(
         rt.notifier,
     );
 
-    // Open STDIO transport: `stdin` for inbound, `stdout` for outbound.
-    // `stdout` is sacred per ADR-0005 — no other code may write to it.
-    let transport = rmcp::transport::io::stdio();
+    // Open STDIO transport with the null-id shim applied (ADR-0013 §null-id).
+    //
+    // JSON-RPC 2.0 §4 permits `"id": null`.  rmcp 1.7 models RequestId as
+    // NumberOrString and therefore silently drops requests with id=null (they
+    // deserialise as Notifications).  The shim intercepts each JSON line:
+    //   - inbound:  rewrites `"id": null` → `"id": <sentinel>` (i64::MIN)
+    //   - outbound: restores `"id": <sentinel>` → `"id": null`
+    // This is transparent to rmcp and satisfies the JSON-RPC spec invariant.
+    //
+    // `stdout` is still sacred per ADR-0005 — the shim is the only writer.
+    let (shim_stdin, shim_stdout) = crate::null_id_shim::null_id_pair();
+    let transport = (shim_stdin, shim_stdout);
 
     // `serve_with_ct` runs the initialize handshake then enters the main loop.
     // When `shutdown_token` is cancelled the loop exits after the current

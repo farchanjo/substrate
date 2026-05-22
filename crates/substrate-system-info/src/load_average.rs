@@ -34,13 +34,20 @@ use crate::{
 use substrate_domain::SubstrateResult;
 
 /// Load average triplet returned by `sys.load_average`.
+///
+/// Fields are serialised using the conventional short names `"1m"`, `"5m"`,
+/// `"15m"` to match the structured-content keys expected by the cucumber
+/// assertion steps (`system_info.rs` step `then_load_average_fields`).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct LoadAverage {
     /// 1-minute exponential moving average of runnable processes.
+    #[serde(rename = "1m")]
     pub load_1: f64,
     /// 5-minute exponential moving average of runnable processes.
+    #[serde(rename = "5m")]
     pub load_5: f64,
     /// 15-minute exponential moving average of runnable processes.
+    #[serde(rename = "15m")]
     pub load_15: f64,
 }
 

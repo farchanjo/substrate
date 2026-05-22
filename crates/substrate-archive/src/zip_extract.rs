@@ -32,7 +32,7 @@ use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 use crate::hints_helpers::build_job_hints;
 use crate::manifest::{ArchiveEntry, ArchiveManifest};
 use crate::response::{ArchiveDeps, ToolResponse};
-use crate::symlink_guard::{EntryKind, reject_symlink_entry};
+use crate::symlink_guard::{EntryKind, reject_symlink_entry, validate_symlink_target};
 use crate::tmp_path::TmpPath;
 use crate::zip_slip_guard::validate_member_path;
 
@@ -155,11 +155,13 @@ fn produce_dry_run(
 
     let mut entries = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
-        let entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
+        let mut entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
             path: format!("zip entry {i}: {e}"),
             correlation_id: None,
         })?;
-        let member = std::path::Path::new(entry.name());
+        // Copy name to owned String to avoid borrow conflict when reading content.
+        let name = entry.name().to_owned();
+        let member = std::path::Path::new(&name);
         validate_member_path(dest_root, member)?;
         let kind = if entry.is_symlink() {
             EntryKind::Symlink
@@ -168,10 +170,28 @@ fn produce_dry_run(
         } else {
             EntryKind::File
         };
-        reject_symlink_entry(kind, entry.name())?;
+        let uncompressed = entry.size();
+        // Symlink guard — ADR-0035 two-tier: validate target stays within root.
+        if kind == EntryKind::Symlink {
+            use std::io::Read as _;
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
+                path: format!("zip symlink content: {e}"),
+                correlation_id: None,
+            })?;
+            let target_str =
+                std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
+                    detail: format!("zip symlink target utf8: {e}"),
+                    correlation_id: None,
+                })?;
+            let link_path = dest_root.join(member);
+            validate_symlink_target(dest_root, &link_path, std::path::Path::new(target_str))?;
+        } else {
+            reject_symlink_entry(kind, &name)?;
+        }
         entries.push(ArchiveEntry {
-            archive_path: entry.name().to_owned(),
-            uncompressed_bytes: entry.size(),
+            archive_path: name,
+            uncompressed_bytes: uncompressed,
             compression_method: "deflate".to_owned(),
             modified_at: None,
         });
@@ -198,7 +218,6 @@ fn extract_zip_blocking(
     dest_root: &std::path::Path,
 ) -> SubstrateResult<usize> {
     use std::io::Read as _;
-    use std::io::Write as _;
 
     let file = std::fs::File::open(archive).map_err(|_| SubstrateError::NotFound {
         resource: archive.to_string_lossy().into_owned(),
@@ -209,23 +228,8 @@ fn extract_zip_blocking(
         correlation_id: None,
     })?;
 
-    // Pre-validate all member paths before any writes.
-    for i in 0..zip.len() {
-        let entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
-            path: format!("zip entry {i}: {e}"),
-            correlation_id: None,
-        })?;
-        let member = std::path::Path::new(entry.name());
-        validate_member_path(dest_root, member)?;
-        let kind = if entry.is_symlink() {
-            EntryKind::Symlink
-        } else if entry.is_dir() {
-            EntryKind::Directory
-        } else {
-            EntryKind::File
-        };
-        reject_symlink_entry(kind, entry.name())?;
-    }
+    // Security-first: validate all members before any disk write (ADR-0035).
+    zip_prevalidate_members(&mut zip, dest_root)?;
 
     // All validated: proceed with extraction.
     let mut extracted_count = 0usize;
@@ -234,7 +238,8 @@ fn extract_zip_blocking(
             path: format!("zip entry {i}: {e}"),
             correlation_id: None,
         })?;
-        let member = std::path::Path::new(entry.name());
+        let name = entry.name().to_owned();
+        let member = std::path::Path::new(&name);
         let resolved = validate_member_path(dest_root, member)?;
 
         if entry.is_dir() {
@@ -242,45 +247,136 @@ fn extract_zip_blocking(
                 path: format!("{}: {e}", resolved.display()),
                 correlation_id: None,
             })?;
-        } else {
-            if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
-                    path: format!("{}: {e}", parent.display()),
-                    correlation_id: None,
-                })?;
-            }
-            // Transactional write.
-            let tmp = TmpPath::new_for(&resolved);
-            {
-                let mut out =
-                    std::fs::File::create(tmp.tmp_path()).map_err(|e| SubstrateError::IoError {
-                        path: format!("{}: {e}", tmp.tmp_path().display()),
-                        correlation_id: None,
-                    })?;
-                let mut buf = Vec::new();
-                entry
-                    .read_to_end(&mut buf)
-                    .map_err(|e| SubstrateError::IoError {
-                        path: format!("zip read entry: {e}"),
-                        correlation_id: None,
-                    })?;
-                out.write_all(&buf).map_err(|e| SubstrateError::IoError {
-                    path: format!("{}: {e}", resolved.display()),
-                    correlation_id: None,
-                })?;
-            }
-            std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| {
-                SubstrateError::IoError {
-                    path: format!("{}: {e}", resolved.display()),
-                    correlation_id: None,
-                }
+        } else if entry.is_symlink() {
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
+                path: format!("zip symlink content: {e}"),
+                correlation_id: None,
             })?;
-            std::mem::forget(tmp);
+            let target_str =
+                std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
+                    detail: format!("zip symlink target utf8: {e}"),
+                    correlation_id: None,
+                })?;
+            zip_write_symlink(&resolved, target_str)?;
+            extracted_count += 1;
+        } else {
+            zip_write_file(&mut entry, &resolved)?;
             extracted_count += 1;
         }
     }
 
     Ok(extracted_count)
+}
+
+/// Pre-validates all ZIP members — Zip Slip + symlink escape checks — before any disk write.
+///
+/// For symlink members, the content (target path) is read to validate it stays within
+/// `dest_root` per ADR-0035 §symlink-validation.
+fn zip_prevalidate_members(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    dest_root: &std::path::Path,
+) -> SubstrateResult<()> {
+    use std::io::Read as _;
+
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
+            path: format!("zip entry {i}: {e}"),
+            correlation_id: None,
+        })?;
+        let name = entry.name().to_owned();
+        let member = std::path::Path::new(&name);
+        validate_member_path(dest_root, member)?;
+        let kind = if entry.is_symlink() {
+            EntryKind::Symlink
+        } else if entry.is_dir() {
+            EntryKind::Directory
+        } else {
+            EntryKind::File
+        };
+        if kind == EntryKind::Symlink {
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
+                path: format!("zip symlink content: {e}"),
+                correlation_id: None,
+            })?;
+            let target_str =
+                std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
+                    detail: format!("zip symlink target utf8: {e}"),
+                    correlation_id: None,
+                })?;
+            let link_path = dest_root.join(member);
+            validate_symlink_target(dest_root, &link_path, std::path::Path::new(target_str))?;
+        } else {
+            reject_symlink_entry(kind, &name)?;
+        }
+    }
+    Ok(())
+}
+
+/// Creates a validated symlink at `resolved` pointing to `target_str` (ADR-0004 §symlink-restore).
+///
+/// The caller MUST have already validated `target_str` via [`validate_symlink_target`].
+fn zip_write_symlink(resolved: &std::path::Path, target_str: &str) -> SubstrateResult<()> {
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
+            path: format!("{}: {e}", parent.display()),
+            correlation_id: None,
+        })?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target_str, resolved).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", resolved.display()),
+        correlation_id: None,
+    })?;
+    #[cfg(windows)]
+    {
+        let _ = (target_str, resolved);
+        return Err(SubstrateError::InternalError {
+            reason: "symlink extraction not supported on Windows".to_owned(),
+            correlation_id: None,
+        });
+    }
+    Ok(())
+}
+
+/// Writes a regular ZIP file entry to `resolved` using a transactional tmp rename (ADR-0033).
+fn zip_write_file(
+    entry: &mut zip::read::ZipFile<'_>,
+    resolved: &std::path::Path,
+) -> SubstrateResult<()> {
+    use std::io::Read as _;
+    use std::io::Write as _;
+
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
+            path: format!("{}: {e}", parent.display()),
+            correlation_id: None,
+        })?;
+    }
+    let tmp = TmpPath::new_for(resolved);
+    {
+        let mut out =
+            std::fs::File::create(tmp.tmp_path()).map_err(|e| SubstrateError::IoError {
+                path: format!("{}: {e}", tmp.tmp_path().display()),
+                correlation_id: None,
+            })?;
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
+            path: format!("zip read entry: {e}"),
+            correlation_id: None,
+        })?;
+        out.write_all(&buf).map_err(|e| SubstrateError::IoError {
+            path: format!("{}: {e}", resolved.display()),
+            correlation_id: None,
+        })?;
+    }
+    std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", resolved.display()),
+        correlation_id: None,
+    })?;
+    std::mem::forget(tmp);
+    Ok(())
 }
 
 // ---- Tests -------------------------------------------------------------------

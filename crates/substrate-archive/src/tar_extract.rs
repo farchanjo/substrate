@@ -29,7 +29,7 @@ use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 use crate::hints_helpers::build_job_hints;
 use crate::manifest::{ArchiveEntry, ArchiveManifest};
 use crate::response::{ArchiveDeps, ToolResponse};
-use crate::symlink_guard::{EntryKind, reject_symlink_entry};
+use crate::symlink_guard::{EntryKind, reject_symlink_entry, validate_symlink_target};
 use crate::zip_slip_guard::validate_member_path;
 
 /// Input parameters for `archive.tar.extract`.
@@ -191,14 +191,28 @@ fn scan_tar_members(
         // Zip Slip guard.
         validate_member_path(dest_root, &member_path)?;
 
-        // Symlink guard.
+        // Symlink guard — ADR-0035 two-tier validation:
+        // safe (target stays within root) → allowed; escaping → PathTraversalBlocked.
         let kind = match header.entry_type() {
             tar::EntryType::Symlink => EntryKind::Symlink,
             tar::EntryType::Regular | tar::EntryType::Continuous => EntryKind::File,
             tar::EntryType::Directory => EntryKind::Directory,
             _ => EntryKind::Other,
         };
-        reject_symlink_entry(kind, &member_path.to_string_lossy())?;
+        if kind == EntryKind::Symlink {
+            // For dry-run, validate the target without creating the link.
+            let link_target = header
+                .link_name()
+                .map_err(|e| SubstrateError::EncodingError {
+                    detail: format!("tar symlink target: {e}"),
+                    correlation_id: None,
+                })?
+                .unwrap_or_default();
+            let link_path = dest_root.join(&*member_path);
+            validate_symlink_target(dest_root, &link_path, &link_target)?;
+        } else {
+            reject_symlink_entry(kind, &member_path.to_string_lossy())?;
+        }
 
         entries.push(ArchiveEntry {
             archive_path: member_path.to_string_lossy().into_owned(),
@@ -260,22 +274,58 @@ fn extract_entries<R: std::io::Read>(
         // Zip Slip guard (Tar Slip).
         let resolved = validate_member_path(dest_root, &member_path)?;
 
-        // Symlink guard.
+        // Symlink guard — ADR-0035 two-tier validation:
+        // safe (target stays within root) → create symlink; escaping → PathTraversalBlocked.
         let kind = match entry.header().entry_type() {
             tar::EntryType::Symlink => EntryKind::Symlink,
             tar::EntryType::Regular | tar::EntryType::Continuous => EntryKind::File,
             tar::EntryType::Directory => EntryKind::Directory,
             _ => EntryKind::Other,
         };
-        reject_symlink_entry(kind, &member_path.to_string_lossy())?;
 
         if kind == EntryKind::Directory {
             std::fs::create_dir_all(&resolved).map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", resolved.display()),
                 correlation_id: None,
             })?;
+        } else if kind == EntryKind::Symlink {
+            // Validate and restore the symlink (ADR-0004 §symlink-validation).
+            let link_target = entry
+                .header()
+                .link_name()
+                .map_err(|e| SubstrateError::EncodingError {
+                    detail: format!("tar symlink target: {e}"),
+                    correlation_id: None,
+                })?
+                .unwrap_or_default();
+            validate_symlink_target(dest_root, &resolved, &link_target)?;
+            if let Some(parent) = resolved.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
+                    path: format!("{}: {e}", parent.display()),
+                    correlation_id: None,
+                })?;
+            }
+            // SAFETY: This is not `unsafe` in Rust terms; the function is safe.
+            // The symlink target is validated above — it cannot escape extraction_root.
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&*link_target, &resolved).map_err(|e| {
+                SubstrateError::IoError {
+                    path: format!("{}: {e}", resolved.display()),
+                    correlation_id: None,
+                }
+            })?;
+            #[cfg(windows)]
+            {
+                // Windows symlinks require separate file/dir variants; skip for now.
+                // TODO: implement Windows symlink support when required.
+                let _ = link_target;
+                return Err(SubstrateError::InternalError {
+                    reason: "symlink extraction not supported on Windows".to_owned(),
+                    correlation_id: None,
+                });
+            }
         } else {
-            // Transactional write via TmpPath.
+            // Transactional write via TmpPath (ADR-0033).
             use crate::tmp_path::TmpPath;
             if let Some(parent) = resolved.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
@@ -433,9 +483,10 @@ mod tests {
         let err = handle_archive_tar_extract(req, &deps, CancellationToken::new())
             .await
             .unwrap_err();
+        // Absolute symlink targets escape the extraction root — PathTraversalBlocked per ADR-0035.
         assert!(
-            matches!(err, SubstrateError::SymlinkEscape { .. }),
-            "expected SymlinkEscape, got: {err:?}"
+            matches!(err, SubstrateError::PathTraversalBlocked { .. }),
+            "expected PathTraversalBlocked, got: {err:?}"
         );
         assert!(!dest.join("innocent.txt").exists());
     }
