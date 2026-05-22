@@ -60,7 +60,7 @@ rmcp = { version = "1.7", default-features = false, features = ["server", "trans
 
 # Security / filesystem
 strict-path = "0.2"
-nix = { version = "0.30", features = ["fs", "process", "signal", "user", "hostname"] }
+nix = { version = "0.31", features = ["fs", "process", "signal", "user", "hostname"] }
 
 # Concurrency utilities
 arc-swap = "1"
