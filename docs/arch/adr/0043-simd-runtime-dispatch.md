@@ -251,48 +251,6 @@ hardware supports them.
 
 ### Dispatch Pattern
 
-```text
-STARTUP
-  |
-  +-- probe_capabilities() [once, stored in OnceLock<Capabilities>]
-  |       |
-  |       +-- is_x86_feature_detected!("avx512f") => Avx512
-  |       +-- is_x86_feature_detected!("avx2")    => Avx2
-  |       +-- is_x86_feature_detected!("sse4.2")  => Sse42
-  |       +-- default x86-64                       => Sse2
-  |       +-- is_aarch64_feature_detected!("neon") => Neon
-  |       +-- other                                => Portable
-  |
-  +-- tracing::info! "SUBSTRATE_SIMD_TIER_DETECTED tier={}"
-  |
-  +-- HashFactory::build(&caps)
-  |       |
-  |       +-- caps.simd_tier == Avx512 => Blake3Avx512Hasher
-  |       +-- caps.simd_tier == Avx2   => Blake3Avx2Hasher
-  |       +-- caps.simd_tier == Neon   => Blake3NeonHasher
-  |       +-- _                        => Blake3PortableHasher
-  |
-  +-- TextSearchFactory::build(&caps)
-  |       |
-  |       +-- caps.simd_tier >= Avx2/Neon => AhoCorasickTeddySearcher
-  |       +-- _                           => AhoCorasickPortableSearcher
-  |
-  +-- ... (each PortFactory consults caps.simd_tier once at build time)
-  |
-  +-- InstrumentedAdapter::wrap(adapter) per port
-  |
-  +-- accept MCP initialize
-
-TOOL CALL (hot path, no CPUID probe)
-  |
-  +-- Arc<dyn Hasher>::hash(buf)
-          |
-          +-- [Blake3Avx2Hasher] executes AVX2 inner loop
-          |        => byte-identical output to Portable path (property test)
-          |
-          +-- audit: simd_tier_used = "avx2" (optional field, critical paths only)
-```
-
 The diagram below shows the full SIMD dispatch flow from the startup probe through factory construction to the hot-path tool call.
 
 ```mermaid

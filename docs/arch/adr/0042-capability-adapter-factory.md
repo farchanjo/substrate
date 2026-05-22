@@ -286,36 +286,7 @@ aborts startup with `SUBSTRATE_CONFIG_INVALID`.
 ### Composition Root Behavior
 
 The following steps occur in `substrate-mcp-server` during startup, before
-accepting any MCP `initialize` request:
-
-```
-startup
-  |
-  +--> probe_capabilities()  [once, result stored in OnceLock]
-  |        |
-  |        +--> Linux syscall probes (openat2, statx, io_uring, fanotify)
-  |        +--> macOS syscall probes (getattrlistbulk, O_NOFOLLOW_ANY check)
-  |        +--> SIMD detection (is_x86_feature_detected! / is_aarch64_feature_detected!)
-  |
-  +--> for each port: factory.build(&caps)
-  |        |
-  |        +--> DirWalkerFactory   -> selects tier -> Arc<dyn DirWalker>
-  |        +--> FsWatcherFactory   -> selects tier -> Arc<dyn FsWatcher>
-  |        +--> PathJailFactory    -> selects tier -> Arc<dyn PathJail>
-  |        +--> HashFactory        -> selects SimdTier -> Arc<dyn Hasher>
-  |        +--> StatFactory        -> selects tier -> Arc<dyn Stat>
-  |
-  +--> InstrumentedAdapter::wrap(adapter) for each port
-  |
-  +--> check refuse_degraded_jail; abort if PathJail = degraded AND refuse = true
-  |
-  +--> tracing::info! with all chosen tiers
-  +--> emit audit event SUBSTRATE_CAPABILITY_TIERS_SELECTED
-  |
-  +--> inject Arc<dyn Port> into each bounded-context adapter crate
-  |
-  +--> accept MCP initialize
-```
+accepting any MCP `initialize` request.
 
 The `SUBSTRATE_CAPABILITY_TIERS_SELECTED` audit event includes a map of port
 name to chosen tier string, the `SimdTier` value, the `correlation_id` from

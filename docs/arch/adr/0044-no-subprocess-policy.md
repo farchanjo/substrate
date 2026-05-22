@@ -173,34 +173,6 @@ The diagram below shows that every capability path crosses the OS boundary via
 a direct syscall arrow. No arrow exits the process boundary toward an external
 binary.
 
-```
-  +---------------------------------------------------------------+
-  |                 substrate process boundary                    |
-  |                                                               |
-  |  MCP JSON-RPC  +-----------+   Capability   +-------------+  |
-  |  (stdin)  ---> |  Router   | ------------> |  Adapter    |  |
-  |                |  (async)  |                |  (Zone A/B) |  |
-  |  MCP JSON-RPC  +-----------+                +------+------+  |
-  |  (stdout) <---                                      |         |
-  |                                                     | syscall |
-  |       ============= WALL OF NO SUBPROCESS ========= |         |
-  |                                               (no Command)    |
-  +-----------------------------------------------------|---------+
-                                                        |
-                       +---------------------------------+
-                       |            OS kernel            |
-                       |  open(2)  read(2)  kill(2)      |
-                       |  getdents64(2)  statx(2)        |
-                       |  sysctl(3)  /proc  /sys         |
-                       +---------------------------------+
-
-  Legend:
-    --->  data flow (MCP wire or function call)
-    |     syscall crossing (pure-Rust FFI via nix/libc)
-    WALL  barrier: std::process::Command and tokio::process::Command
-          are forbidden from crossing this line
-```
-
 The diagram below shows the substrate process boundary: every capability arrow crosses the OS wall via a direct syscall; no `Command` arrow exits toward an external binary.
 
 ```mermaid

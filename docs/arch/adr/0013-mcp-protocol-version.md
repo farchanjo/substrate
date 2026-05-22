@@ -41,31 +41,6 @@ Chosen option: "Hard minimum + preferred version with capability negotiation", b
 
 ### Capability Negotiation Flow
 
-```
-Client                         Substrate
-  |                               |
-  |-- initialize(protocolVersion) -->|
-  |                               |
-  |    [version < 2025-06-18]     |
-  |<-- error(-32600, "version     |
-  |    below minimum 2025-06-18") |
-  |                               |
-  |    [2025-06-18 <= version      |
-  |     < 2025-11-25]             |
-  |<-- initialize response        |
-  |    (negotiated: client ver)   |
-  |    capabilities: {            |
-  |      outputSchema: true,      |
-  |      elicitation: false }     |
-  |                               |
-  |    [version >= 2025-11-25]    |
-  |<-- initialize response        |
-  |    (negotiated: 2025-11-25)   |
-  |    capabilities: {            |
-  |      outputSchema: true,      |
-  |      elicitation: true }      |
-```
-
 ```mermaid
 sequenceDiagram
     participant C as Client
