@@ -1,0 +1,56 @@
+[package]
+name = "substrate-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Text-processing BC adapter (text.search, text.count_lines, text.head, text.tail). SIMD-accelerated."
+
+[lints]
+workspace = true
+
+[features]
+default = ["simd-baseline"]
+simd-baseline = []
+simd-avx2 = ["simd-baseline"]
+simd-avx512 = ["simd-avx2"]
+simd-neon = ["simd-baseline"]
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-policy = { path = "../substrate-policy" }
+schemars = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+memchr = { workspace = true }
+regex = { workspace = true }
+aho-corasick = { workspace = true }
+bytecount = { workspace = true }
+simdutf8 = { workspace = true }
+
+[dev-dependencies]
+rstest    = { workspace = true }
+proptest  = { workspace = true }
+tempfile  = { workspace = true }
+tokio     = { workspace = true, features = ["test-util"] }
+criterion = { workspace = true }
+bytecount = { workspace = true }
+simdutf8  = { workspace = true }
+regex     = { workspace = true }
+
+[[bench]]
+name = "text_search_bench"
+harness = false
+
+[[bench]]
+name = "count_lines_bench"
+harness = false
+
+[[bench]]
+name = "simdutf8_bench"
+harness = false
