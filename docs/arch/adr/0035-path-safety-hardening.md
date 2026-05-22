@@ -41,6 +41,36 @@ ADR-0004 establishes a path jail using `strict-path` canonicalization followed b
 
 Chosen option: "Per-platform kernel-level open hardening + Unicode normalization + startup canonicalization", because it closes the TOCTOU window atomically at the kernel level where available, falls back gracefully on older kernels, and addresses Unicode and firmlink gaps at well-defined boundaries.
 
+```mermaid
+flowchart TD
+    START[Path argument received] --> PATHMAX{PATH_MAX\nvalidation}
+    PATHMAX -->|length > PATH_MAX| EINVAL[Reject: INVALID_ARGUMENT]
+    PATHMAX -->|ok| PROC{Linux: /proc\nprefix?}
+    PROC -->|yes| DENY_PROC[Reject: PATH_OUTSIDE_ALLOWLIST]
+    PROC -->|no| NFC[Unicode NFC normalization]
+    NFC --> ALLOWLIST{Allowlist\nprefix check}
+    ALLOWLIST -->|not covered| DENY_AL[Reject: PATH_OUTSIDE_ALLOWLIST]
+    ALLOWLIST -->|covered| PLATFORM{Platform +\nkernel version}
+
+    PLATFORM -->|Linux >= 5.6| OPENAT2["openat2\nRESOLVE_BENEATH\nRESOLVE_NO_SYMLINKS\nRESOLVE_NO_MAGICLINKS\nTier 1 - kernel-enforced"]
+    PLATFORM -->|Linux < 5.6| ONOF_LINUX["O_NOFOLLOW at each step\n+ /proc/self/fd re-canonicalize\n+ re-validate\nTier degraded"]
+    PLATFORM -->|macOS >= 12| ONOF_ANY["O_NOFOLLOW_ANY\nTier 1 - kernel-enforced"]
+    PLATFORM -->|macOS < 12| ONOF_MAC["O_NOFOLLOW (final component)\n+ lstat inode check\nTier degraded"]
+
+    OPENAT2 --> MACOS_FIRM{macOS?}
+    ONOF_ANY --> MACOS_FIRM
+    ONOF_LINUX --> MACOS_FIRM
+    ONOF_MAC --> MACOS_FIRM
+
+    MACOS_FIRM -->|yes| FGETPATH["fcntl F_GETPATH\nfirmlink re-validation"]
+    MACOS_FIRM -->|no| NLINK
+    FGETPATH --> NLINK{nlink > 1?}
+    NLINK -->|yes, reject_hardlinks=true| DENY_HL[Reject: PATH_OUTSIDE_ALLOWLIST]
+    NLINK -->|yes, default| WARN[Log WARN: hard link detected]
+    NLINK -->|no| OPEN_OK[File descriptor granted]
+    WARN --> OPEN_OK
+```
+
 ### Decision 1 — Linux >= 5.6: openat2 with RESOLVE flags
 
 On Linux kernel 5.6 and later, every `open(2)` at the leaf of a path uses `openat2(2)` with the following resolve flags:

@@ -32,6 +32,61 @@ The MCP protocol specifies a JSON-RPC error model with a custom code range. Subs
 
 Chosen option: "thiserror enum per crate, reduced to McpError at the adapter boundary", because it preserves type-safety and rich context inside each crate while presenting a stable, versioned surface to JSON-RPC consumers.
 
+```mermaid
+classDiagram
+    class McpError {
+        +code: String
+        +message_en_us: String
+        +recovery_hint: String
+        +correlation_id: UUIDv7
+    }
+
+    class SecurityErrors {
+        PATH_OUTSIDE_ALLOWLIST -32001
+        PATH_TRAVERSAL_BLOCKED -32002
+        SYMLINK_ESCAPE -32003
+        PERMISSION_DENIED -32004
+    }
+
+    class OperationalErrors {
+        NOT_FOUND -32005
+        TIMEOUT -32006
+        CANCELLED -32007
+        RESOURCE_LIMIT -32008
+        INVALID_ARGUMENT -32009
+    }
+
+    class ProtocolErrors {
+        DRY_RUN_REQUIRED -32010
+        CONFIRMATION_REQUIRED -32011
+        PROTOCOL_VERSION_UNSUPPORTED -32012
+        INTERNAL_ERROR -32099
+    }
+
+    class KernelErrors {
+        SYMLINK_LOOP -32014
+        IO_ERROR -32015
+        STORAGE_FULL -32016
+        READ_ONLY_FS -32017
+        ENCODING_ERROR -32018
+        TRANSIENT_IO -32019
+    }
+
+    class JobErrors {
+        JOB_NOT_FOUND
+        QUOTA_EXCEEDED
+        JOB_CANCELLED
+        JOB_TIMED_OUT
+        RESULT_WAIT_EXCEEDED
+    }
+
+    McpError <|-- SecurityErrors
+    McpError <|-- OperationalErrors
+    McpError <|-- ProtocolErrors
+    McpError <|-- KernelErrors
+    McpError <|-- JobErrors
+```
+
 ### Stable Error Codes
 
 Each code is a `SCREAMING_SNAKE_CASE` string constant exported from `substrate-core::error`:

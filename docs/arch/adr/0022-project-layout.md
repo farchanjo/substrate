@@ -62,6 +62,88 @@ mcp-os/
     arch/                     # spec root (ADRs, schemas, decisions)
 ```
 
+```mermaid
+classDiagram
+    direction TB
+
+    class substrate_domain {
+        <<innermost ring>>
+        JailedPath
+        ToolResult
+        PageCursor
+        ProgressToken
+        AuditEvent
+        NO infra deps
+    }
+
+    class substrate_policy {
+        allowlist evaluation
+        dry-run engine
+        elicitation decision
+    }
+
+    class substrate_config {
+        figment TOML loader
+        allowlist canonicalization
+    }
+
+    class substrate_fs_query {
+        filesystem-query BC
+        ls, find, stat, du, file
+    }
+
+    class substrate_fs_mutation {
+        filesystem-mutation BC
+        mkdir, cp, mv, rm, chmod
+    }
+
+    class substrate_process {
+        process BC
+        ps, kill, pgrep
+    }
+
+    class substrate_system_info {
+        system-info BC
+        uname, df, uptime
+    }
+
+    class substrate_text {
+        text-processing BC
+        grep, sed, wc
+    }
+
+    class substrate_archive {
+        archive BC
+        tar, gzip, zip
+    }
+
+    class substrate_mcp_server {
+        <<outermost ring>>
+        composition root
+        rmcp wiring
+        tokio runtime
+        signal handlers
+    }
+
+    substrate_domain <|-- substrate_policy
+    substrate_domain <|-- substrate_fs_query
+    substrate_domain <|-- substrate_fs_mutation
+    substrate_domain <|-- substrate_process
+    substrate_domain <|-- substrate_system_info
+    substrate_domain <|-- substrate_text
+    substrate_domain <|-- substrate_archive
+    substrate_policy <|-- substrate_fs_mutation
+    substrate_policy <|-- substrate_process
+    substrate_policy <|-- substrate_archive
+    substrate_config <|-- substrate_mcp_server
+    substrate_fs_query <|-- substrate_mcp_server
+    substrate_fs_mutation <|-- substrate_mcp_server
+    substrate_process <|-- substrate_mcp_server
+    substrate_system_info <|-- substrate_mcp_server
+    substrate_text <|-- substrate_mcp_server
+    substrate_archive <|-- substrate_mcp_server
+```
+
 ### Hexagonal Layering Rule
 
 `substrate-domain` is the innermost ring. It declares ports as Rust traits and

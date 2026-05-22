@@ -32,6 +32,18 @@ The question: which transport mechanism does substrate support, and how is optio
 
 Chosen option: "STDIO only", because it eliminates the network attack surface entirely, requires zero configuration from the agent runtime, and matches the MCP specification's recommended pattern for subprocess tools.
 
+```mermaid
+flowchart LR
+    AGENT[LLM Agent Runtime] -->|JSON-RPC messages\nnewline-delimited| STDIN[stdin]
+    STDIN --> DISPATCH[MCP Dispatch Layer]
+    DISPATCH -->|tool responses\nJSON-RPC| STDOUT[stdout]
+    STDOUT --> AGENT
+    DISPATCH -->|tracing spans\nstructured logs| STDERR[stderr]
+    STDERR --> OPERATOR[Operator / Log Sink]
+    DISPATCH -.->|SIGTERM / SIGINT\nor BrokenPipe| DRAIN[Graceful drain\nshutdown_drain_secs]
+    DRAIN --> EXIT[Exit 0]
+```
+
 ### STDIO Bootstrap Pattern
 
 ```rust

@@ -12,6 +12,23 @@ elicitation confirmation for SIGKILL, SIGTERM, and SIGSTOP. Agents should call
 `proc.list` or `proc.tree` first to confirm the target PID and its identity
 before issuing any signal.
 
+## Diagram
+
+The following flowchart shows the recommended agent workflow: inspect first, then signal with elicitation.
+
+```mermaid
+flowchart TD
+    A[proc.list] -->|ProcessList| B{Target PID confirmed?}
+    C[proc.tree] -->|ProcessHandle| B
+    B -- yes --> D[proc.signal dry-run]
+    B -- no --> A
+    D --> E{Destructive signal?}
+    E -- SIGKILL / SIGTERM / SIGSTOP --> F[Elicitation: operator confirms]
+    E -- other --> G[Deliver signal]
+    F --> G
+    G --> H[AuditEvent emitted]
+```
+
 ## Ubiquitous Language
 
 The following terms have precise meanings within this context.

@@ -15,6 +15,32 @@ tool is read-only and does not require dry-run. Agents should use
 should call `fs.stat` or `fs.find` on the extraction target before invoking
 extract to confirm the destination is within the expected allowlist root.
 
+## Diagram
+
+The following flowchart shows the archive tool surface and the mandatory dry-run plus Zip Slip validation path.
+
+```mermaid
+flowchart TD
+    subgraph Create
+        TC[archive.tar.create]
+        ZC[archive.zip.create]
+        GC[archive.gzip.compress]
+    end
+    subgraph Extract
+        TE[archive.tar.extract]
+        ZE[archive.zip.extract]
+        GD[archive.gzip.decompress]
+    end
+    RO[archive.hash] -->|BLAKE3 / SHA-256 digest| V[Integrity verified]
+    TC & ZC & GC --> DR[DryRun: ArchiveManifest]
+    TE & ZE & GD --> ZS[Zip Slip check via strict-path]
+    ZS --> DR
+    DR --> EL[Elicitation: operator confirms]
+    EL --> EX[Execute write / extract]
+    EX --> AE[AuditEvent emitted]
+    EX --> RO
+```
+
 ## Ubiquitous Language
 
 The following terms have precise meanings within this context.

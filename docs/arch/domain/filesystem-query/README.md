@@ -10,6 +10,31 @@ mutation risk. This makes filesystem-query the natural starting point for any
 agent workflow that must discover or examine files before deciding whether to act
 on them.
 
+## Diagram
+
+The following flowchart shows the tool surface and aggregate relationships for this bounded context.
+
+```mermaid
+flowchart TD
+    subgraph Tools
+        A[fs.find] --> DL[DirectoryListing]
+        B[fs.read_dir] --> DL
+        C[fs.stat] --> SR[StatResult]
+        D[fs.read] --> RR[ReadResult]
+        E[fs.hash] --> RR
+    end
+    subgraph SharedKernel
+        JP[JailedPath]
+        PC[PageCursor]
+    end
+    A -->|uses| JP
+    B -->|uses| JP
+    C -->|uses| JP
+    D -->|uses| JP
+    E -->|uses| JP
+    DL -->|paginates via| PC
+```
+
 ## Ubiquitous Language
 
 The following terms have precise meanings within this context.

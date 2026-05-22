@@ -174,6 +174,23 @@ Stat — macOS:
 
 ### Lookup Pipeline
 
+The following diagram shows the freshness layer stack; all four layers are always active when `fs-index` is enabled.
+
+```mermaid
+flowchart TD
+    L0[Layer 0 - Lazy lstat per hit MANDATORY]
+    L1[Layer 1 - Write-through for in-process mutations]
+    L2[Layer 2 - Watcher opt-in fs-index-watch]
+    L3[Layer 3 - TTL fallback default 60s]
+    L0 --> L1 --> L2 --> L3
+    L0 -->|stale entry| Evict[Evict silently]
+    L1 -->|atomic-rename commit| Update[Update snapshot]
+    L2 -->|IN_Q_OVERFLOW or FSEvents coalesce| Rebuild[Trigger Zone B rebuild]
+    L3 -->|TTL expired on next lookup| Rebuild
+    Rebuild -->|partial| DiscardPartial[Discard partial, serve prior snapshot]
+    Rebuild -->|complete| Swap[Atomic ArcSwap store new snapshot]
+```
+
 The following pipeline applies to every `fs.find` invocation when `fs-index`
 is enabled.
 
@@ -223,6 +240,23 @@ fs.find(req)
      |
      v
   ToolResult
+```
+
+The diagram below shows the lookup pipeline for every `fs.find` call when the index is active.
+
+```mermaid
+flowchart TD
+    A[fs.find request] --> B[snapshot.lookup glob + filters]
+    B --> C[Candidate list paths only no I/O]
+    C --> D[Per-candidate lstat Zone B batched]
+    D --> E{lstat result}
+    E -- ENOENT or EACCES --> F[Drop entry + evict from index]
+    E -- exists --> G[Path-jail re-validation openat2 or O_NOFOLLOW_ANY]
+    G --> H{Within allowlist root?}
+    H -- No --> I[SUBSTRATE_PATH_OUTSIDE_ALLOWLIST + evict]
+    H -- Yes --> J[Apply kind and size filters]
+    J --> K[Paginate cursor-based per ADR-0008]
+    K --> L[ToolResult]
 ```
 
 ### Snapshot Atomic-Swap

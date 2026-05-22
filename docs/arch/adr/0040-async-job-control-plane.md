@@ -72,6 +72,20 @@ Bucket D — Sync side-effect (commit fast, audit fire-and-forget)
 
 Per-tool thresholds for Bucket B are declared in the TOML config section `[jobs.thresholds.<tool>]`. A tool exceeding its inline threshold is promoted to a job transparently; the client receives a job receipt instead of an inline result.
 
+The following diagram shows the bucket dispatch decision tree applied at tool invocation time.
+
+```mermaid
+flowchart TD
+    A[Tool invoked] --> B{Static bucket?}
+    B -- Bucket A --> C[Return inline synchronously]
+    B -- Bucket D --> D[Commit side-effect + audit fire-and-forget]
+    B -- Bucket C --> E[Always dispatch as async job]
+    B -- Bucket B --> F{Runtime size preflight}
+    F -- below threshold --> C
+    F -- above threshold --> E
+    E --> G[Return job receipt with job_id]
+```
+
 ### Job State Machine
 
 ```text
@@ -97,6 +111,23 @@ Per-tool thresholds for Bucket B are declared in the TOML config section `[jobs.
          +--------+
          |TimedOut|
          +--------+
+```
+
+The following diagram shows the complete `JobState` machine with terminal states that never regress.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : submit
+    Pending --> Running : worker picked up
+    Running --> Succeeded : worker completed
+    Running --> Failed : worker error
+    Running --> Cancelled : cancel() called
+    Running --> TimedOut : deadline exceeded
+    Pending --> Cancelled : cancel() before pickup
+    Succeeded --> [*]
+    Failed --> [*]
+    Cancelled --> [*]
+    TimedOut --> [*]
 ```
 
 Terminal states (Succeeded, Failed, Cancelled, TimedOut) never regress. A state transition
@@ -155,6 +186,30 @@ job.list
     |                       |                           |                    |
     |-- job.result(job_id) ->|                           |                    |
     |<-- ToolOutput ---------|                           |                    |
+```
+
+The sequence diagram below illustrates the push + pull dual-channel flow between client and worker.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant MCPServer as MCP Server
+    participant JobRegistry
+    participant Worker as Worker Task
+
+    Client->>MCPServer: tool call (progressToken=T)
+    MCPServer->>JobRegistry: submit(T, tool, args)
+    JobRegistry-->>MCPServer: job_id (=T)
+    MCPServer-->>Client: job receipt {job_id, state=Pending}
+    JobRegistry->>Worker: spawn worker
+    Worker-->>JobRegistry: progress(10%)
+    JobRegistry-->>Client: notifications/progress {pct=10, seq=1}
+    Worker-->>JobRegistry: progress(50%)
+    JobRegistry-->>Client: notifications/progress {pct=50, seq=2}
+    Worker-->>JobRegistry: completed()
+    JobRegistry-->>Client: notifications/progress {pct=100, state=Succeeded, seq=3}
+    Client->>MCPServer: job.result(job_id)
+    MCPServer-->>Client: ToolOutput
 ```
 
 The progressToken submitted by the client equals the job_id, which equals the correlation_id.

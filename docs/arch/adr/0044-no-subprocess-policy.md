@@ -201,6 +201,32 @@ binary.
           are forbidden from crossing this line
 ```
 
+The diagram below shows the substrate process boundary: every capability arrow crosses the OS wall via a direct syscall; no `Command` arrow exits toward an external binary.
+
+```mermaid
+flowchart TD
+    subgraph substrate_process [substrate process boundary]
+        direction TB
+        STDIN[MCP JSON-RPC stdin] --> Router[Router async]
+        Router --> AdapterA[Adapter Zone A]
+        Router --> AdapterB[Adapter Zone B]
+        Router --> AdapterC[Adapter Zone C spawn_blocking]
+        AdapterA & AdapterB & AdapterC --> STDOUT[MCP JSON-RPC stdout]
+        WALL[WALL: std::process::Command and tokio::process::Command FORBIDDEN]
+    end
+    subgraph permitted_exceptions [Permitted exceptions only]
+        TEST[cfg test harnesses]
+        BUILDRS[build.rs with justification comment]
+        PROCINTR[proc introspection via kill 2 and /proc]
+    end
+    AdapterA -- syscall via nix/libc --> OS[OS kernel: open read getdents64 statx kill sysctl /proc]
+    AdapterB -- syscall via nix/libc --> OS
+    AdapterC -- syscall via nix/libc --> OS
+    TEST -.->|allowed outside shipped binary| OS
+    BUILDRS -.->|build time only with justification| OS
+    PROCINTR -.->|observe only no spawn| OS
+```
+
 ### Enforcement Mechanism
 
 A new Rego policy file `docs/arch/policies/no_subprocess.rego` (package

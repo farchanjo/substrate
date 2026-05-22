@@ -109,7 +109,7 @@ For implementation work later: read the ADRs cross-referenced from the relevant 
 
 ## Spec conventions (enforced by linters)
 
-- All artifacts en-US. CommonMark only (no GFM tables, no Mermaid, no emojis, no task lists in spec markdown).
+- All artifacts en-US. Spec markdown uses CommonMark + Mermaid diagrams (per ADR-0047). GFM tables, emojis, and task lists remain disallowed in spec markdown. Mermaid is MANDATORY where a diagram aids comprehension (flowchart, sequence, state, ER, class, gantt, pie, gitGraph, mindmap, timeline, C4). ASCII art is retained only when Mermaid cannot render the intended shape.
 - ADR filenames: `NNNN-kebab-case-slug.md`. ADR numbers never reused; superseded ADRs link forward.
 - CUE filenames: `snake_case.cue`. CUE definitions: `#PascalCase`. Every CUE file requires header `// DDD role: <AggregateRoot|Entity|ValueObject|DomainService|ReadModel>`.
 - Gherkin filenames: `kebab-case.feature`. One scenario per behavior.

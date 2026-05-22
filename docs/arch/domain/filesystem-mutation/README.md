@@ -14,6 +14,32 @@ host. Agents working in this context are expected to call a filesystem-query
 tool first to confirm the target exists and matches expectations before issuing
 any mutation.
 
+## Diagram
+
+The following flowchart shows the tool surface and the two-phase dry-run gate that protects every mutation.
+
+```mermaid
+flowchart LR
+    subgraph Tools
+        A[fs.mkdir]
+        B[fs.write]
+        C[fs.copy]
+        D[fs.rename]
+        E[fs.remove]
+        F[fs.set_permissions]
+        G[fs.symlink]
+        H[fs.touch]
+    end
+    subgraph Gate
+        DR[DryRun pass] --> EL{Elicitation required?}
+        EL -- yes --> OP[Operator confirms]
+        EL -- no --> EX[Execute mutation]
+        OP --> EX
+    end
+    A & B & C & D & E & F & G & H --> DR
+    EX --> MR[MutationResult]
+```
+
 ## Ubiquitous Language
 
 The following terms have precise meanings within this context.

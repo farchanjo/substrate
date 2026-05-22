@@ -322,6 +322,70 @@ name to chosen tier string, the `SimdTier` value, the `correlation_id` from
 the startup trace, and the `seq` counter value (always 0 for this event, as it
 is the first emitted by a fresh process).
 
+The diagram below shows the composition-root flow from startup through capability probe to instrumented adapter injection.
+
+```mermaid
+flowchart TD
+    S[startup] --> P[probe_capabilities once stored in OnceLock]
+    P --> PL[Linux syscall probes openat2 statx io_uring fanotify]
+    P --> PM[macOS syscall probes getattrlistbulk O_NOFOLLOW_ANY]
+    P --> PS[SIMD detection is_x86_feature_detected is_aarch64_feature_detected]
+    PL & PM & PS --> F[for each port factory.build and caps]
+    F --> DW[DirWalkerFactory selects tier Arc dyn DirWalker]
+    F --> FW[FsWatcherFactory selects tier Arc dyn FsWatcher]
+    F --> PJ[PathJailFactory selects tier Arc dyn PathJail]
+    F --> HF[HashFactory selects SimdTier Arc dyn Hasher]
+    F --> SF[StatFactory selects tier Arc dyn Stat]
+    DW & FW & PJ & HF & SF --> IA[InstrumentedAdapter wrap each port]
+    IA --> JC{refuse_degraded_jail AND PathJail=degraded?}
+    JC -- Yes --> AB[abort exit 77 SUBSTRATE_RUNTIME_INIT_FAILED]
+    JC -- No --> AU[emit SUBSTRATE_CAPABILITY_TIERS_SELECTED audit event]
+    AU --> IN[inject Arc dyn Port into bounded-context adapter crates]
+    IN --> ACC[accept MCP initialize]
+```
+
+The class diagram below shows the `PortFactory<P>` trait and the five concrete factory types.
+
+```mermaid
+classDiagram
+    class PortFactoryP {
+        <<trait>>
+        +build(caps: Capabilities) Arc~P~
+        +chosen_tier() str
+    }
+    class DirWalkerFactory {
+        +build(caps) Arc~dyn DirWalker~
+        +chosen_tier() str
+    }
+    class FsWatcherFactory {
+        +build(caps) Arc~dyn FsWatcher~
+        +chosen_tier() str
+    }
+    class PathJailFactory {
+        +build(caps) Arc~dyn PathJail~
+        +chosen_tier() str
+    }
+    class HashFactory {
+        +build(caps) Arc~dyn Hasher~
+        +chosen_tier() str
+    }
+    class StatFactory {
+        +build(caps) Arc~dyn Stat~
+        +chosen_tier() str
+    }
+    class InstrumentedAdapterA {
+        -inner: A
+        -name: str
+        -cancel: CancellationToken
+    }
+    PortFactoryP <|-- DirWalkerFactory
+    PortFactoryP <|-- FsWatcherFactory
+    PortFactoryP <|-- PathJailFactory
+    PortFactoryP <|-- HashFactory
+    PortFactoryP <|-- StatFactory
+    InstrumentedAdapterA ..> PortFactoryP : wraps output of
+```
+
 ### Hexagonal Layering Preserved
 
 - `Capabilities`, `SimdTier`, and `PortFactory<P>` declared in

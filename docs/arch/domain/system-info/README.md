@@ -11,6 +11,32 @@ context before invoking filesystem or process tools, and they are commonly used
 in health-check and diagnostic workflows where the agent must report machine
 state without taking action on it.
 
+## Diagram
+
+The following flowchart shows the six read-only tools and their aggregate outputs, grouped by platform backend.
+
+```mermaid
+flowchart LR
+    subgraph ZoneA["Zone A (tokio::fs / nix)"]
+        H[sys.hostname]
+        U[sys.uname]
+    end
+    subgraph ZoneB["Zone B (spawn_blocking)"]
+        I[sys.info] --> SS[SystemSnapshot]
+        UP[sys.uptime]
+        DF[sys.df]
+        LA[sys.load_average]
+    end
+    I --> KV[KernelVersion]
+    I --> MS[MemoryStats]
+    I --> LT[LoadAverage triplet]
+    DF --> MP[MountPoint list]
+    LA --> LT
+    UP --> UT[Uptime duration]
+    H --> HN[HostName]
+    U --> KV
+```
+
 ## Ubiquitous Language
 
 The following terms have precise meanings within this context.

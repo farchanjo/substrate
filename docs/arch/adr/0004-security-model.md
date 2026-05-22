@@ -33,6 +33,20 @@ Chosen option: "Allowlist-based path jail + dry-run gate + elicitation for destr
 
 The security model consists of four enforced layers, applied in order for every tool invocation:
 
+```mermaid
+flowchart TD
+    REQ[Tool Invocation] --> L1{Layer 1\nAllowlist check}
+    L1 -->|path not in allowed_paths\nor in denied_paths| DENY1[Reject: PATH_OUTSIDE_ALLOWLIST]
+    L1 -->|allowed| L2{Layer 2\nPath Jail}
+    L2 -->|traversal / symlink\nescape / null byte| DENY2[Reject: PATH_TRAVERSAL_BLOCKED\nor SYMLINK_ESCAPE]
+    L2 -->|path jailed| L3{Layer 3\nDry-run gate}
+    L3 -->|mutating tool,\ndry_run not false| DRY[Return dry-run preview\nno OS state changed]
+    L3 -->|dry_run: false| L4{Layer 4\nElicitation}
+    L4 -->|destructive op,\nno confirmation token| ELIC[Emit elicitation form\nawait human confirmation]
+    L4 -->|confirmed| EXEC[Execute OS call]
+    EXEC --> RESP[Tool Response]
+```
+
 ### Layer 1 — Allowlist (default-deny)
 
 All accessible paths are declared in TOML configuration. An empty `allowed_paths` list means no filesystem access is permitted. Paths not covered by the allowlist are rejected before any OS call.

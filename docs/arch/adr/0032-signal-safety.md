@@ -64,6 +64,33 @@ All `blake3::Hasher` usage must call `update(chunk)` in a loop over `read(2)` ch
 
 Residual risk: third-party crates in the dependency graph may still use `mmap` internally. `cargo geiger` (see [ADR-0014](0014-build-system-and-toolchain.md)) is used to audit unsafe blocks in transitive dependencies. Known mmap-using transitive dependencies must be listed in the `cargo-deny` allowlist with a justification comment.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Running: server start\nSIGPIPE=SIG_IGN installed
+
+    Running --> Draining: SIGTERM or SIGINT received\nor BrokenPipe on stdout
+
+    Draining: Draining\n(root CancellationToken cancelled\nJobRegistry jobs cancelled)
+
+    Draining --> Draining: in-flight tools/jobs\nstill running
+
+    Draining --> Aborted: shutdown_drain_secs elapsed\nJoinSet::abort_all()
+
+    Draining --> Exited0: all in-flight handlers resolved\nwithin drain window
+
+    Aborted --> Exited0: process exit 0
+
+    note right of Running
+        SIGHUP: ignored (no reload)
+        SIGBUS: mitigated by\ndisabling blake3 mmap
+    end note
+
+    note right of Draining
+        Best-effort: emit notifications/progress\nstate=cancelled per active job
+        BrokenPipe during drain:\ndowngraded to tracing::debug!
+    end note
+```
+
 ### SIGTERM and SIGINT: Graceful Shutdown
 
 An async signal handler is installed inside the tokio runtime using `tokio::signal::unix`:

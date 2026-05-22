@@ -65,6 +65,35 @@ Rationale:
 - Homebrew formula is overkill at this stage and requires a tap; revisit
   after first public release.
 
+The sequence diagram below shows the full install flow, branching by platform.
+
+```mermaid
+sequenceDiagram
+    participant Operator
+    participant just
+    participant cargo
+    participant codesign
+    participant install as install(1)
+
+    Operator->>just: just install
+    just->>cargo: cargo build --workspace --release --bin substrate
+    cargo-->>just: target/release/substrate
+    just->>just: uname -s
+    alt macOS
+        just->>codesign: codesign --options runtime --timestamp -f -s IDENTITY target/release/substrate
+        codesign-->>just: signed source artefact
+        just->>install: sudo install -m 0755 target/release/substrate /usr/local/bin/substrate
+        install-->>just: installed
+        just->>codesign: sudo codesign --options runtime --timestamp -f -s IDENTITY /usr/local/bin/substrate
+        codesign-->>just: signed destination artefact
+        just->>codesign: codesign --verify --strict /usr/local/bin/substrate
+        codesign-->>Operator: verification passed
+    else Linux
+        just->>install: sudo install -m 0755 target/release/substrate /usr/local/bin/substrate
+        install-->>Operator: installed at /usr/local/bin/substrate
+    end
+```
+
 ### Binary name change
 
 The `[[bin]]` entry in `crates/substrate-mcp-server/Cargo.toml` is renamed

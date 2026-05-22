@@ -13,6 +13,22 @@ relevant signal before deciding whether to invoke a mutation. The context is
 intentionally narrow in scope for MVP; transformation tools (sed-equivalent,
 field extraction, sorting) are deferred to a future release.
 
+## Diagram
+
+The following flowchart shows the four read-only tools and their typical chaining pattern with filesystem-query.
+
+```mermaid
+flowchart TD
+    FQ[fs.find / fs.read_dir] -->|JailedPath list| TP
+    subgraph TP["text-processing BC"]
+        TS[text.search] --> MR[MatchResult paginated]
+        TC[text.count_lines] --> CN[Count integer]
+        TH[text.head] --> NL[First N lines]
+        TT[text.tail] --> NL2[Last N lines]
+    end
+    MR -->|page_cursor| TS
+```
+
 ## Ubiquitous Language
 
 The following terms have precise meanings within this context.

@@ -58,6 +58,33 @@ printf '%s\n%s\n' \
 | ./target/release/substrate-mcp-server
 ```
 
+## System Overview
+
+The following flowchart shows the principal actors and their relationships at the system boundary.
+
+```mermaid
+flowchart LR
+    OP[Operator / Human] -->|elicitation forms| HOST[MCP Host\ne.g. Claude Desktop]
+    AGENT[LLM Agent] -->|MCP JSON-RPC| HOST
+    HOST -->|STDIO stdin/stdout| SRV[substrate\nMCP server]
+    SRV -->|syscalls| FS[Local Filesystem]
+    SRV -->|procfs / sysctl| OS[OS / Kernel]
+```
+
+The following sequence diagram shows the smoke-test interaction from connection through a tool call.
+
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant S as substrate server
+    C->>S: initialize (protocolVersion, clientInfo)
+    S-->>C: InitializeResult (capabilities, serverInfo)
+    C->>S: tools/list
+    S-->>C: ListToolsResult (tool cards array)
+    C->>S: tools/call (sys.hostname, args={})
+    S-->>C: CallToolResult (content text + structuredContent)
+```
+
 ## Architecture
 
 This repository uses spec-as-source-of-truth. All architectural decisions live

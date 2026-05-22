@@ -161,6 +161,40 @@ Forbidden in the body:
 The body is CommonMark only -- no GFM tables, no Mermaid, no emojis,
 per the project's documentation conventions.
 
+The sequence diagram below shows the LLM turn flow from user prompt through skill-prime auto-load to tool invocation.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant SkillPrimeHook as skill-prime hook
+    participant SKILL as SKILL.md body
+    participant ToolSearch
+    participant SubstrateTool as mcp__substrate__*
+
+    User->>SkillPrimeHook: user prompt with substrate trigger keyword
+    SkillPrimeHook->>SKILL: auto-prime: inline SKILL.md into LLM context
+    SKILL-->>SkillPrimeHook: CALL + BUCKETS + TOOLS + ERRORS + CONFIG + SKIP sections
+    SkillPrimeHook-->>User: LLM context enriched with substrate reference
+    User->>ToolSearch: ToolSearch query="select:mcp__substrate__fs_find"
+    ToolSearch-->>User: JSONSchema for fs.find loaded
+    User->>SubstrateTool: mcp__substrate__fs_find with validated args
+    SubstrateTool-->>User: ToolResult or job receipt
+```
+
+The flowchart below shows the MCP + skill synergy contract: thin descriptions in `tools/list`, full schema via `schemars`, and lookup reference in the skill body.
+
+```mermaid
+flowchart TD
+    TL[tools/list description field] -->|one-line verb + object + See substrate skill| LLM[LLM context]
+    IS[inputSchema field] -->|full JSON-Schema from schemars| LLM
+    SK[SKILL.md body auto-primed on trigger match] -->|BUCKETS TOOLS ERRORS CONFIG SKIP| LLM
+    LLM --> TS[ToolSearch preload schema on demand]
+    TS --> CALL[tool invocation with validated args]
+    CALL --> RES{Bucket?}
+    RES -- A or D --> INLINE[inline ToolResult]
+    RES -- B or C --> JOB[job receipt with job_id in hints]
+```
+
 ### Versioning
 
 The SKILL.md is versioned alongside the server. The frontmatter MAY

@@ -107,6 +107,45 @@ PageCursor, ProgressToken, AuditEvent. No aggregate is shared. Each context
 maps to its own adapter crate; the shared kernel is the only permitted
 inter-context dependency at the domain layer. See ADR-0025.
 
+```mermaid
+mindmap
+  root((substrate-domain))
+    filesystem-query
+      ls
+      find
+      stat
+      du
+      file
+    filesystem-mutation
+      mkdir
+      cp
+      mv
+      rm
+      ln
+      touch
+      chmod
+    process
+      ps
+      kill
+      pgrep
+      lsof
+    system-info
+      uname
+      uptime
+      df
+      free
+      hostname
+    text-processing
+      grep
+      sed
+      awk
+      wc
+    archive
+      tar
+      gzip
+      zip
+```
+
 ## Validation
 
 - Each bounded context crate (`substrate-fs-query`, `substrate-fs-mutation`,

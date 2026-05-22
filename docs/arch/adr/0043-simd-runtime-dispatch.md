@@ -293,6 +293,67 @@ TOOL CALL (hot path, no CPUID probe)
           +-- audit: simd_tier_used = "avx2" (optional field, critical paths only)
 ```
 
+The diagram below shows the full SIMD dispatch flow from the startup probe through factory construction to the hot-path tool call.
+
+```mermaid
+flowchart TD
+    S[STARTUP] --> P[probe_capabilities stored in OnceLock~Capabilities~]
+    P --> X86{x86-64?}
+    P --> ARM{aarch64?}
+    P --> OTH[other arch]
+    X86 -- avx512f detected --> T512[SimdTier::Avx512]
+    X86 -- avx2 detected --> T256[SimdTier::Avx2]
+    X86 -- sse4.2 detected --> T42[SimdTier::Sse42]
+    X86 -- baseline --> TSSE2[SimdTier::Sse2]
+    ARM -- neon detected --> TNEON[SimdTier::Neon]
+    OTH --> TPORT[SimdTier::Portable]
+    T512 & T256 & T42 & TSSE2 & TNEON & TPORT --> HF[HashFactory::build and caps]
+    HF --> HA[select Blake3 backend per tier]
+    HA --> IA[InstrumentedAdapter wrap]
+    IA --> HOT[TOOL CALL hot path - no CPUID probe]
+    HOT --> EXEC[Arc~dyn Hasher~::hash buf - executes selected SIMD inner loop]
+    EXEC --> PT[property test gate - byte-identical output to Portable]
+```
+
+The class diagram below shows the `SimdTier` enum variants and their hardware prerequisites.
+
+```mermaid
+classDiagram
+    class SimdTier {
+        <<enum>>
+        Avx512
+        Avx2
+        Sse42
+        Sse2
+        Neon
+        Portable
+    }
+    class Avx512 {
+        requires: AVX-512F + AVX-512BW
+        platform: x86-64
+        opt_in: simd-avx512 feature
+    }
+    class Avx2 {
+        requires: AVX2
+        platform: x86-64
+        opt_in: simd-avx2 feature
+    }
+    class Neon {
+        requires: NEON
+        platform: aarch64
+        always_present_on: aarch64-apple-darwin
+    }
+    class Portable {
+        requires: nothing
+        platform: all
+        fallback: true
+    }
+    SimdTier --> Avx512
+    SimdTier --> Avx2
+    SimdTier --> Neon
+    SimdTier --> Portable
+```
+
 ### Determinism Contract
 
 Every SIMD path MUST produce byte-identical output to the `Portable` path on

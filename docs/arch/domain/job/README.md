@@ -7,6 +7,40 @@ through a unified Push (notifications/progress) and Pull (job.* control-plane)
 channel, exposing a single state machine and lifecycle audit pipeline to MCP
 clients.
 
+## Diagrams
+
+The following state diagram shows the JobState lifecycle; terminal states never regress.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : job submitted
+    Pending --> Running : worker starts
+    Running --> Succeeded : tool completes
+    Running --> Failed : tool errors
+    Running --> Cancelled : job.cancel called
+    Running --> TimedOut : deadline exceeded
+    Pending --> Cancelled : job.cancel called
+    Succeeded --> [*]
+    Failed --> [*]
+    Cancelled --> [*]
+    TimedOut --> [*]
+```
+
+The following flowchart shows the push/pull dual-channel interaction between an MCP client and the job control-plane.
+
+```mermaid
+flowchart LR
+    C[MCP Client] -->|tools/call Bucket B or C| D[Dispatch layer]
+    D --> JR[JobRegistry.submit]
+    JR --> JE[JobEntry created: Pending]
+    JE -->|push| PN[notifications/progress]
+    PN --> C
+    C -->|job.status poll| JR
+    C -->|job.result long-poll| JR
+    C -->|job.cancel| JR
+    C -->|job.list| JR
+```
+
 ## Aggregates and Entities
 
 Aggregates and domain services owned by this context:

@@ -34,6 +34,37 @@ For each concern, the accepted option is documented in the Decision Outcome. Rej
 
 ## Decision Outcome
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant D as MCP Dispatch
+    participant CT as CancellationToken tree
+    participant T as Tool Worker Task
+    participant JR as JobRegistry
+
+    C->>D: tools/call(tool, args)
+    D->>CT: child_token = root.child_token()
+    D->>T: spawn(ctx{token=child_token})
+
+    alt Client-initiated cancel
+        C->>D: notifications/cancelled(progressToken=job_id)
+        D->>JR: job.cancel(job_id)
+        JR->>CT: child_token.cancel()
+    else Server shutdown
+        note over CT: SIGTERM / SIGINT received
+        CT->>CT: root_token.cancel()
+        note over CT: propagates to all child tokens
+    end
+
+    CT-->>T: cancelled() resolves
+    T->>T: biased select! detects cancellation
+    T->>T: cleanup in select! arm\n(remove .tmp.<uuid7> files)
+    T->>T: result_tx.send(Err(Cancelled))
+    T->>JR: emit audit state transition cancelled
+    T-->>D: task future completes
+    D-->>C: ToolError::Cancelled
+```
+
 ### Biased Select: Work Arm First
 
 Every `tokio::select!` that races a work future against a cancellation future MUST use `biased;` with the work arm listed first:

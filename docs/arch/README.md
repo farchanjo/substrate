@@ -46,6 +46,45 @@ docs/arch/
   README.md          This file
 ```
 
+## Diagram
+
+The mindmap below shows the seven bounded contexts and the cross-cutting
+artifact types that govern the specification.
+
+```mermaid
+mindmap
+  root((substrate spec))
+    Bounded Contexts
+      filesystem-query
+      filesystem-mutation
+      process
+      system-info
+      text-processing
+      archive
+      job
+    ADRs
+      MADR 4.0
+      numbered immutable
+      0001 through 0044
+    CUE Schemas
+      tool specs
+      error responses
+      tool cards
+    Gherkin Features
+      one per behavior
+      cucumber-rs
+    Rego Policies
+      hexagonal layering
+      no-subprocess
+      allowlist
+    OpenSLO
+      service level objectives
+    AsyncAPI
+      progress notifications
+    TLA Plus
+      JobRegistry formal model
+```
+
 ## Where to Start Reading
 
 If you are new to this specification, read the following documents in order:

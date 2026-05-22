@@ -3,6 +3,67 @@
 Ubiquitous-language terms for the substrate domain. One term per definition;
 entries are alphabetical and written in en-US CommonMark.
 
+The following mindmap groups vocabulary by semantic family to aid navigation.
+
+```mermaid
+mindmap
+  root((substrate vocabulary))
+    Filesystem
+      JailedPath
+      allowlist
+      path jail
+      dry-run
+      write-through index
+      FsIndexPort
+    Process
+      Pid
+      ProcessSnapshot
+      Signal
+    System
+      KernelVersion
+      HostName
+      MountPoint
+      LoadAverage
+    Job
+      JobState
+      JobEntry
+      JobRegistry
+      JobBucket
+      IdempotencyKey
+      ProgressToken
+      SequenceNumber
+    Capability
+      SimdTier
+      JailTier
+      PortFactory
+      capability probe
+      degraded jail
+    Security
+      elicitation
+      audit event
+      no-subprocess policy
+      threat model
+    Architecture
+      bounded context
+      aggregate root
+      port
+      adapter
+      hexagonal architecture
+      shared kernel
+      async zone A
+      async zone B
+      async zone C
+    MCP
+      MCP
+      MCP client
+      MCP host
+      STDIO transport
+      narrative-arc tool description
+      structured content
+      hint
+      tool card
+```
+
 ---
 
 ## adapter

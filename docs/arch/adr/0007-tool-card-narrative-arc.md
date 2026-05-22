@@ -69,6 +69,38 @@ At the 10B scale, models benefit from:
 
 The 180-token cap is derived from the observation that 10B models achieve near-saturating accuracy on tool selection at that budget; tokens beyond 180 per card contribute marginally to selection quality but linearly to context cost.
 
+```mermaid
+sequenceDiagram
+    participant A as Agent Runtime
+    participant D as MCP Dispatch Layer
+    participant T as Tool Handler
+    participant J as Job Registry
+
+    A->>D: tools/call (tool_name, args)
+    D->>D: validate args against inputSchema
+    D->>T: execute(ctx)
+
+    alt Sync completion (Zone A/B, below bucket threshold)
+        T-->>D: ToolOutput
+        D-->>A: content (text, <=80 tokens) +\nstructuredContent {hints}
+    else Async dispatch (Zone C or bucket-B threshold exceeded)
+        T->>J: register job (job_id = UUIDv7)
+        J-->>T: job_id
+        T-->>D: job_state: pending, job_id
+        D-->>A: structuredContent {job_id, job_state: pending,\npolling_endpoint: job.status}
+        A->>D: job.status(job_id)
+        D->>J: query(job_id)
+        J-->>D: state=running, progress_pct
+        D-->>A: job_state: running, job_progress_pct
+        J->>D: notifications/progress (state=succeeded)
+        D-->>A: push notification
+        A->>D: job.result(job_id)
+        D->>J: retrieve result
+        J-->>D: ToolOutput
+        D-->>A: content + structuredContent
+    end
+```
+
 ### Bifurcation Rules
 
 Model-text layer (`content`, ≤80 tokens subset of the full card):

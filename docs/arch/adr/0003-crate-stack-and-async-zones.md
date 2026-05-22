@@ -42,6 +42,27 @@ Chosen option: "Zone A/B/C with spawn_blocking and Semaphore", because it integr
 | B | sync I/O | `tokio::task::spawn_blocking` | Blocking syscalls: `sysinfo`, `procfs`, `faccess`, sync reads |
 | C | CPU-bound | `spawn_blocking` + `Semaphore(num_cpus)` | `blake3` (mmap/rayon), `sha2`, `regex` scanning |
 
+```mermaid
+flowchart TD
+    REQ[Tool Request] --> CLASSIFY{Classify operation}
+    CLASSIFY -->|Awaitable I/O| ZONE_A[Zone A: async-native]
+    CLASSIFY -->|Blocking syscall| ZONE_B[Zone B: spawn_blocking]
+    CLASSIFY -->|CPU-saturating| ZONE_C[Zone C: spawn_blocking + Semaphore]
+
+    ZONE_A -->|tokio::fs, tokio-tar,\nasync-compression, async_zip| EXEC_A[Awaited directly on tokio executor]
+    ZONE_B -->|sysinfo, procfs,\nfaccess, sync reads| EXEC_B[Runs on blocking thread pool]
+    ZONE_C -->|blake3, sha2,\nregex scanning| SEM{Semaphore\nnum_cpus permits}
+    SEM -->|permit acquired| EXEC_C[Runs on blocking thread pool]
+    SEM -->|at capacity| WAIT[Await permit release]
+    WAIT --> SEM
+
+    EXEC_A --> CANCEL{CancellationToken\ncancelled?}
+    EXEC_B --> CANCEL
+    EXEC_C --> CANCEL
+    CANCEL -->|no| RESP[Tool Response]
+    CANCEL -->|yes| ABORT[ToolError::Cancelled]
+```
+
 ### Full Crate Inventory
 
 #### MCP transport

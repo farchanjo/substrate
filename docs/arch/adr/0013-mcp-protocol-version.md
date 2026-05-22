@@ -66,6 +66,30 @@ Client                         Substrate
   |      elicitation: true }      |
 ```
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Substrate
+
+    C->>S: initialize(protocolVersion)
+
+    alt version < 2025-06-18
+        S-->>C: error -32600 PROTOCOL_VERSION_UNSUPPORTED
+        note right of S: Connection closed\nNo session established
+    else 2025-06-18 <= version < 2025-11-25
+        S-->>C: initialize response\nnegotiated: client version\noutputSchema: true\nelicitation: false
+        note over C,S: structuredContent available\nDestructive tools blocked (-32001)
+    else version >= 2025-11-25
+        S-->>C: initialize response\nnegotiated: 2025-11-25\noutputSchema: true\nelicitation: true
+        note over C,S: Full capabilities\nelicitation form-mode enabled
+    end
+
+    C->>S: tools/list
+    S-->>C: tool descriptors (all namespaces)
+    C->>S: tools/call (tool, args)
+    S-->>C: content + structuredContent
+```
+
 The negotiated version is the **minimum** of the client-requested version and `2025-11-25` (preferred). Substrate never claims a version higher than its preferred, even if the client offers a newer version.
 
 ### InitializeError on Rejection
