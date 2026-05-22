@@ -111,7 +111,7 @@ tracing-appender = "0.2"
 schemars = { version = "1", features = ["derive"] }
 
 # Dev / test
-cucumber = { version = "0.21", default-features = false, features = ["macros", "tracing"] }
+cucumber = { version = "0.23", default-features = false, features = ["macros", "tracing"] }
 proptest = "1"
 criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
 rstest = "0.23"
