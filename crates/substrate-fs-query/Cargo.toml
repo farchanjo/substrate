@@ -1,0 +1,66 @@
+[package]
+name = "substrate-fs-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Read-side filesystem adapter (fs.find, fs.read, fs.read_dir, fs.stat, fs.hash)."
+
+[lints]
+workspace = true
+
+[features]
+default = ["simd-baseline"]
+simd-baseline = []
+simd-avx2 = ["simd-baseline"]
+simd-avx512 = ["simd-avx2"]
+simd-neon = ["simd-baseline"]
+linux-iouring = []
+macos-getattrlistbulk = []
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-policy  = { path = "../substrate-policy" }
+schemars = { workspace = true }
+tokio      = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tracing     = { workspace = true }
+thiserror   = { workspace = true }
+futures     = { workspace = true }
+nix         = { workspace = true }
+ignore      = { workspace = true }
+globset     = { workspace = true }
+blake3      = { workspace = true }
+simdutf8    = { workspace = true }
+base64-simd = { workspace = true }
+memchr      = { workspace = true }
+arc-swap    = { workspace = true }
+time        = { workspace = true }
+sha2        = { workspace = true }
+num_cpus    = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+rstest    = { workspace = true }
+proptest  = { workspace = true }
+tempfile  = { workspace = true }
+criterion = { workspace = true }
+blake3    = { workspace = true }
+ignore    = { workspace = true }
+
+[[bench]]
+name = "hash_bench"
+harness = false
+
+[[bench]]
+name = "walker_bench"
+harness = false
