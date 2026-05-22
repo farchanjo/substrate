@@ -1,0 +1,44 @@
+[package]
+name = "substrate-fs-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Optional filesystem index adapter with native per-OS tiers (ADR-0041 + ADR-0042)."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+fs-index = []
+fs-index-watch = ["fs-index", "dep:notify"]
+# crate-internal flag; actual io_uring backend lives in substrate-fs-query per ADR-0041
+linux-iouring = ["fs-index"]
+macos-getattrlistbulk = ["fs-index"]
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+futures = { workspace = true }
+time = { workspace = true }
+ignore = { workspace = true }
+notify = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
