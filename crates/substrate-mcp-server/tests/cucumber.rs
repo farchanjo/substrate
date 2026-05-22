@@ -9,6 +9,27 @@
 //
 // Feature files live under docs/arch/specs/features/ (relative to workspace
 // root).  The path below is resolved at runtime from CARGO_MANIFEST_DIR.
+//
+// Lint relaxations (integration-test carve-out per ADR-0044):
+//   - expect_used / unwrap_used: panicking assertions are idiomatic in tests.
+//   - disallowed_types / disallowed_methods: std::process::Command and Child
+//     are required here to spawn the binary under test.
+//   - missing_docs / unreachable_pub: internal test harness; no public API.
+#![expect(
+    clippy::expect_used,
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::must_use_candidate,
+    clippy::missing_panics_doc,
+    clippy::redundant_closure_for_method_calls,
+    clippy::needless_pass_by_value,
+    unreachable_pub,
+    missing_docs,
+    reason = "integration-test carve-out per ADR-0044: \
+              panicking assertions and std::process::Command are idiomatic here; \
+              unreachable_pub suppressed for step module re-exports; \
+              missing_docs / missing_panics_doc / must_use suppressed for test harness internals"
+)]
 
 mod steps;
 
@@ -17,7 +38,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cucumber::World;
@@ -60,6 +81,26 @@ pub struct SubstrateWorld {
 
     /// Arbitrary context tags stored by Given steps for use in When/Then.
     pub context: std::collections::HashMap<String, String>,
+
+    // -----------------------------------------------------------------------
+    // Cancellation tracking (feature: cancellation-on-cancel-request)
+    // -----------------------------------------------------------------------
+
+    /// JSON-RPC id of the most recently dispatched in-flight request, held so
+    /// that a subsequent `$/cancelRequest` notification can reference it.
+    pub pending_request_id: Option<u64>,
+
+    // -----------------------------------------------------------------------
+    // Interleaved notification buffer (feature: progress-notification-emitted)
+    // -----------------------------------------------------------------------
+
+    /// All `notifications/progress` frames received since the last reset.
+    /// Populated by `drain_until_response` before storing `last_response`.
+    pub progress_notifications: Vec<serde_json::Value>,
+
+    /// Timestamp of the last call to `drain_until_response`, used by assertions
+    /// that need to scope notifications to "after the current operation started".
+    pub operation_start: Option<Instant>,
 }
 
 // The `#[derive(World)]` macro from cucumber generates the WorldInventory
@@ -127,6 +168,33 @@ impl SubstrateWorld {
         self.perform_initialize();
     }
 
+    /// Creates a directory tree totalling > 10 MiB inside `parent` so that
+    /// archive Bucket C threshold (10 MiB input) is triggered.
+    ///
+    /// Strategy: write 1 file of 11 MiB (11 × 1024 × 1024 bytes of zeros).
+    /// This is cheaper than 1 024 small files and equally valid for the
+    /// Bucket C size check.
+    pub fn create_large_fixture_tree(parent: &Path) -> PathBuf {
+        let data_dir = parent.join("large_data");
+        std::fs::create_dir_all(&data_dir)
+            .expect("create large_data directory");
+        let file = data_dir.join("payload.bin");
+        // 11 MiB of zero bytes, written in 64 KiB chunks to avoid stack overflow.
+        let chunk = vec![0u8; 65_536];
+        let target_bytes: usize = 11 * 1024 * 1024;
+        let mut written = 0usize;
+        let mut f = std::fs::File::create(&file)
+            .expect("create payload.bin");
+        while written < target_bytes {
+            use std::io::Write as _;
+            let to_write = (target_bytes - written).min(chunk.len());
+            f.write_all(&chunk[..to_write])
+                .expect("write payload chunk");
+            written += to_write;
+        }
+        data_dir
+    }
+
     /// Spawns the substrate binary with a user-supplied allowlist root.
     pub fn spawn_and_initialize_with_root(&mut self, root: &Path) {
         let tmp = TempDir::new().expect("TempDir");
@@ -144,7 +212,7 @@ impl SubstrateWorld {
 
     /// Sends the MCP initialize + notifications/initialized handshake.
     pub fn perform_initialize(&mut self) {
-        self.send_rpc(
+        let id = self.send_rpc(
             "initialize",
             serde_json::json!({
                 "protocolVersion": "2025-11-25",
@@ -152,8 +220,8 @@ impl SubstrateWorld {
                 "clientInfo": { "name": "cucumber-test", "version": "0.0.1" }
             }),
         );
-        // Drain the initialize response.
-        let _init = self.recv_rpc();
+        // Drain any notifications before the initialize response arrives.
+        let _init = self.drain_until_response(id);
         self.send_notification("notifications/initialized");
         self.initialized = true;
     }
@@ -208,10 +276,53 @@ impl SubstrateWorld {
     }
 
     /// Calls `call_tool`, then reads and stores the response as `last_response`.
+    /// Notifications interleaved before the response are collected into
+    /// `progress_notifications`.
     pub fn call_tool_and_store(&mut self, tool: &str, arguments: serde_json::Value) {
-        self.call_tool(tool, arguments);
-        let resp = self.recv_rpc();
+        let id = self.call_tool(tool, arguments);
+        self.pending_request_id = Some(id);
+        self.operation_start = Some(Instant::now());
+        let resp = self.drain_until_response(id);
         self.last_response = Some(resp);
+        self.pending_request_id = None;
+    }
+
+    /// Reads newline-delimited JSON frames from stdout until the frame whose
+    /// `id` matches `expected_id` is found.  Frames without an `id` (i.e.,
+    /// notifications) are appended to `progress_notifications`.
+    ///
+    /// This is the interleaved-frame reader required by feature
+    /// `progress-notification-emitted`.
+    pub fn drain_until_response(&mut self, expected_id: u64) -> serde_json::Value {
+        self.progress_notifications.clear();
+        loop {
+            let frame = self.recv_rpc();
+            let frame_id = frame.get("id").and_then(|v| v.as_u64());
+            match frame_id {
+                Some(id) if id == expected_id => return frame,
+                None => {
+                    // Notification (no `id` field) — buffer it.
+                    self.progress_notifications.push(frame);
+                }
+                Some(_other_id) => {
+                    // Response for a different request (should not happen in
+                    // single-flight tests, but drop gracefully).
+                }
+            }
+        }
+    }
+
+    /// Sends a `$/cancelRequest` notification for the given JSON-RPC id.
+    ///
+    /// Per the MCP spec the notification carries the `id` of the request to
+    /// cancel in `params.id`.
+    pub fn send_cancel_request(&mut self, request_id: u64) {
+        let msg = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "$/cancelRequest",
+            "params": { "id": request_id }
+        });
+        self.write_line(&msg.to_string());
     }
 
     /// Kills the subprocess if still running.
@@ -263,17 +374,17 @@ impl Drop for SubstrateWorld {
 // ---------------------------------------------------------------------------
 
 /// Wraps a `Child` for the global watchdog timeout (8 seconds per scenario).
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Watchdog is kept for future scenario timeout enforcement")]
 pub struct Watchdog(Arc<Mutex<Option<std::process::Child>>>);
 
 impl Watchdog {
     pub fn arm(child: Arc<Mutex<Option<std::process::Child>>>, timeout: Duration) {
         std::thread::spawn(move || {
             std::thread::sleep(timeout);
-            if let Ok(mut g) = child.lock() {
-                if let Some(c) = g.as_mut() {
-                    let _ = c.kill();
-                }
+            if let Ok(mut g) = child.lock()
+                && let Some(c) = g.as_mut()
+            {
+                let _ = c.kill();
             }
         });
     }
