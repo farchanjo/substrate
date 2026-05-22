@@ -125,13 +125,13 @@ Substrate defines seven bounded contexts (added in ADR-0002 amended by
 ADR-0040): filesystem-query, filesystem-mutation, process, system-info,
 text-processing, archive, and job. Each context has a README under `domain/`:
 
-- [domain/filesystem-query/README.md](domain/filesystem-query/README.md)
-- [domain/filesystem-mutation/README.md](domain/filesystem-mutation/README.md)
-- [domain/process/README.md](domain/process/README.md)
-- [domain/system-info/README.md](domain/system-info/README.md)
-- [domain/text-processing/README.md](domain/text-processing/README.md)
-- [domain/archive/README.md](domain/archive/README.md)
-- [domain/job/README.md](domain/job/README.md) — added by ADR-0040
+- [filesystem-query](domain/filesystem-query/README.md) — read-side filesystem tools (ls, find, stat, du, file, hash)
+- [filesystem-mutation](domain/filesystem-mutation/README.md) — write-side filesystem tools (mkdir, write, copy, rename, remove, chmod, symlink, touch)
+- [process](domain/process/README.md) — process inspection and control (proc.list, proc.tree, proc.signal)
+- [system-info](domain/system-info/README.md) — host metadata (sys.info, sys.uptime, sys.df, sys.uname, sys.hostname, sys.load_average)
+- [text-processing](domain/text-processing/README.md) — text search and slicing (text.search, text.count_lines, text.head, text.tail)
+- [archive](domain/archive/README.md) — tar/zip/gzip create and extract, archive.hash
+- [job](domain/job/README.md) — async job control-plane (added by ADR-0040)
 
 ## Recent Architecture Decisions (ADR-0040 through ADR-0044)
 
