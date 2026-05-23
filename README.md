@@ -1,9 +1,8 @@
 # substrate
 
 Model Context Protocol (MCP) server in Rust 1.95 exposing POSIX baseutils-equivalent
-OS management to LLM agents over STDIO. Six bounded contexts: filesystem-query,
-filesystem-mutation, process, system-info, text-processing, archive -- plus a
-job control-plane for async dispatch.
+OS management to LLM agents over STDIO. Seven bounded contexts: filesystem-query,
+filesystem-mutation, process, system-info, text-processing, archive, job.
 
 ## Quick Start
 
@@ -73,6 +72,8 @@ flowchart LR
 
 The following sequence diagram shows the smoke-test interaction from connection through a tool call.
 
+Note: tool names use `_` as separator (e.g. `sys_hostname`), not `.`.
+
 ```mermaid
 sequenceDiagram
     participant C as MCP Client
@@ -81,7 +82,7 @@ sequenceDiagram
     S-->>C: InitializeResult (capabilities, serverInfo)
     C->>S: tools/list
     S-->>C: ListToolsResult (tool cards array)
-    C->>S: tools/call (sys.hostname, args={})
+    C->>S: tools/call (sys_hostname, args={})
     S-->>C: CallToolResult (content text + structuredContent)
 ```
 
@@ -95,16 +96,15 @@ Read in order:
 
 1. [Architecture Overview](docs/arch/README.md) — entry point for the spec
 2. [Glossary](docs/arch/glossary.md) — ubiquitous-language vocabulary
-3. [ADR-0002](docs/arch/adr/0002-bounded-contexts.md) — strategic DDD and the seven bounded contexts
+3. [ADR-0002](docs/arch/adr/0002-bounded-contexts.md) — strategic DDD and the seven bounded contexts (filesystem-query, filesystem-mutation, process, system-info, text-processing, archive, job)
 4. [ADR-0040](docs/arch/adr/0040-async-job-control-plane.md) — async job control-plane (Push/Pull dual channel)
 
 ## Validation
 
 ```bash
 spec validate --lane full      # 13 spec validators
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace --no-fail-fast
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo nextest run --locked --workspace --no-fail-fast
 ```
 
 ## TLA+ formal verification

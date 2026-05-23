@@ -36,8 +36,8 @@ docs/arch/
   cue.mod/module.cue         CUE module: com.archanjo/substrate
   domain/<bc>/README.md      Bounded-context narratives (6 BCs)
   policies/*.rego            Open Policy Agent rules (6 policies)
-  schemas/*.cue              CUE schemas (8 files, all with DDD role headers)
-  specs/features/<area>/     Gherkin feature specs (40 features)
+  schemas/*.cue              CUE schemas (11 files, all with DDD role headers)
+  specs/features/<area>/     Gherkin feature specs (64 features)
   glossary.md                Ubiquitous-language vocabulary
   README.md                  Architecture-spec entry point
   .specconfig.yml            Spec framework per-project config
@@ -45,7 +45,7 @@ docs/arch/
 
 ## Bounded contexts (DDD strategic)
 
-Six contexts, split by semantic family (not by binary name):
+Seven contexts, split by semantic family (not by binary name):
 
 1. **filesystem-query** — read-side: ls, find, stat, du, file, hash
 2. **filesystem-mutation** — write-side: mkdir, write, copy, rename, remove, chmod, symlink, touch
@@ -53,6 +53,7 @@ Six contexts, split by semantic family (not by binary name):
 4. **system-info** — sys.info, sys.uptime, sys.df, sys.uname, sys.hostname, sys.load_average
 5. **text-processing** — text.search, text.count_lines, text.head, text.tail
 6. **archive** — archive.tar/zip/gzip create+extract, archive.hash
+7. **job** — job.list, job.result, job.cancel, job.status (async control-plane)
 
 Tools are namespaced `<bc>.<verb>` (e.g., `fs.find`, `proc.signal`). Each BC will become a Cargo crate under `crates/substrate-<bc>` (see ADR-0022). The pure-domain shared kernel lives in `crates/substrate-domain` and MUST NOT import any infra crate (hexagonal layering enforced via `policies/hexagonal_layering.rego`).
 

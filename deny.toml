@@ -5,10 +5,13 @@
 [advisories]
 # Deny yanked crates outright; don't ignore any known advisories.
 yanked = "deny"
+vulnerability = "deny"
+unmaintained = "warn"
 ignore = []
 
 [bans]
 # Warn (not deny) on multiple versions of the same crate to avoid silent bloat.
+# TODO: tighten to "deny" after deduplicating (console v0.15/v0.16 currently duplicated via cucumber + insta).
 multiple-versions = "warn"
 
 [licenses]

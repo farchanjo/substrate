@@ -26,7 +26,7 @@ gh repo fork farchanjo/substrate --clone
 git switch -c feat/<scope>-<short-desc>
 ```
 
-Branch naming (per [ADR-0024](docs/arch/adr/0024-commit-conventions.md)):
+Branch naming (per [ADR-0024](docs/arch/adr/0024-repo-conventions.md)):
 
 | Type | Prefix |
 |---|---|
@@ -52,16 +52,19 @@ individual linters.
 
 ### 4. Build, lint, test
 
+Before running these, run `spec validate --lane fast` (see section 3 above) if you
+touched anything under `docs/arch/`.
+
 ```bash
 cargo build --workspace --all-targets
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace --no-fail-fast
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo nextest run --locked --workspace --no-fail-fast
 ```
 
 ### 5. Commit
 
-Use the Angular convention from [ADR-0024](docs/arch/adr/0024-commit-conventions.md):
+Use the Angular convention from [ADR-0024](docs/arch/adr/0024-repo-conventions.md):
 
 ```text
 <type>(<scope>): <subject>

@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Commit messages follow the Angular convention defined in
-[ADR-0024](docs/arch/adr/0024-commit-conventions.md).
+[ADR-0024](docs/arch/adr/0024-repo-conventions.md).
 
 ## [Unreleased]
 
@@ -27,9 +27,9 @@ Commit messages follow the Angular convention defined in
 
 ## [0.1.0] — 2026-05-22
 
-First public release. Spec-as-source-of-truth phase complete; production
-implementation passes 47 of 276 Gherkin scenarios with the remaining set
-tracked as known gaps under follow-up tickets.
+First public release. Spec-as-source-of-truth phase complete; across 276 Gherkin
+scenarios, 47 pass, 148 skip (no step definition yet), and 81 fail — tracked as
+known gaps under follow-up tickets.
 
 ### Added
 

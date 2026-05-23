@@ -14,7 +14,8 @@ build-release:
 build:
     cargo build --workspace --all-targets
 
-# Run all unit and integration tests.
+# Run all unit and integration tests (dev convenience — single-threaded for output clarity).
+# NOTE: CI uses `cargo nextest run --locked` (see `just ci-nextest` for exact parity).
 test:
     cargo test --workspace --no-fail-fast -- --test-threads=1
 
