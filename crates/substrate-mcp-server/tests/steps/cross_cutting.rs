@@ -361,18 +361,6 @@ async fn given_kernel_flag_false(world: &mut SubstrateWorld) {
     }
 }
 
-#[given(
-    regex = r#"^the config key security\.refuse_degraded_jail is set to (true|false)$"#
-)]
-async fn given_refuse_degraded_jail(world: &mut SubstrateWorld, value: String) {
-    if world.skip_scenario {
-        return;
-    }
-    world
-        .context
-        .insert("refuse_degraded_jail".to_string(), value);
-}
-
 #[when(
     regex = r#"^substrate starts and runs the capability probe$"#
 )]
@@ -388,7 +376,8 @@ async fn when_substrate_starts_capability_probe(world: &mut SubstrateWorld) {
     // to exit (or timeout if it stays alive).
     let refuse = world
         .context
-        .get("refuse_degraded_jail")
+        .get("config_security.refuse_degraded_jail")
+        .or_else(|| world.context.get("refuse_degraded_jail"))
         .cloned()
         .unwrap_or_else(|| "true".to_string());
 

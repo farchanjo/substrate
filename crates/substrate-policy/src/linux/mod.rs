@@ -169,9 +169,10 @@ fn open_root_dirfd(root: &Path) -> SubstrateResult<OwnedFd> {
 
 /// Converts a `Path` to a `CString`, returning `EncodingError` on null bytes.
 fn path_to_cstring(path: &Path) -> SubstrateResult<CString> {
-    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| SubstrateError::EncodingError {
-        detail: format!("null byte in path: {}", path.display()),
-        correlation_id: None,
+    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| SubstrateError::InvalidArgument {
+        offending_field: "path".to_owned(),
+        reason: format!("null byte in path: {}", path.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })
 }
 

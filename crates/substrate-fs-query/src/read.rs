@@ -82,6 +82,40 @@ pub async fn handle_fs_read(
     deps: &FsQueryDeps,
     _cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
+    // Pre-jail file-type guard: stat the raw path with lstat to detect special
+    // files (FIFOs, sockets, devices) before the jail tries to open them.
+    // Some jail backends fail with ENXIO/EOPNOTSUPP when opening Unix sockets
+    // via openat2/O_NOFOLLOW_ANY, which surfaces as a SUBSTRATE_IO_ERROR rather
+    // than the more accurate SUBSTRATE_INVALID_ARGUMENT.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt as _;
+        let raw_path = std::path::Path::new(&req.path);
+        if let Ok(pre_meta) = std::fs::symlink_metadata(raw_path) {
+            let pre_ft = pre_meta.file_type();
+            if !pre_ft.is_file() && !pre_ft.is_dir() && !pre_ft.is_symlink() {
+                let file_type_str = if pre_ft.is_fifo() {
+                    "fifo"
+                } else if pre_ft.is_socket() {
+                    "socket"
+                } else if pre_ft.is_block_device() {
+                    "block device"
+                } else if pre_ft.is_char_device() {
+                    "char device"
+                } else {
+                    "special"
+                };
+                return Err(SubstrateError::InvalidArgument {
+                    offending_field: "path".to_owned(),
+                    reason: format!(
+                        "path does not point to a regular file; target is a {file_type_str}. regular files only"
+                    ),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                });
+            }
+        }
+    }
+
     // Jail the path.
     let raw = std::path::Path::new(&req.path).to_path_buf();
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);

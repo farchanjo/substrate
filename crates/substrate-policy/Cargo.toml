@@ -16,6 +16,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 nix = { workspace = true }
 async-trait = { workspace = true }
+uuid = { workspace = true }
 # strict-path is declared at workspace level but not yet available on crates.io at >=0.5;
 # userspace_jail uses std::fs::canonicalize until strict-path ships or the workspace pin is fixed.
 

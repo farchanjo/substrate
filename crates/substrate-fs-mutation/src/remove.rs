@@ -96,15 +96,15 @@ pub async fn handle_fs_remove(
     // Layer 1+2: allowlist + path jail.
     let jailed = deps.jail.jail(allowlist_root, Path::new(&req.path))?;
 
-    // Layer 3: dry-run gate.
-    // `elicitation_confirmed=true` is accepted as a combined confirmation alias
-    // that satisfies both the dry-run and elicitation gates in a single field.
-    let dry_run_ok = req.dry_run_acknowledged || req.elicitation_confirmed;
-    elicitation::require_dry_run_acknowledged(dry_run_ok)?;
-
-    // Layer 4: elicitation gate.
+    // Layer 4 fires first: when both gates are unsatisfied, the more specific
+    // CONFIRMATION_REQUIRED signal is preferred. capability-elicitation-missing
+    // scenario in cross-cutting/ depends on this order.
     let confirmed_ok = req.confirmed || req.elicitation_confirmed;
     elicitation::require_confirmation(confirmed_ok)?;
+
+    // Layer 3: dry-run gate.
+    let dry_run_ok = req.dry_run_acknowledged || req.elicitation_confirmed;
+    elicitation::require_dry_run_acknowledged(dry_run_ok)?;
 
     let is_dir = jailed.as_path().is_dir();
 
