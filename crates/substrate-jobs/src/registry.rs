@@ -247,7 +247,7 @@ impl JobRegistryPort for InMemoryJobRegistry {
         // the slot needs to be Arc-cloned into the spawn closure for state transitions.
         let (result_tx, result_rx) = watch::channel::<Option<JobResult>>(None);
         // Clone the entry mutex and cancel token for the worker closure.
-        let worker_entry = parking_lot::Mutex::new(entry.clone());
+        let worker_entry = parking_lot::Mutex::new(entry);
         let worker_entry = Arc::new(worker_entry);
         let worker_entry_clone = Arc::clone(&worker_entry);
         let result_tx_clone = result_tx.clone();

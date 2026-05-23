@@ -96,7 +96,7 @@ impl JobSlot {
     ///
     /// Superseded by [`from_shared_entry`] which shares the entry mutex with
     /// the worker for live state visibility; retained for test helpers and
-    /// Wave G+ paths that do not need a separate worker_entry Arc.
+    /// Wave G+ paths that do not need a separate `worker_entry` Arc.
     #[expect(
         dead_code,
         reason = "superseded by from_shared_entry for production submit path; retained for test helpers and Wave G+ paths"
