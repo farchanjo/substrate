@@ -20,6 +20,7 @@
 use std::path::{Component, Path};
 
 use substrate_domain::{SubstrateError, SubstrateResult};
+use uuid::Uuid;
 
 /// Entry type passed to the guard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +48,7 @@ pub fn reject_symlink_entry(kind: EntryKind, member_path: &str) -> SubstrateResu
     if kind == EntryKind::Symlink {
         return Err(SubstrateError::SymlinkEscape {
             path: member_path.to_owned(),
-            correlation_id: None,
+            correlation_id: Some(Uuid::now_v7()),
         });
     }
     Ok(())
@@ -77,7 +78,7 @@ pub fn validate_symlink_target(
     if target.is_absolute() {
         return Err(SubstrateError::PathTraversalBlocked {
             path: target.to_string_lossy().into_owned(),
-            correlation_id: None,
+            correlation_id: Some(Uuid::now_v7()),
         });
     }
 
@@ -100,7 +101,7 @@ pub fn validate_symlink_target(
     if !canonical.starts_with(extraction_root) {
         return Err(SubstrateError::PathTraversalBlocked {
             path: target.to_string_lossy().into_owned(),
-            correlation_id: None,
+            correlation_id: Some(Uuid::now_v7()),
         });
     }
     Ok(())

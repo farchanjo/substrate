@@ -13,6 +13,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use substrate_domain::{SubstrateError, SubstrateResult};
+use uuid::Uuid;
 
 /// Validates that `member` joined to `dest_root` stays within `dest_root`.
 ///
@@ -27,7 +28,7 @@ pub fn validate_member_path(dest_root: &Path, member: &Path) -> SubstrateResult<
     if member.is_absolute() {
         return Err(SubstrateError::PathTraversalBlocked {
             path: member.to_string_lossy().into_owned(),
-            correlation_id: None,
+            correlation_id: Some(Uuid::now_v7()),
         });
     }
 
@@ -36,7 +37,7 @@ pub fn validate_member_path(dest_root: &Path, member: &Path) -> SubstrateResult<
         if component == Component::ParentDir {
             return Err(SubstrateError::PathTraversalBlocked {
                 path: member.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(Uuid::now_v7()),
             });
         }
     }
@@ -52,7 +53,7 @@ pub fn validate_member_path(dest_root: &Path, member: &Path) -> SubstrateResult<
     if !normalised.starts_with(&root_normalised) {
         return Err(SubstrateError::PathTraversalBlocked {
             path: member.to_string_lossy().into_owned(),
-            correlation_id: None,
+            correlation_id: Some(Uuid::now_v7()),
         });
     }
 

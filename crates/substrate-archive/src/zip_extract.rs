@@ -272,12 +272,18 @@ fn extract_zip_blocking(
 /// Pre-validates all ZIP members — Zip Slip + symlink escape checks — before any disk write.
 ///
 /// For symlink members, the content (target path) is read to validate it stays within
-/// `dest_root` per ADR-0035 §symlink-validation.
+/// `dest_root` per ADR-0035 §symlink-validation.  After individual validation, a second
+/// pass detects symlink cycles between members (e.g., `a → b` and `b → a`), which
+/// are blocked as `SUBSTRATE_PATH_TRAVERSAL_BLOCKED` to prevent infinite-loop extraction.
 fn zip_prevalidate_members(
     zip: &mut zip::ZipArchive<std::fs::File>,
     dest_root: &std::path::Path,
 ) -> SubstrateResult<()> {
     use std::io::Read as _;
+
+    // Collect (normalised_link_name, normalised_target_name) for cycle detection.
+    let mut symlink_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
@@ -307,10 +313,36 @@ fn zip_prevalidate_members(
                 })?;
             let link_path = dest_root.join(member);
             validate_symlink_target(dest_root, &link_path, std::path::Path::new(target_str))?;
+            // Record for cycle detection.  Normalise by stripping a leading `./` if present.
+            let norm_name = name.trim_start_matches("./").to_owned();
+            let norm_target = target_str.trim_start_matches("./").to_owned();
+            symlink_map.insert(norm_name, norm_target);
         } else {
             reject_symlink_entry(kind, &name)?;
         }
     }
+
+    // Cycle detection: for each symlink, follow the chain up to symlink_map.len() + 1 hops.
+    // If we revisit a node we've seen in this chain, there is a cycle.
+    for start in symlink_map.keys() {
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut current = start.as_str();
+        let max_hops = symlink_map.len() + 1;
+        for _ in 0..max_hops {
+            if !visited.insert(current.to_owned()) {
+                // Cycle detected — two or more archive members form a symlink loop.
+                return Err(SubstrateError::PathTraversalBlocked {
+                    path: format!("symlink loop involving member: {current}"),
+                    correlation_id: None,
+                });
+            }
+            match symlink_map.get(current) {
+                Some(next) => current = next.as_str(),
+                None => break, // target is not itself a symlink source — no cycle via this path.
+            }
+        }
+    }
+
     Ok(())
 }
 

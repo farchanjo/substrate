@@ -30,6 +30,8 @@ use crate::tmp_path::TmpPath;
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GzipCompressRequest {
     /// Source file path within the allowlist.
+    /// Also accepts `src` as an alias for compatibility with step implementations.
+    #[serde(alias = "src")]
     pub source: String,
 
     /// Destination `.gz` path within the allowlist.
