@@ -110,7 +110,8 @@ fn detect_linux(caps: &mut Capabilities) {
     caps.has_statx = probe_statx_stub();
 
     // Probe openat2(2): requires kernel >= 5.6 (released 2020-03-29).
-    // TODO Wave D: replace with real syscall probe using libc::syscall(SYS_openat2, ...).
+    // Real probe: attempt openat2 with empty path + O_PATH + RESOLVE_BENEATH.
+    // ENOSYS → kernel too old; any other errno (e.g. ENOENT) → syscall present.
     caps.has_openat2 = probe_openat2_stub();
 
     // Probe fanotify: requires kernel >= 2.6.37 and CAP_SYS_ADMIN.
@@ -130,12 +131,14 @@ fn probe_statx_stub() -> bool {
     false
 }
 
+/// Probe whether `openat2(2)` is available on the running kernel.
+///
+/// Delegates to `substrate_policy::probe_openat2_available()`, which contains
+/// the narrow `unsafe` syscall carve-out (ADR-0042 + ADR-0044).  This function
+/// is safe to call without `unsafe_code` permission in this crate.
 #[cfg(target_os = "linux")]
 fn probe_openat2_stub() -> bool {
-    // Stub: returns false until Wave D implements the real syscall probe.
-    // Real probe: syscall(SYS_openat2, AT_FDCWD, &"", ..., size_of::<OpenHow>())
-    // ENOSYS -> false; ENOENT or EPERM -> true.
-    false
+    substrate_policy::probe_openat2_available()
 }
 
 // ---- macOS capability probes -------------------------------------------------

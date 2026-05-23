@@ -45,3 +45,18 @@ mod macos;
 
 pub use allowlist::Allowlist;
 pub use jail_factory::PathJailFactory;
+
+/// The `SYS_openat2` syscall number for the current Linux target architecture.
+///
+/// Re-exported for use by `substrate-mcp-server`'s capability probe so it can
+/// attempt the syscall at startup without duplicating the architecture table.
+/// Only available on Linux targets.
+#[cfg(target_os = "linux")]
+pub use linux::SYS_OPENAT2;
+
+/// Probes whether `openat2(2)` is available on the running Linux kernel (>= 5.6).
+///
+/// All `unsafe` is contained within `substrate-policy`'s ADR-0042 carve-out;
+/// callers do not need `unsafe_code` permission.  Only available on Linux targets.
+#[cfg(target_os = "linux")]
+pub use linux::probe_openat2_available;

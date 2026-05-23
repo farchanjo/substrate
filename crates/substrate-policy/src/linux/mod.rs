@@ -49,21 +49,99 @@ const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 /// `RESOLVE_BENEATH` — resolution must not cross the dirfd root upward.
 const RESOLVE_BENEATH: u64 = 0x08;
 
-/// `SYS_openat2` syscall number on x86_64 Linux.
-/// `libc` 0.2 does not expose `SYS_openat2`; the number is stable at 437
-/// (x86_64) since kernel 5.6. Other arches: aarch64=437, riscv64=437,
-/// s390x=439. We gate compilation on x86_64 and aarch64 via cfg.
+/// `SYS_openat2` syscall number per architecture.
 ///
-/// Reference: `arch/x86/entry/syscalls/syscall_64.tbl` in the Linux kernel.
+/// Stable values since kernel 5.6 per `arch/*/entry/syscalls/` in the Linux tree:
+/// - x86_64:  437 (`arch/x86/entry/syscalls/syscall_64.tbl`)
+/// - aarch64: 437 (`arch/arm64/include/asm/unistd.h`)
+/// - riscv64: 437 (`arch/riscv/include/asm/unistd.h`)
+/// - riscv32: 437 (same table as riscv64)
+/// - s390x:   439 (`arch/s390/kernel/syscalls/syscall.tbl`)
+///
+/// Unknown architectures produce a `compile_error!` so silent miscompilation
+/// is impossible; add an explicit arm when porting to a new target.
 #[cfg(target_arch = "x86_64")]
-const SYS_OPENAT2: libc::c_long = 437;
+pub const SYS_OPENAT2: libc::c_long = 437;
 #[cfg(target_arch = "aarch64")]
-const SYS_OPENAT2: libc::c_long = 437;
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-const SYS_OPENAT2: libc::c_long = 437; // conservative fallback; see comment above
+pub const SYS_OPENAT2: libc::c_long = 437;
+#[cfg(target_arch = "s390x")]
+pub const SYS_OPENAT2: libc::c_long = 439;
+#[cfg(any(target_arch = "riscv64", target_arch = "riscv32"))]
+pub const SYS_OPENAT2: libc::c_long = 437;
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "s390x",
+    target_arch = "riscv64",
+    target_arch = "riscv32",
+)))]
+compile_error!(
+    "SYS_OPENAT2 is unknown for this target architecture; \
+     add an explicit value from arch/*/entry/syscalls/ in the Linux kernel tree"
+);
 
 // O_PATH | O_CLOEXEC — open purely for validation; no actual I/O.
 const OPEN_FLAGS: u64 = (libc::O_PATH | libc::O_CLOEXEC) as u64;
+
+// ---- Capability probe -------------------------------------------------------
+
+/// Probes whether `openat2(2)` is available on the running kernel (>= 5.6).
+///
+/// Strategy (ADR-0042 §"attempt with safe minimal arguments"):
+/// attempts `openat2` with `AT_FDCWD`, an empty path, `O_PATH`, and
+/// `RESOLVE_BENEATH` (0x08).  `ENOSYS` (38) → absent; any other result
+/// (typically `ENOENT` for the empty path) → syscall is present.
+///
+/// This function is called from `substrate-mcp-server`'s capability probe so
+/// that the unsafe syscall lives entirely within this crate's carve-out
+/// (ADR-0042 + ADR-0044), keeping `substrate-mcp-server` free of `unsafe`.
+///
+/// # Safety (contained within)
+///
+/// All `unsafe` is narrowly scoped to `libc::syscall` + `libc::close`.
+/// No pointer outlives the call frame; the fd (if any) is closed immediately.
+#[must_use]
+pub fn probe_openat2_available() -> bool {
+    let how = OpenHow {
+        flags: libc::O_PATH as u64,
+        mode: 0,
+        resolve: RESOLVE_BENEATH,
+    };
+
+    // SAFETY: `libc::syscall` with `SYS_OPENAT2`:
+    //   - `SYS_OPENAT2` is the arch-correct syscall number from this module.
+    //   - `AT_FDCWD` is a valid pseudo-fd; no open descriptor required.
+    //   - `b"\0".as_ptr()` is a NUL-terminated empty path in static storage;
+    //     valid for the call duration.
+    //   - `&how as *const _` points to a stack-allocated `OpenHow`; valid for
+    //     the call duration; no pointer is retained after the syscall returns.
+    //   - The fourth argument is `size_of::<OpenHow>()` as required by the ABI.
+    // On success (unexpected for empty path), we close the fd immediately.
+    let result = unsafe {
+        libc::syscall(
+            SYS_OPENAT2,
+            libc::AT_FDCWD as libc::c_long,
+            b"\0".as_ptr() as *const libc::c_char,
+            &how as *const OpenHow,
+            std::mem::size_of::<OpenHow>() as libc::c_long,
+        )
+    };
+
+    if result >= 0 {
+        // Unexpected success with empty path — close fd, report present.
+        // SAFETY: `result` is a valid file descriptor just returned by the kernel.
+        unsafe {
+            libc::close(result as libc::c_int);
+        }
+        return true;
+    }
+
+    // SAFETY: `__errno_location()` returns a thread-local pointer valid for
+    // an immediate read.  No write occurs here.
+    let errno = unsafe { *libc::__errno_location() };
+    // ENOSYS (libc::ENOSYS == 38 on Linux) means the syscall is absent.
+    errno != libc::ENOSYS
+}
 
 /// Opens `root` as a directory file descriptor for use as the `dirfd` argument
 /// to `openat2`.
@@ -169,8 +247,30 @@ impl substrate_domain::PathJailPort for Openat2Jail {
             return Err(map_openat2_errno(errno, raw_path));
         }
 
-        // Close the validation fd immediately — we only needed proof the kernel
-        // accepted the path under RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS.
+        // Resolve the canonical path via /proc/self/fd/<fd> before closing the
+        // fd, so the kernel gives us the true resolved path rather than a
+        // lexically constructed one.  Lexical construction (join + strip_prefix)
+        // produces a double-prefix phantom path when allowlist_root is a prefix
+        // of raw_path (e.g. root=/data, path=/data/sub/f → /data/data/sub/f).
+        let proc_link = format!("/proc/self/fd/{}", fd as libc::c_int);
+        let canonical = std::fs::read_link(&proc_link)
+            .unwrap_or_else(|err| {
+                // readlink failed (unusual but not impossible — e.g. procfs not
+                // mounted or fd type doesn't support it).  Fall back to the
+                // lexical form and emit a warning so the anomaly is auditable.
+                tracing::warn!(
+                    fd = fd as libc::c_int,
+                    path = %raw_path.display(),
+                    error = %err,
+                    "openat2 jail: /proc/self/fd readlink failed; \
+                     falling back to lexical canonical path"
+                );
+                allowlist_root
+                    .as_path()
+                    .join(raw_path.strip_prefix("/").unwrap_or(raw_path))
+            });
+
+        // Close the validation fd after we have resolved the canonical path.
         // SAFETY: `fd` is a valid file descriptor returned by the syscall above.
         // `libc::close` is the correct way to release it; it cannot fail in a
         // way that causes UB here (EINTR is benign on Linux for close(2)).
@@ -178,13 +278,15 @@ impl substrate_domain::PathJailPort for Openat2Jail {
             libc::close(fd as libc::c_int);
         }
 
-        // Construct the canonical path by appending the relative portion of
-        // raw_path to the allowlist root. openat2 has already verified the
-        // resolution stays within the root, so prefix-stripping the root from
-        // raw_path gives the relative sub-path.
-        let canonical = allowlist_root
-            .as_path()
-            .join(raw_path.strip_prefix("/").unwrap_or(raw_path));
+        // Post-check: the kernel-resolved path must still be beneath
+        // allowlist_root (defence in depth — rejects magic-link escapes
+        // that somehow slipped past RESOLVE_NO_MAGICLINKS on older kernels).
+        if !canonical.starts_with(allowlist_root.as_path()) {
+            return Err(SubstrateError::PathOutsideAllowlist {
+                path: canonical.display().to_string(),
+                correlation_id: None,
+            });
+        }
 
         // Final allowlist cross-check for defence in depth.
         self.allowlist.jail(canonical)
