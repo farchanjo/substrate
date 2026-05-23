@@ -2,7 +2,7 @@
 //!
 //! Delivers a POSIX signal to a target process. Enforces (in order):
 //!   1. Dry-run gate: first-pass returns preview, no OS mutation.
-//!   2. Elicitation gate (ADR-0004 Layer 4 / ADR-0035): SIGKILL/SIGTERM/SIGSTOP
+//!   2. Elicitation gate (ADR-0004 Layer 4 / ADR-0035): SIGKILL/SIGSTOP
 //!      require `elicitation_confirmed = true` before any PID probe.
 //!   3. PID allowlist check (ADR-0004 Layer 1): blocks PID 0, 1, 2.
 //!   4. PID existence check via `kill(pid, 0)`.
@@ -28,6 +28,7 @@ use substrate_domain::{SubstrateError, SubstrateResult};
 
 /// Input parameters for `proc.signal`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcSignalRequest {
     /// Target process identifier.
     pub pid: u32,
@@ -40,7 +41,7 @@ pub struct ProcSignalRequest {
     #[serde(default)]
     pub dry_run: Option<bool>,
 
-    /// Must be `true` for destructive signals (SIGKILL/SIGTERM/SIGSTOP) after
+    /// Must be `true` for destructive signals (SIGKILL/SIGSTOP) after
     /// the elicitation flow completes.
     #[serde(default)]
     pub elicitation_confirmed: Option<bool>,
@@ -59,12 +60,12 @@ fn parse_signal(s: &str) -> SubstrateResult<Signal> {
         let n: i32 = s.parse().map_err(|_| SubstrateError::InvalidArgument {
             offending_field: "signal".to_owned(),
             reason: format!("numeric signal '{s}' is out of range"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         })?;
         return Signal::try_from(n).map_err(|_| SubstrateError::InvalidArgument {
             offending_field: "signal".to_owned(),
             reason: format!("no signal with number {n}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         });
     } else {
         format!("SIG{upper}")
@@ -75,7 +76,7 @@ fn parse_signal(s: &str) -> SubstrateResult<Signal> {
         .map_err(|_| SubstrateError::InvalidArgument {
             offending_field: "signal".to_owned(),
             reason: format!("unknown signal '{s}'"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         })
 }
 
@@ -91,7 +92,7 @@ fn pid_exists(pid: Pid) -> SubstrateResult<bool> {
         Err(Errno::ESRCH) => Ok(false),
         Err(e) => Err(SubstrateError::InternalError {
             reason: format!("kill(pid, 0) returned unexpected errno {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         }),
     }
 }
@@ -100,7 +101,7 @@ fn pid_exists(pid: Pid) -> SubstrateResult<bool> {
 ///
 /// Gate order (ADR-0004 / ADR-0035):
 ///   1. Dry-run preview (returns early with no OS mutation when `dry_run != false`).
-///   2. Elicitation confirmation for destructive signals (SIGKILL/SIGTERM/SIGSTOP).
+///   2. Elicitation confirmation for destructive signals (SIGKILL/SIGSTOP).
 ///   3. PID allowlist check (blocks PID 0, 1, 2).
 ///   4. PID existence probe via `kill(pid, 0)`.
 ///   5. Signal delivery.
@@ -157,7 +158,7 @@ pub async fn handle_proc_signal(
         // error path they are attached to the error context by the caller.
         let _hints = build_elicitation_hints(req.pid, &format!("{sig}"));
         return Err(SubstrateError::ConfirmationRequired {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         });
     }
 
@@ -169,8 +170,8 @@ pub async fn handle_proc_signal(
     // Gate 4: PID existence check via kill(2) sig=0.
     if !pid_exists(pid)? {
         return Err(SubstrateError::NotFound {
-            resource: format!("process PID {}", req.pid),
-            correlation_id: None,
+            resource: format!("process PID {} does not exist", req.pid),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         });
     }
 
@@ -180,15 +181,15 @@ pub async fn handle_proc_signal(
         match e {
             Errno::EPERM => SubstrateError::PermissionDenied {
                 path: format!("process PID {}", req.pid),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             },
             Errno::ESRCH => SubstrateError::NotFound {
-                resource: format!("process PID {} (exited before signal)", req.pid),
-                correlation_id: None,
+                resource: format!("process PID {} does not exist (exited before signal)", req.pid),
+                correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             },
             other => SubstrateError::InternalError {
                 reason: format!("kill({}, {sig}) failed: {other}", req.pid),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             },
         }
     })?;
@@ -259,21 +260,17 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn sigterm_without_elicitation_returns_confirmation_required() {
-        let own_pid = std::process::id();
-        let req = ProcSignalRequest {
-            pid: own_pid,
-            signal: "SIGTERM".to_owned(),
-            dry_run: Some(false),
-            elicitation_confirmed: Some(false), // explicitly false
-        };
-        let err = handle_proc_signal(req, deps())
-            .await
-            .expect_err("should require confirmation");
+    #[test]
+    fn sigterm_is_not_classified_as_destructive() {
+        // SIGTERM is NOT in the destructive set per the feature spec
+        // (proc-signal-sigkill-requires-elicitation.feature, Scenario 3):
+        // "SIGTERM does not require elicitation".
+        // Validate via the policy function directly to avoid actually
+        // delivering SIGTERM to the test process.
+        use nix::sys::signal::Signal;
         assert!(
-            matches!(err, SubstrateError::ConfirmationRequired { .. }),
-            "expected ConfirmationRequired, got {err:?}"
+            !crate::signal_policy::is_destructive(Signal::SIGTERM),
+            "SIGTERM must not be classified as destructive"
         );
     }
 

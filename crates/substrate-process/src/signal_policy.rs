@@ -13,11 +13,15 @@ use nix::sys::signal::Signal;
 /// Destructive signals are those whose effect on the target process is
 /// irreversible from the agent's perspective:
 /// - `SIGKILL` — forced termination, no cleanup possible.
-/// - `SIGTERM` — polite termination request; still stops the process.
 /// - `SIGSTOP` — pauses the process until resumed; disrupts real-time work.
+///
+/// `SIGTERM` is intentionally excluded: it is a polite termination request
+/// that the target process may ignore, making it recoverable in practice.
+/// The feature spec (`proc-signal-sigkill-requires-elicitation.feature`)
+/// explicitly states "SIGTERM does not require elicitation".
 #[must_use]
 pub const fn is_destructive(sig: Signal) -> bool {
-    matches!(sig, Signal::SIGKILL | Signal::SIGTERM | Signal::SIGSTOP)
+    matches!(sig, Signal::SIGKILL | Signal::SIGSTOP)
 }
 
 /// Returns `true` when `sig` is signal 0 (existence probe, not a real signal).
@@ -42,12 +46,13 @@ mod tests {
     #[test]
     fn destructive_signals_classified_correctly() {
         assert!(is_destructive(Signal::SIGKILL));
-        assert!(is_destructive(Signal::SIGTERM));
         assert!(is_destructive(Signal::SIGSTOP));
     }
 
     #[test]
     fn non_destructive_signals_not_classified_as_destructive() {
+        // SIGTERM is intentionally non-destructive per feature spec.
+        assert!(!is_destructive(Signal::SIGTERM));
         assert!(!is_destructive(Signal::SIGHUP));
         assert!(!is_destructive(Signal::SIGUSR1));
         assert!(!is_destructive(Signal::SIGUSR2));

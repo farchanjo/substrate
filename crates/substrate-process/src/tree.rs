@@ -35,6 +35,7 @@ const DEFAULT_MAX_NODES: usize = 500;
 
 /// Input parameters for `proc.tree`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcTreeRequest {
     /// Root PID for the tree. Defaults to `1` (init/launchd).
     #[serde(default)]

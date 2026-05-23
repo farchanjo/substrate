@@ -30,6 +30,7 @@ const MAX_PAGE_SIZE: usize = 1_000;
 
 /// Input parameters for `proc.list`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcListRequest {
     /// Filter: only return processes whose `name` matches this glob pattern.
     /// Uses simple substring containment (case-insensitive) in the MVP;
