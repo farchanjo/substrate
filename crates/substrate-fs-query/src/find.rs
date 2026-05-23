@@ -34,6 +34,9 @@ use tracing::instrument;
 
 use substrate_domain::{JailedPath, PathJailPort, SubstrateError, SubstrateResult};
 
+#[cfg(unix)]
+use libc;
+
 use crate::hint_helpers::build_hints;
 use crate::response::{FsQueryDeps, ToolResponse};
 
@@ -138,6 +141,28 @@ pub async fn handle_fs_find(
             correlation_id: None,
         })?;
 
+    // Pre-jail path traversal detection (ADR-0004, ADR-0035).
+    // Reject any path that contains literal ".." components or URL-encoded
+    // traversal sequences (%2e%2e, case-insensitive) before doing any I/O.
+    {
+        let raw_str = req.root.as_str();
+        let lower = raw_str.to_ascii_lowercase();
+        if lower.contains("%2e%2e") {
+            return Err(SubstrateError::PathTraversalBlocked {
+                path: req.root.clone(),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            });
+        }
+        for component in std::path::Path::new(raw_str).components() {
+            if component == std::path::Component::ParentDir {
+                return Err(SubstrateError::PathTraversalBlocked {
+                    path: req.root.clone(),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                });
+            }
+        }
+    }
+
     // Jail the root path.
     let raw_root = std::path::Path::new(&req.root).to_path_buf();
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
@@ -199,16 +224,35 @@ pub async fn handle_fs_find(
 
             let entry = match result {
                 Ok(e) => e,
-                Err(err) => {
-                    let _ = tx.blocking_send(Err(SubstrateError::IoError {
-                        path: err.to_string(),
-                        correlation_id: None,
-                    }));
-                    continue;
+                Err(ref err) => {
+                    let _ = tx.blocking_send(Err(walker_err_to_substrate(err)));
+                    break;
                 },
             };
 
             let path = entry.path();
+
+            // Explicit symlink loop detection: `ignore::WalkBuilder` with
+            // follow_links(false) does NOT detect cycles. For each symlink entry,
+            // call std::fs::metadata() (follows the full chain) to detect ELOOP.
+            let is_symlink = entry.file_type().is_some_and(|ft| ft.is_symlink());
+            if is_symlink {
+                match std::fs::metadata(path) {
+                    Ok(_) => { /* valid target, continue processing */ },
+                    Err(ref e) => {
+                        #[cfg(unix)]
+                        if e.raw_os_error() == Some(libc::ELOOP) {
+                            let _ = tx.blocking_send(Err(SubstrateError::SymlinkLoop {
+                                path: path.display().to_string(),
+                                correlation_id: Some(uuid::Uuid::now_v7()),
+                            }));
+                            break;
+                        }
+                        // Broken symlink, permission denied, or non-ELOOP error — skip.
+                        continue;
+                    },
+                }
+            }
 
             // Apply glob to the file name only.
             let matches_glob = path.file_name().is_none_or(|name| glob.is_match(name));
@@ -325,6 +369,32 @@ pub async fn handle_fs_find(
     });
 
     Ok(ToolResponse::with_hints(content, structured_content, hints))
+}
+
+// ---- Walker error mapping ---------------------------------------------------
+
+/// Maps an `ignore::Error` from the walker to a `SubstrateError`.
+///
+/// On Unix, checks for `ELOOP` (symlink cycle) via the raw OS error code and
+/// returns `SymlinkLoop`.  All other I/O errors become `IoError`.
+fn walker_err_to_substrate(err: &ignore::Error) -> SubstrateError {
+    #[cfg(unix)]
+    if let Some(io_err) = err.io_error() {
+        if io_err.raw_os_error() == Some(libc::ELOOP) {
+            return SubstrateError::SymlinkLoop {
+                path: err.to_string(),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            };
+        }
+        return SubstrateError::IoError {
+            path: err.to_string(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        };
+    }
+    SubstrateError::IoError {
+        path: err.to_string(),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    }
 }
 
 // ---- Cursor helpers ---------------------------------------------------------

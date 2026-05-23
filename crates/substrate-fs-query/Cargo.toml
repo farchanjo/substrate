@@ -42,6 +42,7 @@ arc-swap    = { workspace = true }
 time        = { workspace = true }
 sha2        = { workspace = true }
 num_cpus    = { workspace = true }
+uuid        = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
