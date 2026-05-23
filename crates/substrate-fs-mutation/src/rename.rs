@@ -32,6 +32,13 @@ use crate::response::{FsMutationDeps, ToolResponse};
 
 /// Input parameters for `fs.rename`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "request struct carries distinct boolean gate flags required by the ADR-0004 layered \
+              security model; collapsing them into an enum would complicate serde deserialization \
+              from the MCP JSON wire format without any safety benefit"
+)]
 pub struct FsRenameRequest {
     /// Source path (must exist and be within the allowlist).
     pub src: String,
@@ -52,6 +59,12 @@ pub struct FsRenameRequest {
     /// [`SubstrateError::ConfirmationRequired`] when `false`.
     #[serde(default)]
     pub confirmed: bool,
+
+    /// Compatibility alias accepted by MCP clients that send a single combined
+    /// confirmation flag. When `true`, implies both `dry_run_acknowledged` and
+    /// `confirmed`. Ignored when `false` (individual fields take precedence).
+    #[serde(default)]
+    pub elicitation_confirmed: bool,
 }
 
 // ---- Handler -----------------------------------------------------------------
@@ -76,10 +89,14 @@ pub async fn handle_fs_rename(
     let jailed_dst = jail_dst_path(&req.dst, deps, allowlist_root)?;
 
     // Layer 3: dry-run gate.
-    elicitation::require_dry_run_acknowledged(req.dry_run_acknowledged)?;
+    // `elicitation_confirmed=true` is accepted as a combined confirmation alias
+    // that satisfies both the dry-run and elicitation gates in a single field.
+    let dry_run_ok = req.dry_run_acknowledged || req.elicitation_confirmed;
+    elicitation::require_dry_run_acknowledged(dry_run_ok)?;
 
     // Layer 4: elicitation gate.
-    elicitation::require_confirmation(req.confirmed)?;
+    let confirmed_ok = req.confirmed || req.elicitation_confirmed;
+    elicitation::require_confirmation(confirmed_ok)?;
 
     // Overwrite guard.
     if !req.overwrite && jailed_dst.as_path().exists() {
@@ -208,6 +225,7 @@ mod tests {
             overwrite: false,
             dry_run_acknowledged: false,
             confirmed: true,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
@@ -225,6 +243,7 @@ mod tests {
             overwrite: false,
             dry_run_acknowledged: true,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
@@ -243,6 +262,7 @@ mod tests {
             overwrite: false,
             dry_run_acknowledged: true,
             confirmed: true,
+            elicitation_confirmed: false,
         };
         handle_fs_rename(req, &deps, &root).await.expect("rename");
         assert!(!src.exists());
@@ -260,6 +280,7 @@ mod tests {
             overwrite: true,
             dry_run_acknowledged: true,
             confirmed: true,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
         assert!(
@@ -284,6 +305,7 @@ mod tests {
             overwrite: true,
             dry_run_acknowledged: true,
             confirmed: true,
+            elicitation_confirmed: false,
         };
         handle_fs_rename(req, &deps, &root).await.expect("rename with overwrite");
         assert!(!src.exists());

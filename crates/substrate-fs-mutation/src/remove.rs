@@ -43,6 +43,13 @@ use crate::response::{FsMutationDeps, ToolResponse};
 
 /// Input parameters for `fs.remove`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "request struct carries distinct boolean gate flags required by the ADR-0004 layered \
+              security model; collapsing them into an enum would complicate serde deserialization \
+              from the MCP JSON wire format without any safety benefit"
+)]
 pub struct FsRemoveRequest {
     /// Path of the file or directory to remove (within the allowlist).
     pub path: String,
@@ -61,6 +68,12 @@ pub struct FsRemoveRequest {
     /// with `recursive: false` returns `SUBSTRATE_INVALID_ARGUMENT`.
     #[serde(default)]
     pub recursive: bool,
+
+    /// Compatibility alias accepted by MCP clients that send a single combined
+    /// confirmation flag. When `true`, implies both `dry_run_acknowledged` and
+    /// `confirmed`. Ignored when `false` (individual fields take precedence).
+    #[serde(default)]
+    pub elicitation_confirmed: bool,
 }
 
 // ---- Handler -----------------------------------------------------------------
@@ -84,10 +97,14 @@ pub async fn handle_fs_remove(
     let jailed = deps.jail.jail(allowlist_root, Path::new(&req.path))?;
 
     // Layer 3: dry-run gate.
-    elicitation::require_dry_run_acknowledged(req.dry_run_acknowledged)?;
+    // `elicitation_confirmed=true` is accepted as a combined confirmation alias
+    // that satisfies both the dry-run and elicitation gates in a single field.
+    let dry_run_ok = req.dry_run_acknowledged || req.elicitation_confirmed;
+    elicitation::require_dry_run_acknowledged(dry_run_ok)?;
 
     // Layer 4: elicitation gate.
-    elicitation::require_confirmation(req.confirmed)?;
+    let confirmed_ok = req.confirmed || req.elicitation_confirmed;
+    elicitation::require_confirmation(confirmed_ok)?;
 
     let is_dir = jailed.as_path().is_dir();
 
@@ -225,6 +242,7 @@ mod tests {
             dry_run_acknowledged: false,
             confirmed: true,
             recursive: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_remove(req, &deps, &root).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
@@ -241,6 +259,7 @@ mod tests {
             dry_run_acknowledged: true,
             confirmed: false,
             recursive: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_remove(req, &deps, &root).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
@@ -257,6 +276,7 @@ mod tests {
             dry_run_acknowledged: true,
             confirmed: true,
             recursive: false,
+            elicitation_confirmed: false,
         };
         handle_fs_remove(req, &deps, &root).await.expect("remove");
         assert!(!f.exists());
@@ -273,6 +293,7 @@ mod tests {
             dry_run_acknowledged: true,
             confirmed: true,
             recursive: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_remove(req, &deps, &root).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
@@ -293,6 +314,7 @@ mod tests {
             dry_run_acknowledged: true,
             confirmed: true,
             recursive: true,
+            elicitation_confirmed: false,
         };
         handle_fs_remove(req, &deps, &root)
             .await
@@ -311,6 +333,7 @@ mod tests {
             dry_run_acknowledged: true,
             confirmed: true,
             recursive: false,
+            elicitation_confirmed: false,
         };
         handle_fs_remove(req, &deps, &root)
             .await

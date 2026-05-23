@@ -31,6 +31,7 @@ use crate::response::{FsMutationDeps, ToolResponse};
 
 /// Input parameters for `fs.symlink`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsSymlinkRequest {
     /// The path where the symlink entry is created (parent must be in allowlist).
     pub link_path: String,

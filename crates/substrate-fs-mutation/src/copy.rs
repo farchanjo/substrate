@@ -32,6 +32,7 @@ use crate::tmp_path::TmpPath;
 
 /// Input parameters for `fs.copy`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsCopyRequest {
     /// Source file path (must exist and be within the allowlist).
     pub src: String,

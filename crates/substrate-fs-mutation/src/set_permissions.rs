@@ -41,13 +41,58 @@ const ELICITATION_MASK: u32 = 0o4000 | 0o2000 | 0o002;
 
 // ---- Request -----------------------------------------------------------------
 
+/// Deserialize `mode` from either a JSON number (decimal `u32`) or an octal
+/// string literal such as `"0755"` or `"0o755"`.
+///
+/// Strings are parsed as octal (base 8) after stripping any `0o`/`0O` prefix
+/// so that callers can pass modes in the conventional shell notation.
+fn deserialize_mode<'de, D>(de: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ModeVisitor;
+
+    impl serde::de::Visitor<'_> for ModeVisitor {
+        type Value = u32;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a u32 or an octal string like \"0755\"")
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u32, E> {
+            u32::try_from(v).map_err(|_| E::custom("mode value out of range for u32"))
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<u32, E> {
+            u32::try_from(v).map_err(|_| E::custom("mode value out of range for u32"))
+        }
+
+        fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<u32, E> {
+            let stripped = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")).unwrap_or(s);
+            // Detect plain leading-zero octal strings like "0755".
+            let (base, digits) = if stripped.len() > 1 && stripped.starts_with('0') {
+                (8u32, &stripped[1..])
+            } else {
+                (8u32, stripped)
+            };
+            u32::from_str_radix(digits, base)
+                .map_err(|_| E::custom(format!("invalid octal mode string: {s:?}")))
+        }
+    }
+
+    de.deserialize_any(ModeVisitor)
+}
+
 /// Input parameters for `fs.set_permissions`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsSetPermissionsRequest {
     /// Target path (must be within the allowlist).
     pub path: String,
 
-    /// POSIX permission bitmask (e.g., `0o755` represented as decimal `493`).
+    /// POSIX permission bitmask. Accepted as a decimal `u32` (e.g., `493` for
+    /// `0o755`) or as an octal string literal (e.g., `"0755"` or `"0o755"`).
+    #[serde(deserialize_with = "deserialize_mode")]
     pub mode: u32,
 
     /// Must be explicitly set to `true` to proceed past the dry-run gate.
@@ -59,6 +104,12 @@ pub struct FsSetPermissionsRequest {
     /// ADR-0004 Layer 4.
     #[serde(default)]
     pub confirmed: bool,
+
+    /// Compatibility alias accepted by MCP clients that send a single combined
+    /// confirmation flag. When `true`, implies both `dry_run_acknowledged` and
+    /// `confirmed`. Ignored when `false` (individual fields take precedence).
+    #[serde(default)]
+    pub elicitation_confirmed: bool,
 }
 
 // ---- Handler -----------------------------------------------------------------
@@ -82,11 +133,15 @@ pub async fn handle_fs_set_permissions(
     let jailed = deps.jail.jail(allowlist_root, Path::new(&req.path))?;
 
     // Layer 3: dry-run gate.
-    elicitation::require_dry_run_acknowledged(req.dry_run_acknowledged)?;
+    // `elicitation_confirmed=true` is accepted as a combined confirmation alias
+    // that satisfies both the dry-run and elicitation gates in a single field.
+    let dry_run_ok = req.dry_run_acknowledged || req.elicitation_confirmed;
+    elicitation::require_dry_run_acknowledged(dry_run_ok)?;
 
     // Layer 4: elicitation gate — setuid, setgid, or world-writable bits.
+    let confirmed_ok = req.confirmed || req.elicitation_confirmed;
     if req.mode & ELICITATION_MASK != 0 {
-        elicitation::require_confirmation(req.confirmed)?;
+        elicitation::require_confirmation(confirmed_ok)?;
     }
 
     // Zone B: blocking chmod via nix.
@@ -177,6 +232,7 @@ mod tests {
             mode: 0o644,
             dry_run_acknowledged: false,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -194,6 +250,7 @@ mod tests {
             mode: 0o777,
             dry_run_acknowledged: true,
             confirmed: false, // missing confirmation for world-writable
+            elicitation_confirmed: false,
         };
         let err = handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -211,6 +268,7 @@ mod tests {
             mode: 0o644,
             dry_run_acknowledged: true,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -235,6 +293,7 @@ mod tests {
             mode: 0o600,
             dry_run_acknowledged: true,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -260,6 +319,7 @@ mod tests {
             mode: 0o4755, // setuid + rwxr-xr-x
             dry_run_acknowledged: true,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -277,6 +337,7 @@ mod tests {
             mode: 0o2755, // setgid + rwxr-xr-x
             dry_run_acknowledged: true,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -294,6 +355,7 @@ mod tests {
             mode: 0o4755,
             dry_run_acknowledged: true,
             confirmed: true,
+            elicitation_confirmed: false,
         };
         handle_fs_set_permissions(req, &deps, &root)
             .await
@@ -308,6 +370,7 @@ mod tests {
             mode: 0o644,
             dry_run_acknowledged: true,
             confirmed: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_set_permissions(req, &deps, &root)
             .await

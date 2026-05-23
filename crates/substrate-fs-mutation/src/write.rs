@@ -51,6 +51,7 @@ pub enum WriteEncoding {
 
 /// Input parameters for `fs.write`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsWriteRequest {
     /// Target file path (caller-supplied; validated against the allowlist).
     pub path: String,

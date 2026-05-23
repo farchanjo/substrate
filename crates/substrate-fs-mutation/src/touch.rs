@@ -27,6 +27,7 @@ use crate::response::{FsMutationDeps, ToolResponse};
 
 /// Input parameters for `fs.touch`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsTouchRequest {
     /// Target path. Created if absent; timestamps updated if it exists.
     pub path: String,

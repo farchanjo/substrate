@@ -22,6 +22,7 @@ use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
+use crate::elicitation;
 use crate::hints_helpers;
 use crate::response::{FsMutationDeps, ToolResponse};
 
@@ -107,6 +108,7 @@ fn jail_for_new_path(
 
 /// Input parameters for `fs.mkdir`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsMkdirRequest {
     /// Target directory path (caller-supplied; validated against the allowlist).
     pub path: String,
@@ -118,6 +120,12 @@ pub struct FsMkdirRequest {
     /// When `true` (default), return a preview without modifying disk.
     #[serde(default = "default_true")]
     pub dry_run: bool,
+
+    /// Explicit elicitation confirmation gate required when `dry_run=false`.
+    /// Returns [`SubstrateError::DryRunRequired`] when `false` and `dry_run=false`.
+    /// Defaults to `false` so that callers must opt in explicitly.
+    #[serde(default)]
+    pub elicitation_confirmed: bool,
 }
 
 const fn default_true() -> bool {
@@ -148,6 +156,11 @@ pub async fn handle_fs_mkdir(
     if req.dry_run {
         return Ok(dry_run_response(&jailed));
     }
+
+    // Elicitation gate: when proceeding past dry-run, require explicit confirmation.
+    // `elicitation_confirmed=false` + `dry_run=false` → DRY_RUN_REQUIRED so that
+    // callers are guided to review the dry-run plan before committing.
+    elicitation::require_dry_run_acknowledged(req.elicitation_confirmed)?;
 
     // Zone A: async-native directory creation.
     if req.parents {
@@ -242,6 +255,7 @@ mod tests {
             path: target.display().to_string(),
             parents: true,
             dry_run: true,
+            elicitation_confirmed: false,
         };
         let resp = handle_fs_mkdir(req, &deps, &root).await.expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
@@ -256,6 +270,7 @@ mod tests {
             path: target.display().to_string(),
             parents: true,
             dry_run: false,
+            elicitation_confirmed: true,
         };
         handle_fs_mkdir(req, &deps, &root).await.expect("mkdir");
         assert!(target.is_dir(), "directory must be created");
@@ -268,6 +283,7 @@ mod tests {
             path: "/outside/jail".into(),
             parents: false,
             dry_run: false,
+            elicitation_confirmed: false,
         };
         let err = handle_fs_mkdir(req, &deps, &root).await.unwrap_err();
         assert!(
