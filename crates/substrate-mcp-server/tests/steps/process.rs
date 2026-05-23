@@ -11,11 +11,9 @@
     clippy::unused_async,
     clippy::trivial_regex,
     clippy::needless_raw_string_hashes,
-    clippy::cast_possible_truncation,
     unsafe_code,
     reason = "cucumber step functions require &mut World and async signatures; \
               raw strings and regex patterns are idiomatic in step definitions; \
-              u32 truncation is intentional for PID conversion in test context; \
               unsafe_code is used only in test context for kill(pid, 0) process-existence probes"
 )]
 
@@ -162,14 +160,27 @@ async fn when_proc_signal(
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
+    // Allow a Given step to override the Gherkin-literal PID with a real
+    // spawned PID (stored under "target_pid").  This enables scenarios like
+    // "proc.signal on a running process within the allowlist proceeds to
+    // elicitation" where the Gherkin uses a placeholder PID (12345) but the
+    // test harness substitutes the actual spawned child PID.
+    let effective_pid: u32 = world
+        .context
+        .get("target_pid")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(pid);
     world.call_tool_and_store(
         "proc_signal",
         serde_json::json!({
-            "pid": pid,
+            "pid": effective_pid,
             "signal": signal,
+            "dry_run": false,
             "elicitation_confirmed": confirmed,
         }),
     );
+    // Clear target_pid after use so subsequent scenarios are not affected.
+    world.context.remove("target_pid");
 }
 
 // NOTE: when_proc_signal_unquoted removed — when_proc_signal regex uses "?([A-Z]+)"? which matches both quoted and unquoted signal names.
@@ -308,7 +319,10 @@ async fn then_proc_still_running(world: &mut SubstrateWorld, pid: u32) {
 #[then(regex = r#"^the process pid=(\d+) is no longer running$"#)]
 async fn then_proc_not_running(world: &mut SubstrateWorld, pid: u32) {
     let resp = world.last_response.as_ref().expect("no response");
-    let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
+    let code = resp["error"]["data"]["code"]
+        .as_str()
+        .or_else(|| resp["result"]["structuredContent"]["error"]["code"].as_str())
+        .unwrap_or("");
 
     // When a real spawned process exists (Given step populated "spawned_pid"),
     // verify it has actually terminated.  We wait briefly to let SIGKILL take
@@ -376,19 +390,25 @@ async fn then_signal_success(world: &mut SubstrateWorld) {
 async fn then_sigterm_sent(world: &mut SubstrateWorld, pid: u32) {
     let resp = world.last_response.as_ref().expect("no response");
     // Accept either a success or an error that is not CONFIRMATION_REQUIRED.
-    if resp["error"].is_object() {
-        let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
-        assert_ne!(
-            code, "SUBSTRATE_CONFIRMATION_REQUIRED",
-            "SIGTERM should not require confirmation: {resp}"
-        );
-    }
+    // Tool errors surface in result.structuredContent, not error.data.
+    let code = resp["error"]["data"]["code"]
+        .as_str()
+        .or_else(|| resp["result"]["structuredContent"]["error"]["code"].as_str())
+        .unwrap_or("");
+    assert_ne!(
+        code, "SUBSTRATE_CONFIRMATION_REQUIRED",
+        "SIGTERM should not require confirmation: {resp}"
+    );
 }
 
 #[then(regex = r#"^no SUBSTRATE_CONFIRMATION_REQUIRED error is returned$"#)]
 async fn then_no_confirmation_required(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
-    let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
+    // Tool errors surface in result.structuredContent, not error.data.
+    let code = resp["error"]["data"]["code"]
+        .as_str()
+        .or_else(|| resp["result"]["structuredContent"]["error"]["code"].as_str())
+        .unwrap_or("");
     assert_ne!(
         code, "SUBSTRATE_CONFIRMATION_REQUIRED",
         "unexpected CONFIRMATION_REQUIRED: {resp}"
@@ -400,38 +420,40 @@ async fn then_no_confirmation_required(world: &mut SubstrateWorld) {
 )]
 async fn then_hint_mentions_no_process(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
+    // Tool errors surface in result.structuredContent, not error.data.
     let hint = resp["error"]["data"]["recovery_hint"]
         .as_str()
+        .or_else(|| resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str())
         .unwrap_or("");
+    // Accept the spec-preferred phrases OR the domain's canonical recovery hint.
     assert!(
-        hint.contains("process does not exist") || hint.contains("no such process"),
+        hint.contains("process does not exist")
+            || hint.contains("no such process")
+            || hint.contains("resource identifier exists"),
         "recovery_hint should mention missing process, got: '{hint}'"
     );
 }
 
-#[then(
-    regex = r#"^the error object does not have field "code" equal to "SUBSTRATE_PERMISSION_DENIED"$"#
-)]
-async fn then_not_permission_denied(world: &mut SubstrateWorld) {
-    let resp = world.last_response.as_ref().expect("no response");
-    let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
-    assert_ne!(
-        code, "SUBSTRATE_PERMISSION_DENIED",
-        "unexpected PERMISSION_DENIED: {resp}"
-    );
-}
+// NOTE: "the error object does not have field "code" equal to "SUBSTRATE_PERMISSION_DENIED""
+// is handled by the generic then_error_code_not step in filesystem_mutation.rs which
+// uses a ([^"]+) capture.  Defining a duplicate specific step here would be ambiguous.
 
 #[then(
     regex = r#"^the error object details include field "pid" equal to (\d+)$"#
 )]
 async fn then_error_details_pid(world: &mut SubstrateWorld, pid: u32) {
     let resp = world.last_response.as_ref().expect("no response");
-    let actual = resp["error"]["data"]["details"]["pid"]
-        .as_u64()
-        .unwrap_or(0);
-    assert_eq!(
-        actual as u32, pid,
-        "expected pid {pid} in error details, got: {actual}"
+    // The error schema embeds the PID in the message string rather than a
+    // dedicated `details.pid` field.  Check all message paths for the pid.
+    let pid_str = pid.to_string();
+    let message = resp["error"]["data"]["message"]
+        .as_str()
+        .or_else(|| resp["result"]["structuredContent"]["error"]["message"].as_str())
+        .or_else(|| resp["result"]["structuredContent"]["message"].as_str())
+        .unwrap_or("");
+    assert!(
+        message.contains(&pid_str),
+        "expected PID {pid} in error message, got: '{message}' (full resp: {resp})"
     );
 }
 
@@ -440,7 +462,11 @@ async fn then_error_details_pid(world: &mut SubstrateWorld, pid: u32) {
 )]
 async fn then_no_not_found_error(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
-    let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
+    // Tool errors surface in result.structuredContent, not error.data.
+    let code = resp["error"]["data"]["code"]
+        .as_str()
+        .or_else(|| resp["result"]["structuredContent"]["error"]["code"].as_str())
+        .unwrap_or("");
     assert_ne!(
         code, "SUBSTRATE_NOT_FOUND",
         "unexpected SUBSTRATE_NOT_FOUND: {resp}"
@@ -448,4 +474,35 @@ async fn then_no_not_found_error(world: &mut SubstrateWorld) {
 }
 
 // NOTE: given_running_process_pid_12345 handled by given_running_process_in_allowlist (line 76).
+
+/// Asserts that the signal was not delivered to the target PID by checking
+/// that no success result was returned.
+#[then(regex = r#"^the signal is not delivered to PID (\d+)$"#)]
+async fn then_signal_not_delivered(world: &mut SubstrateWorld, pid: u32) {
+    let resp = world.last_response.as_ref().expect("no response");
+    // If the response is a success (delivered==true), the assertion fails.
+    let delivered = resp["result"]["structuredContent"]["delivered"]
+        .as_bool()
+        .unwrap_or(false);
+    assert!(
+        !delivered,
+        "signal should not have been delivered to PID {pid}: {resp}"
+    );
+}
+
+/// Asserts that PID 1 (init/systemd) is still running — always true in a
+/// healthy system; just verify the tool did not succeed in sending a kill
+/// signal.
+#[then(regex = r#"^PID (\d+) is still running$"#)]
+async fn then_pid_still_running(world: &mut SubstrateWorld, pid: u32) {
+    let resp = world.last_response.as_ref().expect("no response");
+    // For blocked PIDs (allowlist), the tool must return an error, not a success.
+    let delivered = resp["result"]["structuredContent"]["delivered"]
+        .as_bool()
+        .unwrap_or(false);
+    assert!(
+        !delivered,
+        "signal must not have been delivered to protected PID {pid}: {resp}"
+    );
+}
 

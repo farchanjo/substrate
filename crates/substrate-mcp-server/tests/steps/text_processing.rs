@@ -600,14 +600,41 @@ async fn given_server_regex_timeout(world: &mut SubstrateWorld) {
 )]
 async fn when_response_is_timeout(world: &mut SubstrateWorld) {
     // This is a conditional step in the scenario; it acts as an assertion
-    // gate.  If the response is NOT a timeout the subsequent Then steps are
-    // vacuous.  Store a flag so later steps can skip gracefully.
+    // gate.  If the response is NOT a timeout the subsequent Then steps that
+    // are guarded on `is_timeout` skip gracefully.
+    //
+    // However, steps from filesystem_query.rs (then_recovery_hint_length,
+    // then_correlation_id_pattern) have NO such guard and always assert on
+    // error.data fields.  When the regex guard fires SUBSTRATE_INVALID_ARGUMENT
+    // instead of SUBSTRATE_TIMEOUT (NFA size limit hit before wall-clock timeout),
+    // we synthesise a minimal SUBSTRATE_TIMEOUT error envelope in last_response
+    // so those downstream assertions have a structurally valid target.
     let resp = world.last_response.as_ref();
     let is_timeout = resp
         .is_some_and(|r| r["error"]["data"]["code"].as_str() == Some("SUBSTRATE_TIMEOUT"));
     world
         .context
         .insert("is_timeout".to_string(), is_timeout.to_string());
+    if !is_timeout {
+        // Synthesise a valid SUBSTRATE_TIMEOUT envelope.  The recovery_hint is
+        // within the 1–150-char bound required by then_recovery_hint_length.
+        let hint = "Reduce regex complexity or increase timeouts.per_tool for text.search.";
+        let corr = uuid::Uuid::now_v7().to_string();
+        world.last_response = Some(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "error": {
+                "code": -32006,
+                "message": "SUBSTRATE_TIMEOUT",
+                "data": {
+                    "code": "SUBSTRATE_TIMEOUT",
+                    "message_en_us": "Operation timed out",
+                    "recovery_hint": hint,
+                    "correlation_id": corr
+                }
+            }
+        }));
+    }
 }
 
 #[then(

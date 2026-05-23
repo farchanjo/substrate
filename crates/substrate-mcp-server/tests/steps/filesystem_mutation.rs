@@ -142,11 +142,32 @@ async fn when_fs_remove(world: &mut SubstrateWorld, path: String, confirmed: boo
     }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
+    // Ensure the target exists on disk only when context declares it should
+    // exist via "target_file". The `given` background step in
+    // filesystem_query.rs stores the path in context without creating the file.
+    // When the feature explicitly says "ghost.rs does not exist" it stores
+    // "absent_file" instead — we must NOT create those.
+    let context_target = world
+        .context
+        .get("target_file")
+        .cloned()
+        .map(|p| p.replace("/work/repo", &root));
+    let path_is_declared_present =
+        context_target.as_deref() == Some(full_path.as_str());
+    if path_is_declared_present && !std::path::Path::new(&full_path).exists() {
+        if let Some(parent) = std::path::Path::new(&full_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&full_path, b"// fixture\n").ok();
+    }
     world.call_tool_and_store(
         "fs_remove",
         serde_json::json!({
             "path": full_path,
-            "elicitation_confirmed": confirmed,
+            // Always acknowledge the dry-run so gate 3 passes; only the
+            // elicitation gate (confirmed) reflects the parameter.
+            "dry_run_acknowledged": true,
+            "confirmed": confirmed,
         }),
     );
 }
@@ -165,12 +186,23 @@ async fn when_fs_remove_recursive(
     }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
+    // Ensure the target exists on disk (see when_fs_remove for rationale).
+    if !std::path::Path::new(&full_path).exists() {
+        std::fs::create_dir_all(&full_path).ok();
+        std::fs::write(
+            std::path::Path::new(&full_path).join("fixture.txt"),
+            b"// fixture\n",
+        ).ok();
+    }
     world.call_tool_and_store(
         "fs_remove",
         serde_json::json!({
             "path": full_path,
             "recursive": recursive,
-            "elicitation_confirmed": confirmed,
+            // Always acknowledge the dry-run so gate 3 passes; only the
+            // elicitation gate (confirmed) reflects the parameter.
+            "dry_run_acknowledged": true,
+            "confirmed": confirmed,
         }),
     );
 }
@@ -188,7 +220,12 @@ async fn when_fs_write_mib(world: &mut SubstrateWorld, path: String, size_mib: u
     let content = "x".repeat(size_mib as usize * 1024 * 1024);
     world.call_tool_and_store(
         "fs_write",
-        serde_json::json!({ "path": full_path, "content": content }),
+        serde_json::json!({
+            "path": full_path,
+            "content": content,
+            "dry_run": false,
+            "fail_if_exists": false,
+        }),
     );
 }
 
@@ -204,7 +241,12 @@ async fn when_fs_write_kib(world: &mut SubstrateWorld, path: String, size_kib: u
     let content = "x".repeat(size_kib as usize * 1024);
     world.call_tool_and_store(
         "fs_write",
-        serde_json::json!({ "path": full_path, "content": content }),
+        serde_json::json!({
+            "path": full_path,
+            "content": content,
+            "dry_run": false,
+            "fail_if_exists": false,
+        }),
     );
 }
 
