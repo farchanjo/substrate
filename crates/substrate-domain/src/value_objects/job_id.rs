@@ -6,7 +6,7 @@
 //! Per ADR-0040 triple-equality invariant: `job_id == progressToken == correlation_id`.
 //! The Crockford base32 encoding is time-ordered and monotonic within a millisecond.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::errors::{SubstrateError, SubstrateResult};
@@ -19,7 +19,11 @@ const CROCKFORD_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// Implements the ADR-0040 triple-equality invariant: a `JobId` is simultaneously
 /// the job identifier, the MCP `progressToken`, and the `correlation_id` for
 /// the request chain.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Serialization: Crockford base32 string (26 uppercase chars).
+/// Deserialization: accepts Crockford base32 (26 chars) or standard UUID
+/// hyphenated format (for interoperability with clients that use the UUID form).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobId(Uuid);
 
 impl JobId {
@@ -158,6 +162,32 @@ const fn crockford_digit(b: u8) -> Option<u8> {
 impl std::fmt::Display for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.to_crockford())
+    }
+}
+
+impl Serialize for JobId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_crockford())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for JobId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+        // Accept Crockford base32 (26 chars) — primary format.
+        if s.len() == 26 {
+            return Self::parse_crockford(&s).map_err(serde::de::Error::custom);
+        }
+        // Accept standard UUID hyphenated or compact format for interoperability.
+        s.parse::<Uuid>()
+            .map(Self::from_uuid)
+            .map_err(|e| serde::de::Error::custom(format!("invalid job_id format: {e}")))
     }
 }
 

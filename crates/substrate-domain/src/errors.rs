@@ -453,7 +453,7 @@ impl SubstrateError {
             },
             Self::JobNotFound { .. } => "Verify job_id; expired jobs cannot be recovered.",
             Self::QuotaExceeded { .. } => {
-                "Wait for active jobs to complete or cancel an existing job."
+                "Per-client (max_per_client) or global (max_concurrent) cap reached. Cancel a job or wait."
             },
             Self::JobCancelled { .. } => "Retry the operation if cancellation was unintended.",
             Self::JobTimedOut { .. } => "Increase timeout or split the work into smaller units.",
