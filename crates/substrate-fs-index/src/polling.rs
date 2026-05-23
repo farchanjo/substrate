@@ -9,7 +9,7 @@
 //! - `tokio::time::interval` for TTL-based periodic rebuilds (Layer 3).
 //! - Write-through updates via `WriteThroughHandle` (Layer 1).
 //!
-//! A `tracing::warn!` is emitted at construction time noting the degraded
+//! A `tracing::info!` is emitted at construction time noting the degraded
 //! performance posture relative to the native tiers.
 
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub(crate) struct PortablePollingIndex {
 }
 
 impl PortablePollingIndex {
-    /// Constructs a new `PortablePollingIndex` and emits a startup warning.
+    /// Constructs a new `PortablePollingIndex` and emits a startup info message.
     ///
     /// The warning communicates to operators that the native-tier index is
     /// unavailable on this platform or kernel, and that index performance
@@ -50,7 +50,7 @@ impl PortablePollingIndex {
     /// Wired by `FsIndexFactory::build` when the `fs-index` feature is active.
     #[must_use]
     pub(crate) fn new() -> Arc<Self> {
-        tracing::warn!(
+        tracing::info!(
             tier = "portable",
             "FsIndex is using the portable polling tier; \
              native-tier (linux-statx, macos-getattrlistbulk) is unavailable. \

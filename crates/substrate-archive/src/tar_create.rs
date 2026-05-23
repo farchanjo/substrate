@@ -61,6 +61,7 @@ impl std::fmt::Display for TarCompression {
 
 /// Input parameters for `archive.tar.create`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TarCreateRequest {
     /// Jailed source paths to include in the archive.
     pub sources: Vec<String>,

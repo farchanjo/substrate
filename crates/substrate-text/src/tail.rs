@@ -39,6 +39,7 @@ const CHUNK_SIZE: usize = 8 * 1024; // 8 KiB
 
 /// Input parameters for `text.tail`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TailParams {
     /// Absolute path to the file to read.
     pub path: String,

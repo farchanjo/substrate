@@ -45,6 +45,7 @@ const CANCEL_CHECK_INTERVAL: usize = 256;
 
 /// Input parameters for `text.search`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchParams {
     /// Absolute path to the file or directory to search.
     /// When a directory is given, all files under it are scanned recursively.

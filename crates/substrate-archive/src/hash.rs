@@ -62,6 +62,7 @@ impl std::fmt::Display for HashAlgorithm {
 
 /// Input parameters for `archive.hash`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ArchiveHashRequest {
     /// Archive file path within the allowlist.
     pub path: String,

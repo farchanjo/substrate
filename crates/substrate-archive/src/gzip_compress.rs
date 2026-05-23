@@ -28,6 +28,7 @@ use crate::tmp_path::TmpPath;
 
 /// Input parameters for `archive.gzip.compress`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GzipCompressRequest {
     /// Source file path within the allowlist.
     /// Also accepts `src` as an alias for compatibility with step implementations.

@@ -28,6 +28,7 @@ use crate::tmp_path::TmpPath;
 
 /// Input parameters for `archive.zip.create`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ZipCreateRequest {
     /// Jailed source paths to include in the archive.
     pub sources: Vec<String>,

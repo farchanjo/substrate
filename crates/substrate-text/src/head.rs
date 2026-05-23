@@ -32,6 +32,7 @@ pub const MAX_LINES: usize = 1000;
 
 /// Input parameters for `text.head`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HeadParams {
     /// Absolute path to the file to read.
     pub path: String,

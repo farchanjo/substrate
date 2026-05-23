@@ -33,6 +33,7 @@ const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB per read
 
 /// Input parameters for `text.count_lines`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CountLinesParams {
     /// Absolute path to the file to measure.
     pub path: String,

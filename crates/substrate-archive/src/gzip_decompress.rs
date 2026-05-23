@@ -36,6 +36,7 @@ use crate::tmp_path::TmpPath;
 
 /// Input parameters for `archive.gzip.decompress`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GzipDecompressRequest {
     /// Source `.gz` file path within the allowlist.
     pub source: String,

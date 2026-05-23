@@ -38,6 +38,7 @@ use crate::zip_slip_guard::validate_member_path;
 
 /// Input parameters for `archive.zip.extract`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ZipExtractRequest {
     /// Path to the ZIP archive within the allowlist.
     pub archive: String,

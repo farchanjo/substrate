@@ -34,6 +34,7 @@ use crate::zip_slip_guard::validate_member_path;
 
 /// Input parameters for `archive.tar.extract`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TarExtractRequest {
     /// Path to the TAR (or TAR.GZ) archive within the allowlist.
     pub archive: String,
