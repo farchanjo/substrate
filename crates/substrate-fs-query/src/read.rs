@@ -47,6 +47,7 @@ pub enum ReadEncoding {
 
 /// Inbound request for `fs.read`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsReadRequest {
     /// Path to the file to read; must be within an allowlist root.
     pub path: String,
@@ -71,6 +72,10 @@ pub struct FsReadRequest {
 ///
 /// Propagates any [`SubstrateError`] from jail validation, metadata I/O,
 /// encoding errors, or when the requested byte range exceeds the inline limit.
+#[expect(
+    clippy::too_many_lines,
+    reason = "handle_fs_read orchestrates jail, special-file detection, range slicing, encoding, and hints in one cohesive Zone-A handler"
+)]
 #[instrument(skip(deps, _cancel), fields(path = %req.path))]
 pub async fn handle_fs_read(
     req: FsReadRequest,
@@ -90,16 +95,23 @@ pub async fn handle_fs_read(
         correlation_id: None,
     })??;
 
-    // Read the file metadata first to check size.
-    let meta = tokio::fs::metadata(jailed.as_path())
+    // Use symlink_metadata (lstat semantics) so that FIFOs and sockets are
+    // detected without following them — following a FIFO blocks indefinitely.
+    let meta = tokio::fs::symlink_metadata(jailed.as_path())
         .await
         .map_err(|e| map_io_err(e, &req.path))?;
 
-    if !meta.is_file() {
+    // Reject special files (FIFO, socket, device) before attempting to open.
+    let ft = meta.file_type();
+    if ft.is_symlink() || !ft.is_file() {
+        let file_type_str = classify_file_type(ft);
         return Err(SubstrateError::InvalidArgument {
             offending_field: "path".to_owned(),
-            reason: "path does not point to a regular file".to_owned(),
-            correlation_id: None,
+            reason: format!(
+                "path does not point to a regular file; target is a {file_type_str}. \
+                 regular files only"
+            ),
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
@@ -181,8 +193,16 @@ pub async fn handle_fs_read(
         false,
     );
 
+    // Include a short content preview in the narrative text so that
+    // model-facing `content[0].text` carries the actual data for small files
+    // (≤ 256 bytes). The structured content always carries the full payload.
+    let preview_snippet = if used_encoding == "text" && actual_size <= 256 {
+        format!(" | content: {encoded_content}")
+    } else {
+        String::new()
+    };
     let content = format!(
-        "USE: read file content\nDOES: returned {actual_size} bytes ({used_encoding})\nNEXT: fs.stat, fs.hash\nAVOID: reading binary as text → use encoding:base64"
+        "USE: read file content\nDOES: returned {actual_size} bytes ({used_encoding}){preview_snippet}\nNEXT: fs.stat, fs.hash\nAVOID: reading binary as text → use encoding:base64"
     );
 
     let structured_content = json!({
@@ -197,6 +217,36 @@ pub async fn handle_fs_read(
     Ok(ToolResponse::with_hints(content, structured_content, hints))
 }
 
+/// Returns a human-readable name for a file type.
+///
+/// On Unix, distinguishes FIFOs and sockets via [`FileTypeExt`].
+/// On non-Unix, only the standard `is_dir` / `is_symlink` variants are available.
+fn classify_file_type(ft: std::fs::FileType) -> &'static str {
+    if ft.is_dir() {
+        return "directory";
+    }
+    if ft.is_symlink() {
+        return "symlink";
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt as _;
+        if ft.is_fifo() {
+            return "fifo";
+        }
+        if ft.is_socket() {
+            return "socket";
+        }
+        if ft.is_block_device() {
+            return "block device";
+        }
+        if ft.is_char_device() {
+            return "char device";
+        }
+    }
+    "special"
+}
+
 #[expect(
     clippy::needless_pass_by_value,
     reason = "std::io::Error is the conventional error-mapping pattern; taking by value avoids lifetime annotation at call sites"
@@ -206,15 +256,15 @@ fn map_io_err(e: std::io::Error, path: &str) -> SubstrateError {
     match e.kind() {
         ErrorKind::NotFound => SubstrateError::NotFound {
             resource: path.to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         },
         ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
             path: path.to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         },
         _ => SubstrateError::IoError {
             path: path.to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         },
     }
 }

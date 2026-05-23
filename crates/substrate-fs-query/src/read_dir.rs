@@ -38,6 +38,7 @@ const DEFAULT_PAGE_SIZE: u32 = 100;
 
 /// Inbound request for `fs.read_dir`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsReadDirRequest {
     /// The directory to list; must be within an allowlist root.
     pub path: String,

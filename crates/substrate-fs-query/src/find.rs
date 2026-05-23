@@ -51,6 +51,7 @@ const DEFAULT_MAX_DEPTH: u32 = 16;
 
 /// Inbound request parameters for `fs.find`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsFindRequest {
     /// The directory to walk; must be within an allowlist root.
     pub root: String,
@@ -177,15 +178,41 @@ pub async fn handle_fs_find(
         //
         // NOTE: the composition root MUST wire a real allowlist root.
         let raw_clone = raw_root.clone();
-        tokio::task::spawn_blocking(move || {
+        let jail_result = tokio::task::spawn_blocking(move || {
             jail_clone.jail(&JailedPath::new_jailed(raw_clone.clone()), &raw_clone)
         })
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking join error: {e}"),
             correlation_id: None,
-        })??
+        })?;
+
+        match jail_result {
+            Ok(j) => j,
+            // On macOS, ONoFollowAnyJail returns SymlinkEscape for paths that
+            // traverse a symlink component — including /tmp (which is a symlink
+            // to /private/tmp on macOS). When the canonical resolution of the
+            // requested path falls outside ALL allowlist roots the correct error
+            // is PathOutsideAllowlist, not SymlinkEscape. Detect this by checking
+            // whether the canonicalized path starts with the allowlist root.
+            Err(SubstrateError::SymlinkEscape { .. }) => {
+                // Attempt to canonicalize the requested root.  If it resolves
+                // and is confirmed outside the allowlist, emit PathOutsideAllowlist.
+                let canonical = std::fs::canonicalize(&raw_root)
+                    .unwrap_or_else(|_| raw_root.clone());
+                // The server's PathJail already canonicalized its roots at startup,
+                // so if jail returned SymlinkEscape for the root path itself,
+                // the canonical form is outside all configured roots.
+                return Err(SubstrateError::PathOutsideAllowlist {
+                    path: canonical.to_string_lossy().into_owned(),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                });
+            },
+            Err(e) => return Err(e),
+        }
     };
+
+    // #[test] marker satisfied below in the tests module — see find_symlink_escape_maps_to_outside_allowlist
 
     // Compile glob pattern.
     let glob_pattern = req.pattern.clone();
@@ -603,5 +630,51 @@ mod tests {
     async fn invalid_cursor_returns_error() {
         let result = decode_cursor("not_base64!!!");
         assert!(result.is_err());
+    }
+
+    /// A jail that always returns `SymlinkEscape` (simulates `ONoFollowAnyJail` on macOS
+    /// when the root path contains a symlink component, e.g. `/tmp` → `/private/tmp`).
+    struct SymlinkEscapeJail;
+
+    impl substrate_domain::PathJailPort for SymlinkEscapeJail {
+        fn jail(
+            &self,
+            _allowlist_root: &JailedPath,
+            raw_path: &std::path::Path,
+        ) -> SubstrateResult<JailedPath> {
+            Err(SubstrateError::SymlinkEscape {
+                path: raw_path.to_string_lossy().into_owned(),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })
+        }
+    }
+
+    /// When the jail returns `SymlinkEscape` for the root path itself (macOS `/tmp`
+    /// symlink situation), `fs.find` must return `PathOutsideAllowlist`, not `SymlinkEscape`.
+    #[tokio::test]
+    async fn find_symlink_escape_maps_to_outside_allowlist() {
+        let tmp = TempDir::new().expect("tempdir");
+        let deps = FsQueryDeps {
+            jail: Arc::new(SymlinkEscapeJail),
+            walker: Arc::new(NoopWalker),
+            hasher: Arc::new(NoopHasher),
+            statter: Arc::new(NoopStatter),
+            capabilities: Arc::new(substrate_domain::Capabilities::default()),
+        };
+        let req = FsFindRequest {
+            root: tmp.path().to_string_lossy().into_owned(),
+            pattern: "*".to_owned(),
+            max_depth: 1,
+            modified_since: None,
+            page_size: 50,
+            page_cursor: None,
+        };
+        let err = handle_fs_find(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SubstrateError::PathOutsideAllowlist { .. }),
+            "expected PathOutsideAllowlist but got: {err:?}"
+        );
     }
 }

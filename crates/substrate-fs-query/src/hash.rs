@@ -68,6 +68,7 @@ impl std::fmt::Display for HashAlgorithm {
 
 /// Inbound request for `fs.hash`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FsHashRequest {
     /// Path to the file to hash; must be within an allowlist root.
     pub path: String,
