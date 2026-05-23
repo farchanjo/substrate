@@ -6,10 +6,16 @@
 //! same filesystem. Cross-filesystem moves require a copy+remove sequence —
 //! that pattern is not supported here; callers should use `fs.copy` + `fs.remove`.
 //!
-//! # Dry-run
+//! # Security: elicitation gate (ADR-0004 Layer 4)
 //!
-//! When `dry_run = true`, returns a preview of the intended rename without
-//! touching disk. The handler checks the dry-run gate per ADR-0004 Layer 3.
+//! `fs.rename` is a destructive operation — it can silently overwrite an
+//! existing destination. The handler enforces two gates:
+//!
+//! 1. **Dry-run gate** — `dry_run_acknowledged` must be `true` before any disk
+//!    state is modified. First call with `false` returns a preview.
+//! 2. **Elicitation gate** — `confirmed` must be `true`. A `false` value
+//!    returns [`SubstrateError::ConfirmationRequired`] so the composition root
+//!    emits an MCP elicitation request to the human operator.
 
 use std::path::Path;
 
@@ -41,6 +47,11 @@ pub struct FsRenameRequest {
     /// First call with `false` returns a dry-run preview.
     #[serde(default)]
     pub dry_run_acknowledged: bool,
+
+    /// Explicit human-confirmation token. Returns
+    /// [`SubstrateError::ConfirmationRequired`] when `false`.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 // ---- Handler -----------------------------------------------------------------
@@ -49,8 +60,11 @@ pub struct FsRenameRequest {
 ///
 /// # Errors
 ///
-/// Propagates any [`SubstrateError`] from jail validation, dry-run gate, or
-/// `tokio::fs::rename`.
+/// - [`SubstrateError::DryRunRequired`] — `dry_run_acknowledged` is `false`.
+/// - [`SubstrateError::ConfirmationRequired`] — `confirmed` is `false`.
+/// - [`SubstrateError::InvalidArgument`] — `dst` already exists and `overwrite`
+///   is `false`.
+/// - Other [`SubstrateError`] variants from jail validation or `tokio::fs::rename`.
 #[instrument(skip(deps), fields(src = %req.src, dst = %req.dst))]
 pub async fn handle_fs_rename(
     req: FsRenameRequest,
@@ -62,9 +76,10 @@ pub async fn handle_fs_rename(
     let jailed_dst = jail_dst_path(&req.dst, deps, allowlist_root)?;
 
     // Layer 3: dry-run gate.
-    if !req.dry_run_acknowledged {
-        elicitation::require_dry_run_acknowledged(false)?;
-    }
+    elicitation::require_dry_run_acknowledged(req.dry_run_acknowledged)?;
+
+    // Layer 4: elicitation gate.
+    elicitation::require_confirmation(req.confirmed)?;
 
     // Overwrite guard.
     if !req.overwrite && jailed_dst.as_path().exists() {
@@ -192,6 +207,7 @@ mod tests {
             dst: dir.path().join("b.txt").display().to_string(),
             overwrite: false,
             dry_run_acknowledged: false,
+            confirmed: true,
         };
         let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
@@ -199,7 +215,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renames_file_with_acknowledged_dry_run() {
+    async fn elicitation_gate_blocks_without_confirmation() {
+        let (dir, root, deps) = make_test_env();
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, b"data").expect("seed");
+        let req = FsRenameRequest {
+            src: src.display().to_string(),
+            dst: dir.path().join("b.txt").display().to_string(),
+            overwrite: false,
+            dry_run_acknowledged: true,
+            confirmed: false,
+        };
+        let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
+        assert!(src.exists(), "source must still exist");
+    }
+
+    #[tokio::test]
+    async fn renames_file_with_both_gates_open() {
         let (dir, root, deps) = make_test_env();
         let src = dir.path().join("a.txt");
         std::fs::write(&src, b"data").expect("seed");
@@ -209,6 +242,7 @@ mod tests {
             dst: dst.display().to_string(),
             overwrite: false,
             dry_run_acknowledged: true,
+            confirmed: true,
         };
         handle_fs_rename(req, &deps, &root).await.expect("rename");
         assert!(!src.exists());
@@ -225,6 +259,7 @@ mod tests {
             dst: "/tmp/__substrate_rename_escape_test".into(),
             overwrite: true,
             dry_run_acknowledged: true,
+            confirmed: true,
         };
         let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
         assert!(
@@ -248,6 +283,7 @@ mod tests {
             dst: dst.display().to_string(),
             overwrite: true,
             dry_run_acknowledged: true,
+            confirmed: true,
         };
         handle_fs_rename(req, &deps, &root).await.expect("rename with overwrite");
         assert!(!src.exists());

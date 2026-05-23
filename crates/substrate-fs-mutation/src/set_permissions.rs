@@ -4,11 +4,19 @@
 //!
 //! Uses `tokio::task::spawn_blocking` wrapping `nix::sys::stat::chmod`.
 //!
-//! # Security: elicitation gate for world-writable targets (ADR-0004 Layer 4)
+//! # Security: elicitation gate for privileged-mode targets (ADR-0004 Layer 4)
 //!
-//! When the requested mode includes world-writable bits (`0o002`), the handler
-//! requires elicitation confirmation before proceeding. Dry-run gate is enforced
-//! for all invocations per ADR-0004 Layer 3.
+//! When the requested mode includes any of the following bits, the handler
+//! requires elicitation confirmation before proceeding:
+//!
+//! - **setuid** (`0o4000`) — executing user acquires file owner identity.
+//! - **setgid** (`0o2000`) — executing user acquires file group identity.
+//! - **world-writable** (`0o002`) — any user may overwrite the file.
+//!
+//! Setting `0o4755` on a binary inside the allowlist without confirmation
+//! would create an unconfirmed privilege-escalation path.
+//!
+//! Dry-run gate is enforced for all invocations per ADR-0004 Layer 3.
 
 use std::path::Path;
 
@@ -23,8 +31,13 @@ use crate::response::{FsMutationDeps, ToolResponse};
 
 // ---- Constants ---------------------------------------------------------------
 
-/// POSIX world-writable bit mask.
-const WORLD_WRITABLE_MASK: u32 = 0o002;
+/// Mask of POSIX mode bits that require elicitation confirmation before being
+/// applied:
+///
+/// - `0o4000` — setuid: process runs with file-owner privileges.
+/// - `0o2000` — setgid: process runs with file-group privileges.
+/// - `0o002`  — world-writable: any user may overwrite the file.
+const ELICITATION_MASK: u32 = 0o4000 | 0o2000 | 0o002;
 
 // ---- Request -----------------------------------------------------------------
 
@@ -41,8 +54,9 @@ pub struct FsSetPermissionsRequest {
     #[serde(default)]
     pub dry_run_acknowledged: bool,
 
-    /// Required when `mode` sets world-writable bits. Provides elicitation
-    /// confirmation per ADR-0004 Layer 4.
+    /// Required when `mode` sets setuid (`0o4000`), setgid (`0o2000`), or
+    /// world-writable (`0o002`) bits. Provides elicitation confirmation per
+    /// ADR-0004 Layer 4.
     #[serde(default)]
     pub confirmed: bool,
 }
@@ -54,7 +68,9 @@ pub struct FsSetPermissionsRequest {
 /// # Errors
 ///
 /// - [`SubstrateError::DryRunRequired`] — `dry_run_acknowledged` is `false`.
-/// - [`SubstrateError::ConfirmationRequired`] — world-writable mode and `confirmed` is `false`.
+/// - [`SubstrateError::ConfirmationRequired`] — `mode` includes setuid
+///   (`0o4000`), setgid (`0o2000`), or world-writable (`0o002`) bits and
+///   `confirmed` is `false`.
 /// - Other [`SubstrateError`] variants from jail validation or `nix`.
 #[instrument(skip(deps), fields(path = %req.path, mode = req.mode))]
 pub async fn handle_fs_set_permissions(
@@ -68,8 +84,8 @@ pub async fn handle_fs_set_permissions(
     // Layer 3: dry-run gate.
     elicitation::require_dry_run_acknowledged(req.dry_run_acknowledged)?;
 
-    // Layer 4: elicitation gate for world-writable.
-    if req.mode & WORLD_WRITABLE_MASK != 0 {
+    // Layer 4: elicitation gate — setuid, setgid, or world-writable bits.
+    if req.mode & ELICITATION_MASK != 0 {
         elicitation::require_confirmation(req.confirmed)?;
     }
 
@@ -232,6 +248,56 @@ mod tests {
         // lstat the LINK itself — symlink mode is fixed at 0o777 on macOS/Linux.
         let link_lstat = std::fs::symlink_metadata(&link).expect("lstat link");
         assert!(link_lstat.file_type().is_symlink(), "link must still be a symlink");
+    }
+
+    #[tokio::test]
+    async fn setuid_bit_requires_confirmation() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("target.txt");
+        std::fs::write(&f, b"data").expect("seed");
+        let req = FsSetPermissionsRequest {
+            path: f.display().to_string(),
+            mode: 0o4755, // setuid + rwxr-xr-x
+            dry_run_acknowledged: true,
+            confirmed: false,
+        };
+        let err = handle_fs_set_permissions(req, &deps, &root)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
+    }
+
+    #[tokio::test]
+    async fn setgid_bit_requires_confirmation() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("target.txt");
+        std::fs::write(&f, b"data").expect("seed");
+        let req = FsSetPermissionsRequest {
+            path: f.display().to_string(),
+            mode: 0o2755, // setgid + rwxr-xr-x
+            dry_run_acknowledged: true,
+            confirmed: false,
+        };
+        let err = handle_fs_set_permissions(req, &deps, &root)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
+    }
+
+    #[tokio::test]
+    async fn setuid_passes_with_confirmation() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("target.txt");
+        std::fs::write(&f, b"data").expect("seed");
+        let req = FsSetPermissionsRequest {
+            path: f.display().to_string(),
+            mode: 0o4755,
+            dry_run_acknowledged: true,
+            confirmed: true,
+        };
+        handle_fs_set_permissions(req, &deps, &root)
+            .await
+            .expect("chmod 0o4755 with confirmation");
     }
 
     #[tokio::test]
