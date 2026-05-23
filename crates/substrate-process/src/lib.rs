@@ -26,6 +26,7 @@
 
 pub mod hints_helpers;
 pub mod list;
+pub mod pid_allowlist;
 pub mod process_info;
 pub mod scanner;
 pub mod signal;

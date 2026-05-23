@@ -346,6 +346,14 @@ impl ProcessScannerPort for LinuxProcessScanner {
                 .is_ok()
         {
             self.populate_baseline_sample()?;
+            // TODO(perf): the 100 ms sleep here produces a meaningful CPU delta on
+            // the very first scan but burns a `spawn_blocking` thread slot.
+            // A better approach is to cache a startup-time baseline via
+            // `std::sync::LazyLock` keyed to the boot-tick and diff against it,
+            // eliminating the sleep entirely. Deferred because it requires
+            // refactoring `populate_baseline_sample` to write into a shared
+            // `LazyLock<Mutex<Sample>>` instead of `self.last_sample`, which is
+            // a non-trivial change to scanner state ownership.
             std::thread::sleep(Duration::from_millis(100));
             // Fall through to the normal scan path; last_sample is now populated
             // so the delta computation will yield non-zero results.
