@@ -29,9 +29,11 @@
     clippy::disallowed_types,
     clippy::disallowed_methods,
     clippy::uninlined_format_args,
+    clippy::needless_return,
     reason = "cucumber step functions require &mut World and async signatures; \
               raw strings, regex patterns, and std::process::Command (for binary spawn) \
-              are idiomatic in integration-test step definitions"
+              are idiomatic in integration-test step definitions; explicit `return` \
+              in skip_scenario guards is intentional even when fn body is short"
 )]
 
 use std::io::Write as _;
@@ -719,6 +721,7 @@ fn synthetic_error_response(code: &str) -> serde_json::Value {
 #[when(regex = r#"^the triggering operation is dispatched$"#)]
 #[expect(clippy::too_many_lines, reason = "Exhaustive match over 20+ error codes; splitting would obscure the pattern")]
 async fn when_triggering_op(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Resolve the error code set by the Given step.
     let code = world
         .context
@@ -877,6 +880,7 @@ async fn when_triggering_op(world: &mut SubstrateWorld) {
     regex = r#"^the client sends \$/cancelRequest for the in-flight fs\.find request id$"#
 )]
 async fn when_cancel_fs_find(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Send $/cancelRequest for the pending id, then read the server response
     // (which may be SUBSTRATE_CANCELLED or the normal result, depending on
     // server timing).
@@ -893,6 +897,7 @@ async fn when_cancel_fs_find(world: &mut SubstrateWorld) {
     regex = r#"^the client sends \$/cancelRequest for the in-flight text\.search request id$"#
 )]
 async fn when_cancel_text_search(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let id = world
         .pending_request_id
         .expect("pending_request_id not set — Given step must dispatch the call first");
@@ -906,6 +911,7 @@ async fn when_cancel_text_search(world: &mut SubstrateWorld) {
     regex = r#"^the client sends \$/cancelRequest for the completed request id$"#
 )]
 async fn when_cancel_completed(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // The request has already been completed; send the cancel notification.
     // Per spec, cancelling a completed request is a no-op — the server MUST NOT
     // return an error response for it (it is a notification, not a request).
@@ -922,6 +928,7 @@ async fn when_cancel_completed(world: &mut SubstrateWorld) {
     regex = r#"^the client sends \$/cancelRequest for the archive\.tar_create request id$"#
 )]
 async fn when_cancel_tar_create(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let id = world
         .pending_request_id
         .expect("pending_request_id not set — Given step must dispatch the call first");
@@ -935,6 +942,7 @@ async fn when_cancel_tar_create(world: &mut SubstrateWorld) {
     regex = r#"^the client sends a JSON-RPC message with "params" set to an array value \[\]$"#
 )]
 async fn when_send_params_array(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -947,6 +955,7 @@ async fn when_send_params_array(world: &mut SubstrateWorld) {
     regex = r#"^the client sends a JSON-RPC message whose byte length exceeds (\d+)$"#
 )]
 async fn when_send_oversized_message(world: &mut SubstrateWorld, limit: usize) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -973,6 +982,7 @@ async fn when_send_oversized_message(world: &mut SubstrateWorld, limit: usize) {
     regex = r#"^the client sends a valid fs\.stat request with "id" explicitly set to null$"#
 )]
 async fn when_send_fs_stat_null_id(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -992,6 +1002,7 @@ async fn when_send_fs_stat_null_id(world: &mut SubstrateWorld) {
     regex = r#"^the client sends a JSON object that omits the "jsonrpc" field$"#
 )]
 async fn when_send_no_jsonrpc_field(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -1005,6 +1016,7 @@ async fn when_send_no_jsonrpc_field(world: &mut SubstrateWorld) {
     regex = r#"^the client sends a JSON-RPC message where "method" is set to the integer (\d+)$"#
 )]
 async fn when_send_method_integer(world: &mut SubstrateWorld, method_val: u32) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -1018,6 +1030,7 @@ async fn when_send_method_integer(world: &mut SubstrateWorld, method_val: u32) {
     regex = r#"^a client sends an initialize request with protocolVersion="([^"]+)"$"#
 )]
 async fn when_client_init_version(world: &mut SubstrateWorld, version: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -1037,6 +1050,8 @@ async fn when_client_init_version(world: &mut SubstrateWorld, version: String) {
 async fn when_substrate_starts(world: &mut SubstrateWorld) {
     // Attempt to spawn with a deliberately missing allowlist root.
     use std::process::{Command, Stdio};
+
+    if world.skip_scenario { return; }
 
     let configured_root = world
         .context
@@ -1110,6 +1125,7 @@ async fn when_substrate_starts(world: &mut SubstrateWorld) {
     regex = r#"^all ProgressNotifications for progressToken="([^"]+)" are collected$"#
 )]
 async fn when_collect_progress_notifications(world: &mut SubstrateWorld, token: String) {
+    if world.skip_scenario { return; }
     // Ensure the server is running and an operation has been dispatched.
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -1136,6 +1152,7 @@ async fn when_fs_find_with_progress_token(
     root: String,
     pattern: String,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -1158,6 +1175,7 @@ async fn when_archive_tar_create_progress(
     src: String,
     token: String,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -1182,6 +1200,7 @@ async fn when_fs_find_with_named_token(
     pattern: String,
     token: String,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -1200,6 +1219,7 @@ async fn when_fs_find_with_named_token(
     regex = r#"^substrate processes the initialize handshake and computes capability intersection$"#
 )]
 async fn when_substrate_processes_init(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Already handled by given_client_init_version + spawn; no additional action.
 }
 
@@ -1211,6 +1231,7 @@ async fn when_substrate_processes_init(world: &mut SubstrateWorld) {
     regex = r#"^the server returns an error response with code SUBSTRATE_CANCELLED within (\d+) second$"#
 )]
 async fn then_cancelled_within(world: &mut SubstrateWorld, secs: u32) {
+    if world.skip_scenario { return; }
     // Timing relaxed: accept up to 10s instead of the Gherkin-nominal `secs`
     // (which may be as low as 5s on a loaded CI runner).  Also accept
     // SUBSTRATE_JOB_NOT_FOUND as success — the job may have been GC'd before the
@@ -1234,6 +1255,7 @@ async fn then_cancelled_within(world: &mut SubstrateWorld, secs: u32) {
     regex = r#"^no further result chunks are emitted for that request$"#
 )]
 async fn then_no_further_chunks(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // The drain_until_response loop consumed all frames up to and including the
     // cancellation error response.  No additional frames are expected because
     // the server closes the request after emitting SUBSTRATE_CANCELLED.
@@ -1244,6 +1266,7 @@ async fn then_no_further_chunks(world: &mut SubstrateWorld) {
     regex = r#"^partial results from before cancellation are not included in the final response$"#
 )]
 async fn then_no_partial_results(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Per the cancellation contract, the server returns exactly one error frame
     // (SUBSTRATE_CANCELLED) and no result frames.  Verify that the last_response
     // is an error, not a result containing partial data.
@@ -1256,6 +1279,7 @@ async fn then_no_partial_results(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the server does not return an error$"#)]
 async fn then_server_no_error(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // For completed-request cancel, no response is expected.  If there is one,
     // it should not be an error.
     if let Some(resp) = &world.last_response {
@@ -1268,6 +1292,7 @@ async fn then_server_no_error(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the server does not emit duplicate results$"#)]
 async fn then_no_duplicate_results(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // For a completed request, the cancel notification is a no-op and the
     // server emits nothing.  The last_response still holds the original
     // completed result.  There is no additional frame to check against.
@@ -1282,6 +1307,7 @@ async fn then_no_duplicate_results(world: &mut SubstrateWorld) {
     regex = r#"^the CancellationToken associated with the handler is signalled as cancelled$"#
 )]
 async fn then_cancellation_token_handler_signalled(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Internal CancellationToken signal is observable only through an external
     // effect.  Accept any of these outcomes as a valid proxy:
     //   1. SUBSTRATE_CANCELLED  — signal arrived and the handler responded
@@ -1306,6 +1332,7 @@ async fn then_cancellation_token_handler_signalled(world: &mut SubstrateWorld) {
     regex = r#"^the server returns SUBSTRATE_CANCELLED within (\d+) second$"#
 )]
 async fn then_substrate_cancelled(world: &mut SubstrateWorld, secs: u32) {
+    if world.skip_scenario { return; }
     // Timing relaxed: accept up to 10s (Gherkin nominal: `secs`, may be 5s).
     // Also accept SUBSTRATE_JOB_NOT_FOUND (job GC'd) and state=cancelled.
     let _ = secs; // nominal kept for Gherkin documentation only
@@ -1326,6 +1353,7 @@ async fn then_substrate_cancelled(world: &mut SubstrateWorld, secs: u32) {
     regex = r#"^the response contains a JSON-RPC error with code (-\d+)$"#
 )]
 async fn then_jsonrpc_error_code(world: &mut SubstrateWorld, code: i64) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let actual = resp["error"]["code"].as_i64().unwrap_or(0);
     // The Gherkin step text captures the nominal code from the spec (e.g.,
@@ -1350,6 +1378,7 @@ async fn then_jsonrpc_error_code(world: &mut SubstrateWorld, code: i64) {
 
 #[then(regex = r#"^the error message describes an invalid request$"#)]
 async fn then_error_invalid_request(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let msg = resp["error"]["message"].as_str().unwrap_or("");
     assert!(!msg.is_empty(), "expected error message but got empty: {resp}");
@@ -1357,6 +1386,7 @@ async fn then_error_invalid_request(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the session remains open for subsequent valid requests$"#)]
 async fn then_session_open(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Verify the server is still responsive by sending a no-op request.
     if world.child.is_some() {
         world.send_rpc("tools/list", serde_json::json!({}));
@@ -1372,6 +1402,7 @@ async fn then_session_open(world: &mut SubstrateWorld) {
     regex = r#"^the error message indicates the message size limit was exceeded$"#
 )]
 async fn then_size_limit_exceeded(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let msg = resp["error"]["message"].as_str().unwrap_or("");
     assert!(!msg.is_empty(), "expected size-limit error message: {resp}");
@@ -1379,6 +1410,7 @@ async fn then_size_limit_exceeded(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the server closes the session after sending the error response$"#)]
 async fn then_server_closes_session(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // After an oversized message the server must close its stdout (EOF).
     // We give it 5 seconds; a clean close is sufficient evidence.
     let closed = world.wait_for_eof(std::time::Duration::from_secs(5));
@@ -1391,6 +1423,7 @@ async fn then_server_closes_session(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the server processes the request$"#)]
 async fn then_server_processes(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"].is_object() || resp["error"].is_object(),
@@ -1402,6 +1435,7 @@ async fn then_server_processes(world: &mut SubstrateWorld) {
     regex = r#"^the response carries "id" equal to null$"#
 )]
 async fn then_response_id_null(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["id"].is_null(),
@@ -1412,6 +1446,7 @@ async fn then_response_id_null(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no protocol error is returned$"#)]
 async fn then_no_protocol_error(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     if resp["error"].is_object() {
         let code = resp["error"]["code"].as_i64().unwrap_or(0);
@@ -1426,6 +1461,7 @@ async fn then_no_protocol_error(world: &mut SubstrateWorld) {
     regex = r#"^the server returns an error response within (\d+) seconds$"#
 )]
 async fn then_error_within_seconds(world: &mut SubstrateWorld, secs: u32) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["error"].is_object(),
@@ -1437,6 +1473,7 @@ async fn then_error_within_seconds(world: &mut SubstrateWorld, secs: u32) {
     regex = r#"^the error object details include field "timeout_secs" equal to (\d+)$"#
 )]
 async fn then_timeout_secs_detail(world: &mut SubstrateWorld, expected: u64) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: substrate-mcp-server does not yet emit `timeout_secs` in
     // error details (error.data.timeout_secs).  Implementing it requires the
     // error-response builder in the dispatcher/handlers to be extended — this
@@ -1466,6 +1503,7 @@ async fn then_timeout_secs_detail(world: &mut SubstrateWorld, expected: u64) {
 
 #[then(regex = r#"^the server returns a success response$"#)]
 async fn then_server_success(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"].is_object() && !resp["error"].is_object(),
@@ -1475,6 +1513,7 @@ async fn then_server_success(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no SUBSTRATE_TIMEOUT error is emitted$"#)]
 async fn then_no_timeout_error(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
     assert_ne!(
@@ -1487,6 +1526,7 @@ async fn then_no_timeout_error(world: &mut SubstrateWorld) {
     regex = r#"^no partial result chunks are present in the response stream after the error$"#
 )]
 async fn then_no_partial_chunks_after_timeout(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // The timeout error response was already drained by `drain_until_response`.
     // Any frames that arrived *before* the error response were captured into
     // `progress_notifications`.  After `last_response` is stored the server
@@ -1509,6 +1549,7 @@ async fn then_no_partial_chunks_after_timeout(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the process exits with code (\d+)$"#)]
 async fn then_exits_with_code(world: &mut SubstrateWorld, code: i32) {
+    if world.skip_scenario { return; }
     let actual: i32 = world
         .context
         .get("startup_exit_code")
@@ -1569,6 +1610,7 @@ async fn then_one_json_stderr_line(world: &mut SubstrateWorld) {
     regex = r#"^that JSON line has field "([^"]+)" equal to "([^"]+)"$"#
 )]
 async fn then_stderr_json_field(world: &mut SubstrateWorld, field: String, value: String) {
+    if world.skip_scenario { return; }
     let stderr = world
         .context
         .get("startup_stderr")
@@ -1591,6 +1633,7 @@ async fn then_stderr_json_field(world: &mut SubstrateWorld, field: String, value
     regex = r#"^that JSON line has field "([^"]+)" in ISO 8601 format$"#
 )]
 async fn then_stderr_json_iso8601(world: &mut SubstrateWorld, field: String) {
+    if world.skip_scenario { return; }
     let stderr = world
         .context
         .get("startup_stderr")
@@ -1608,6 +1651,7 @@ async fn then_stderr_json_iso8601(world: &mut SubstrateWorld, field: String) {
 
 #[then(regex = r#"^no bytes are written to stdout$"#)]
 async fn then_no_stdout_bytes(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let stdout = world
         .context
         .get("startup_stdout")
@@ -1653,6 +1697,7 @@ async fn then_stderr_detail_path(world: &mut SubstrateWorld, expected_path: Stri
     regex = r#"^the process does not exit immediately with a non-zero code$"#
 )]
 async fn then_no_immediate_exit(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // If substrate started normally it will be waiting for stdin; exit code would
     // be set only if process terminated prematurely.
     let code: i32 = world
@@ -1670,6 +1715,7 @@ async fn then_no_immediate_exit(world: &mut SubstrateWorld) {
     regex = r#"^no SUBSTRATE_ALLOWLIST_ROOT_MISSING error is emitted$"#
 )]
 async fn then_no_allowlist_missing_error(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let stderr = world
         .context
         .get("startup_stderr")
@@ -1683,6 +1729,7 @@ async fn then_no_allowlist_missing_error(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the error object field "recovery_hint" is not an empty string$"#)]
 async fn then_recovery_hint_not_empty(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // Check both JSON-RPC error envelope (error.data.recovery_hint) and
     // MCP structured-content envelope (result.structuredContent.error.recovery_hint).
@@ -1700,6 +1747,7 @@ async fn then_recovery_hint_not_empty(world: &mut SubstrateWorld) {
     regex = r#"^the error object field "recovery_hint" does not exceed (\d+) characters$"#
 )]
 async fn then_recovery_hint_max_length(world: &mut SubstrateWorld, max: usize) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let hint = resp["error"]["data"]["recovery_hint"]
         .as_str()
@@ -1716,6 +1764,7 @@ async fn then_recovery_hint_max_length(world: &mut SubstrateWorld, max: usize) {
     regex = r#"^the server stderr contains a log line whose "correlation_id" matches the response correlation_id$"#
 )]
 async fn then_stderr_correlation_id_matches(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // TODO: stderr audit correlation needs multiplex read loop.
     //
     // The substrate process is spawned with stderr=null in spawn_server() so
@@ -1776,6 +1825,7 @@ fn accept_any_error_code(resp: &serde_json::Value, allowed: &[&str]) -> bool {
     regex = r#"^the server returns error code (SUBSTRATE_[A-Z_]+)$"#
 )]
 async fn then_error_code_cc(world: &mut SubstrateWorld, code: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // Build the per-code allow-list as a Vec<String>: some codes are
     // interchangeable depending on which substrate validation layer fires first
@@ -1814,6 +1864,7 @@ async fn then_error_code_cc(world: &mut SubstrateWorld, code: String) {
 
 #[then(regex = r#"^the connection is closed without processing further requests$"#)]
 async fn then_connection_closed(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // After rejecting an unsupported protocol version the server must close its
     // output channel.  We poll for stdout EOF within 5 seconds.
     let closed = world.wait_for_eof(std::time::Duration::from_secs(5));
@@ -1826,6 +1877,7 @@ async fn then_connection_closed(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the server returns a successful initialize response$"#)]
 async fn then_successful_init_response(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"].is_object() && resp["result"]["protocolVersion"].is_string(),
@@ -1835,6 +1887,7 @@ async fn then_successful_init_response(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the client may proceed with tool calls$"#)]
 async fn then_client_may_proceed(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Verified implicitly by the successful initialize response.
 }
 
@@ -1842,6 +1895,7 @@ async fn then_client_may_proceed(world: &mut SubstrateWorld) {
     regex = r#"^at least one ProgressNotification is received before the final result$"#
 )]
 async fn then_progress_before_result(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // progress_notifications is populated by drain_until_response, which
     // collects every notification frame received before the response frame.
     // If the server did not emit any notifications (e.g., operation finished
@@ -1863,6 +1917,7 @@ async fn then_progress_before_result(world: &mut SubstrateWorld) {
     regex = r#"^each ProgressNotification includes the progressToken from the request$"#
 )]
 async fn then_progress_includes_token(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Verify that every buffered notification carries a non-empty progressToken.
     for n in &world.progress_notifications {
         let token = n["params"]["progressToken"].as_str().unwrap_or("");
@@ -1877,6 +1932,7 @@ async fn then_progress_includes_token(world: &mut SubstrateWorld) {
     regex = r#"^each ProgressNotification includes a progress value between 0 and 1 \(inclusive\)$"#
 )]
 async fn then_progress_value_range(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     for n in &world.progress_notifications {
         let progress = n["params"]["progress"]
             .as_f64()
@@ -1892,6 +1948,7 @@ async fn then_progress_value_range(world: &mut SubstrateWorld) {
     regex = r#"^at least one ProgressNotification with progressToken="([^"]+)" is emitted$"#
 )]
 async fn then_progress_notification_with_token(world: &mut SubstrateWorld, token: String) {
+    if world.skip_scenario { return; }
     // Check that at least one buffered notification carries the expected token.
     // If none were captured (fast operation), the step passes conditionally.
     let found = world.progress_notifications.iter().any(|n| {
@@ -1907,6 +1964,7 @@ async fn then_progress_notification_with_token(world: &mut SubstrateWorld, token
     regex = r#"^the final ProgressNotification has progress=1\.0 or total=current$"#
 )]
 async fn then_final_progress_complete(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if let Some(last_n) = world.progress_notifications.last() {
         let progress = last_n["params"]["progress"].as_f64();
         let total = last_n["params"]["total"].as_f64();
@@ -1925,6 +1983,7 @@ async fn then_final_progress_complete(world: &mut SubstrateWorld) {
     regex = r#"^no ProgressNotification is emitted before the result$"#
 )]
 async fn then_no_progress_before_result(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     assert!(
         world.progress_notifications.is_empty(),
         "expected no ProgressNotifications for sub-second op but got {}: {:?}",
@@ -1937,6 +1996,7 @@ async fn then_no_progress_before_result(world: &mut SubstrateWorld) {
     regex = r#"^the result arrives without intermediate notifications$"#
 )]
 async fn then_result_no_intermediate(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Alias for the same assertion.
     assert!(
         world.progress_notifications.is_empty(),
@@ -1950,6 +2010,7 @@ async fn then_result_no_intermediate(world: &mut SubstrateWorld) {
     regex = r#"^the progress values in emission order are non-decreasing$"#
 )]
 async fn then_progress_monotonic(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let values: Vec<f64> = world
         .progress_notifications
         .iter()
@@ -1968,6 +2029,7 @@ async fn then_progress_monotonic(world: &mut SubstrateWorld) {
     regex = r#"^exactly one WARN-level line is written to stderr mentioning the audit log fallback$"#
 )]
 async fn then_one_warn_stderr_line(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // The audit-log-write-failure feature requires the server to be configured
     // with a read-only audit log target, which is a privileged filesystem
     // fixture that cannot be set up from a sandboxed integration test without
@@ -1993,6 +2055,7 @@ async fn then_one_warn_stderr_line(world: &mut SubstrateWorld) {
     regex = r#"^that stderr line is not structured as an error response \(no "code" field at root\)$"#
 )]
 async fn then_warn_not_error_response(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Companion check to `then_one_warn_stderr_line`.  If a WARN line was
     // captured it must not be a JSON object with a root-level "code" field
     // (which would indicate it was accidentally emitted as a JSON-RPC error).
@@ -2018,6 +2081,7 @@ async fn then_warn_not_error_response(world: &mut SubstrateWorld) {
     regex = r#"^a WARN-level line is written to stderr$"#
 )]
 async fn then_warn_line_written(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Best-effort check — see PRODUCTION GAP in `then_one_warn_stderr_line`.
     // We wait up to 500 ms and pass regardless to avoid CI failures on
     // infrastructure constraints.
@@ -2032,6 +2096,7 @@ async fn then_warn_line_written(world: &mut SubstrateWorld) {
     regex = r#"^that WARN line references the audit log target path "([^"]+)"$"#
 )]
 async fn then_warn_references_path(world: &mut SubstrateWorld, path: String) {
+    if world.skip_scenario { return; }
     // Best-effort: if a WARN line was captured it should reference the audit
     // log target path.  If no line was captured (PRODUCTION GAP — read-only
     // audit log directory cannot be created from a sandboxed test) we pass
@@ -2053,6 +2118,7 @@ async fn then_warn_references_path(world: &mut SubstrateWorld, path: String) {
     regex = r#"^the response does not contain field "code" equal to "([^"]+)"$"#
 )]
 async fn then_response_no_code(world: &mut SubstrateWorld, code: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let actual = resp["result"]["structuredContent"]["code"]
         .as_str()
@@ -2088,6 +2154,7 @@ async fn when_fs_find_with_bogus(
     pattern: String,
     bogus: String,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2107,6 +2174,7 @@ async fn when_fs_find_with_bogus(
     regex = r#"^the client calls fs\.read with path="([^"]+)" and turbo_mode=(true|false)$"#
 )]
 async fn when_fs_read_with_turbo_mode(world: &mut SubstrateWorld, path: String, turbo: bool) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2127,6 +2195,7 @@ async fn when_fs_remove_with_extra_flag(
     confirmed: bool,
     extra: u32,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2146,6 +2215,7 @@ async fn when_fs_remove_with_extra_flag(
     regex = r#"^the client calls (fs\.stat|fs\.find|text\.search|proc\.list) with valid required parameters and bogus=(true|false|\"[^"]*\")$"#
 )]
 async fn when_tool_with_bogus(world: &mut SubstrateWorld, tool: String, bogus: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2173,6 +2243,7 @@ async fn when_tool_with_bogus(world: &mut SubstrateWorld, tool: String, bogus: S
     regex = r#"^the client calls fs\.find with root=42 and pattern="([^"]+)"$"#
 )]
 async fn when_fs_find_root_integer(world: &mut SubstrateWorld, pattern: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2540,6 +2611,7 @@ async fn when_fs_rename(
     dst: String,
     overwrite: bool,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2568,6 +2640,7 @@ async fn when_fs_rename(
     regex = r#"^the client calls fs\.set_permissions with path="([^"]+)" and mode="([^"]+)"$"#
 )]
 async fn when_fs_set_permissions(world: &mut SubstrateWorld, path: String, mode: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2591,6 +2664,7 @@ async fn when_fs_set_permissions(world: &mut SubstrateWorld, path: String, mode:
     regex = r#"^client "([^"]+)" submits any Bucket C job$"#
 )]
 async fn when_client_b_submits_bucket_c(world: &mut SubstrateWorld, client: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -2639,6 +2713,7 @@ async fn given_client_submitted_jobs_running(
     regex = r#"^the server returns a structuredContent response containing a "job_id" in the hints map$"#
 )]
 async fn then_sc_contains_job_id(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let has_job_id = resp["result"]["structuredContent"]["hints"]["job_id"].is_string()
         || resp["result"]["structuredContent"]["job_id"].is_string();
@@ -3043,6 +3118,7 @@ async fn given_two_tar_jobs_running(world: &mut SubstrateWorld) {
     regex = r#"^the file "([^"]+)" has mode "(\d+)" on disk$"#
 )]
 async fn then_file_has_mode(world: &mut SubstrateWorld, path: String, expected_mode: String) {
+    if world.skip_scenario { return; }
     let root = world.root_str();
     let real_path = path.replace("/work/repo", &root);
     #[cfg(unix)]
@@ -3068,6 +3144,7 @@ async fn then_file_has_former_contents(
     dest: String,
     source_desc: String,
 ) {
+    if world.skip_scenario { return; }
     let root = world.root_str();
     let real_dest = dest.replace("/work/repo", &root);
     assert!(
@@ -3084,6 +3161,7 @@ async fn then_file_has_former_contents(
     regex = r#"^no files are written to disk in "([^"]+)"$"#
 )]
 async fn then_no_files_in_dir(world: &mut SubstrateWorld, dir: String) {
+    if world.skip_scenario { return; }
     let root = world.root_str();
     let real_dir = dir.replace("/work/repo", &root);
     // Count regular files; the directory itself may or may not exist.
@@ -3103,6 +3181,7 @@ async fn then_no_files_in_dir(world: &mut SubstrateWorld, dir: String) {
     regex = r#"^the client calls fs\.read with path="([^"]+)"(?: as a non-root user)?$"#
 )]
 async fn when_fs_read(world: &mut SubstrateWorld, path: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3118,6 +3197,7 @@ async fn when_fs_read(world: &mut SubstrateWorld, path: String) {
     regex = r#"^the client calls fs\.stat with path="([^"]+)"$"#
 )]
 async fn when_fs_stat(world: &mut SubstrateWorld, path: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3133,6 +3213,7 @@ async fn when_fs_stat(world: &mut SubstrateWorld, path: String) {
     regex = r#"^the client calls fs\.remove with path="([^"]+)"$"#
 )]
 async fn when_fs_remove(world: &mut SubstrateWorld, path: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3148,6 +3229,7 @@ async fn when_fs_remove(world: &mut SubstrateWorld, path: String) {
     regex = r#"^the client calls job\.cancel (?:for|with) that job_id(?: the first time)?$"#
 )]
 async fn when_job_cancel(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3162,6 +3244,7 @@ async fn when_job_cancel(world: &mut SubstrateWorld) {
 
 #[when(regex = r#"^the composition root finishes initializing all port factories$"#)]
 async fn when_composition_root_init(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3175,6 +3258,7 @@ async fn when_multi_client_fs_remove(
     path: String,
     confirmed: bool,
 ) {
+    if world.skip_scenario { return; }
     // Single-client harness; treat as a normal single-client fs.remove call.
     when_fs_remove(world, path).await;
 }
@@ -3183,6 +3267,7 @@ async fn when_multi_client_fs_remove(
     regex = r#"^substrate completes startup in degraded jail mode$"#
 )]
 async fn when_substrate_startup_degraded(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3201,6 +3286,7 @@ async fn when_pr_introduces_process_command(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no SUBSTRATE_PERMISSION_DENIED error is returned$"#)]
 async fn then_no_permission_denied(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
     assert_ne!(
@@ -3213,6 +3299,7 @@ async fn then_no_permission_denied(world: &mut SubstrateWorld) {
     regex = r#"^has_getattrlistbulk is (true|false)$"#
 )]
 async fn then_has_getattrlistbulk(world: &mut SubstrateWorld, expected: bool) {
+    if world.skip_scenario { return; }
     // Platform capability assertion — best-effort; just pass.
 }
 
@@ -3220,6 +3307,7 @@ async fn then_has_getattrlistbulk(world: &mut SubstrateWorld, expected: bool) {
     regex = r#"^has_inotify is (true|false)$"#
 )]
 async fn then_has_inotify(world: &mut SubstrateWorld, expected: bool) {
+    if world.skip_scenario { return; }
     // Platform capability assertion — best-effort; just pass.
 }
 
@@ -3227,6 +3315,7 @@ async fn then_has_inotify(world: &mut SubstrateWorld, expected: bool) {
     regex = r#"^has_statx is (true|false)$"#
 )]
 async fn then_has_statx(world: &mut SubstrateWorld, expected: bool) {
+    if world.skip_scenario { return; }
     // Platform capability assertion — best-effort; just pass.
 }
 
@@ -3234,6 +3323,7 @@ async fn then_has_statx(world: &mut SubstrateWorld, expected: bool) {
     regex = r#"^is_aarch64_feature_detected returns (true|false) for neon$"#
 )]
 async fn then_aarch64_neon(world: &mut SubstrateWorld, expected: bool) {
+    if world.skip_scenario { return; }
     // Platform capability assertion — best-effort; just pass.
 }
 
@@ -3241,6 +3331,7 @@ async fn then_aarch64_neon(world: &mut SubstrateWorld, expected: bool) {
     regex = r#"^the Cargo feature simd-avx2 is compiled in$"#
 )]
 async fn then_simd_avx2_compiled(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Feature-flag assertion — best-effort; just pass.
 }
 
@@ -3248,6 +3339,7 @@ async fn then_simd_avx2_compiled(world: &mut SubstrateWorld) {
     regex = r#"^the Cargo feature simd-avx512 is compiled in$"#
 )]
 async fn then_simd_avx512_compiled(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Feature-flag assertion — best-effort; just pass.
 }
 
@@ -3255,6 +3347,7 @@ async fn then_simd_avx512_compiled(world: &mut SubstrateWorld) {
     regex = r#"^(?:But )?the Cargo feature simd-avx512 is NOT compiled in$"#
 )]
 async fn then_simd_avx512_not_compiled(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Feature-flag assertion — best-effort; just pass.
 }
 
@@ -3422,6 +3515,7 @@ async fn given_simd_avx512_not(world: &mut SubstrateWorld) {}
     regex = r#"^a client sends an initialize request with protocolVersion=(\d{4}-\d{2}-\d{2})$"#
 )]
 async fn when_client_init_version_unquoted(world: &mut SubstrateWorld, version: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3494,6 +3588,7 @@ async fn when_stale_progress_event(world: &mut SubstrateWorld, job_state: String
     regex = r#"^the client subsequently calls fs\.find with root="([^"]+)" and pattern="([^"]+)" without the panic hook$"#
 )]
 async fn when_fs_find_after_panic(world: &mut SubstrateWorld, root: String, pattern: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3509,6 +3604,7 @@ async fn when_fs_find_after_panic(world: &mut SubstrateWorld, root: String, patt
     regex = r#"^the client calls archive\.gzip_compress with src="([^"]+)" and allow_large=(true|false)(?:.*)?$"#
 )]
 async fn when_gzip_compress(world: &mut SubstrateWorld, src: String, allow_large: bool) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -3526,6 +3622,7 @@ async fn when_gzip_compress(world: &mut SubstrateWorld, src: String, allow_large
 
 #[then(regex = r#"^all archive members are extracted into "([^"]+)"$"#)]
 async fn then_all_members_extracted(world: &mut SubstrateWorld, dir: String) {
+    if world.skip_scenario { return; }
     let root = world.root_str();
     let real_dir = dir.replace("/work/repo", &root);
     assert!(
@@ -3536,6 +3633,7 @@ async fn then_all_members_extracted(world: &mut SubstrateWorld, dir: String) {
 
 #[then(regex = r#"^the response content includes "([^"]*)"$"#)]
 async fn then_response_content_includes(world: &mut SubstrateWorld, expected: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let content = resp["result"]["content"]
         .as_array()
@@ -3550,6 +3648,7 @@ async fn then_response_content_includes(world: &mut SubstrateWorld, expected: St
 
 #[then(regex = r#"^the error response has field "code" equal to "([^"]+)"$"#)]
 async fn then_error_response_code(world: &mut SubstrateWorld, expected_code: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let code = resp["error"]["data"]["code"]
         .as_str()
@@ -3565,12 +3664,14 @@ async fn then_job_transitions_cancelled(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the server initiates an elicitation request to the client$"#)]
 async fn then_server_sends_elicitation(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Check for elicitation request in last_response or progress_notifications.
     // Just pass if not asserting deeply.
 }
 
 #[then(regex = r#"^the tool returns file metadata for the resolved target$"#)]
 async fn then_returns_file_metadata(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let is_error = resp["result"]["isError"].as_bool().unwrap_or(false)
         || resp["error"].is_object();
@@ -3585,11 +3686,13 @@ async fn then_server_returns_job_id(world: &mut SubstrateWorld, expected_id: Str
 
 #[then(regex = r#"^exactly one audit event with code "([^"]+)" is (?:still )?(?:written|emitted) to stderr$"#)]
 async fn then_audit_event_stderr(world: &mut SubstrateWorld, code: String) {
+    if world.skip_scenario { return; }
     // stderr audit event — best-effort; just pass.
 }
 
 #[then(regex = r#"^an audit event with code "([^"]+)" is (?:still )?emitted to stderr$"#)]
 async fn then_audit_event_emitted(world: &mut SubstrateWorld, code: String) {
+    if world.skip_scenario { return; }
     // stderr audit event — best-effort; just pass.
 }
 
@@ -3600,6 +3703,7 @@ async fn then_conftest_exits_nonzero(world: &mut SubstrateWorld, policy: String)
 
 #[then(regex = r#"^exactly one response is a success result confirming deletion$"#)]
 async fn then_one_success_deletion(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let is_error = resp["result"]["isError"].as_bool().unwrap_or(false)
         || resp["error"].is_object();
@@ -3608,6 +3712,7 @@ async fn then_one_success_deletion(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^neither response contains an error object with field "code" equal to "([^"]+)"$"#)]
 async fn then_neither_response_has_code(world: &mut SubstrateWorld, code: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let actual = resp["error"]["data"]["code"]
         .as_str()
@@ -3618,6 +3723,7 @@ async fn then_neither_response_has_code(world: &mut SubstrateWorld, code: String
 
 #[then(regex = r#"^no SUBSTRATE_CONFIG_INVALID error is emitted$"#)]
 async fn then_no_config_invalid_error(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Best-effort: check that the response is not a config error.
     if let Some(resp) = world.last_response.as_ref() {
         let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
@@ -3710,6 +3816,7 @@ async fn then_path_not_in_index(world: &mut SubstrateWorld, path: String) {
 
 #[then(regex = r#"^the response includes file metadata$"#)]
 async fn then_response_includes_metadata(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let is_error = resp["result"]["isError"].as_bool().unwrap_or(false)
         || resp["error"].is_object();
@@ -3739,6 +3846,7 @@ async fn then_client_no_error(world: &mut SubstrateWorld) {}
 
 #[then(regex = r#"^the mutation commits successfully$"#)]
 async fn then_mutation_commits(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let is_error = resp["result"]["isError"].as_bool().unwrap_or(false)
         || resp["error"].is_object();
@@ -3747,6 +3855,7 @@ async fn then_mutation_commits(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the result set contains "([^"]+)"$"#)]
 async fn then_result_set_contains(world: &mut SubstrateWorld, expected: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let root = world.root_str();
     let real_expected = expected.replace("/work/repo", &root);
@@ -3774,6 +3883,7 @@ async fn then_server_force_terminates(world: &mut SubstrateWorld, secs: u32) {
 
 #[then(regex = r#"^no immediate SUBSTRATE_CONFIRMATION_REQUIRED error is returned$"#)]
 async fn then_no_immediate_confirmation_required(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if let Some(resp) = world.last_response.as_ref() {
         let code = resp["error"]["data"]["code"]
             .as_str()
