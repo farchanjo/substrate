@@ -154,7 +154,19 @@ async fn given_valid_cursor(world: &mut SubstrateWorld, cursor: String) {
 
 #[given(regex = r#"^the file "([^"]+)" exists on disk$"#)]
 async fn given_file_exists(world: &mut SubstrateWorld, path: String) {
-    world.context.insert("target_file".to_string(), path);
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    world.context.insert("target_file".to_string(), path.clone());
+    // Materialize the fixture file under the sandbox so subsequent tool calls
+    // can act on a real inode (capability-elicitation-missing + similar
+    // scenarios assert post-conditions like "the file still exists on disk").
+    let root = world.root_str();
+    let real_path = path.replace("/work/repo", &root).replace("/work/dist", &root);
+    if let Some(parent) = std::path::Path::new(&real_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&real_path, b"// fixture content\n");
 }
 
 #[given(regex = r#"^the file "([^"]+)" does not exist$"#)]
