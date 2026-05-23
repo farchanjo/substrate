@@ -27,7 +27,7 @@
 //! compile time before any scanning begins.
 
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -46,7 +46,11 @@ const CANCEL_CHECK_INTERVAL: usize = 256;
 /// Input parameters for `text.search`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchParams {
-    /// Absolute path to the file to search.
+    /// Absolute path to the file or directory to search.
+    /// When a directory is given, all files under it are scanned recursively.
+    /// The field name `root` is accepted as an alias for backward compatibility
+    /// with clients that use the older parameter name.
+    #[serde(alias = "root")]
     pub path: String,
     /// Regular expression pattern to match against each line.
     pub pattern: String,
@@ -121,9 +125,16 @@ pub async fn handle_text_search(
     let simd_tier = deps.capabilities.simd_tier;
 
     // Perform the blocking file scan on a blocking thread.
+    // When the path is a directory, walk it recursively and scan each file.
     let scan_result = tokio::task::spawn_blocking({
         let cancel = cancel.clone();
-        move || scan_file(&jailed_path_buf, &regex, cancel)
+        move || {
+            if jailed_path_buf.is_dir() {
+                scan_dir(&jailed_path_buf, &regex, &cancel)
+            } else {
+                scan_file(&jailed_path_buf, &regex, cancel)
+            }
+        }
     })
     .await
     .map_err(|join_err| SubstrateError::InternalError {
@@ -159,6 +170,8 @@ pub async fn handle_text_search(
 ///
 /// Returns `(matches, skipped_binary_count)`.
 /// `skipped_binary_count` is 0 when the file is text, 1 when skipped as binary.
+///
+/// Each [`MatchRecord`] carries `file_path` set to the UTF-8 display of `path`.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "CancellationToken is an Arc-backed handle; pass by value matches the tokio-util API convention"
@@ -228,11 +241,69 @@ fn scan_file(
         })?;
 
         if regex.is_match(&line) {
-            matches.push(MatchRecord { line_number, line });
+            matches.push(MatchRecord {
+                file_path: path.display().to_string(),
+                line_number,
+                line,
+            });
         }
     }
 
     Ok((matches, 0))
+}
+
+/// Recursively walk a directory and scan each file.
+///
+/// Returns the aggregated `(matches, skipped_binary_count)` across all files.
+/// Directories and other non-file entries are silently skipped.
+/// Cancellation is checked at each file boundary.
+fn scan_dir(
+    dir: &Path,
+    regex: &regex::Regex,
+    cancel: &CancellationToken,
+) -> SubstrateResult<(Vec<MatchRecord>, u64)> {
+    let mut all_matches: Vec<MatchRecord> = Vec::new();
+    let mut total_skipped: u64 = 0;
+
+    // Collect file paths first to allow sorted, deterministic output.
+    let mut file_paths: Vec<PathBuf> = Vec::new();
+    collect_files(dir, &mut file_paths);
+
+    for path in &file_paths {
+        if cancel.is_cancelled() {
+            return Err(SubstrateError::Cancelled { correlation_id: None });
+        }
+        match scan_file(path, regex, cancel.child_token()) {
+            Ok((file_matches, skipped)) => {
+                all_matches.extend(file_matches);
+                total_skipped += skipped;
+            }
+            // Silently skip files that cannot be read (permissions, transient I/O).
+            Err(SubstrateError::NotFound { .. }
+                | SubstrateError::PermissionDenied { .. }
+                | SubstrateError::IoError { .. }) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok((all_matches, total_skipped))
+}
+
+/// Populate `out` with all regular file paths reachable under `dir` (recursive).
+fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<_> = rd.flatten().collect();
+    // Sort for determinism.
+    entries.sort_by_key(std::fs::DirEntry::path);
+    for entry in entries {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            collect_files(&path, out);
+        } else if meta.is_file() {
+            out.push(path);
+        }
+    }
 }
 
 // ---- Tests -------------------------------------------------------------------

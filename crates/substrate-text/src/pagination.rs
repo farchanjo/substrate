@@ -20,9 +20,15 @@ pub const MAX_PAGE_SIZE: usize = 500;
 /// A single line-match record produced by `text.search`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MatchRecord {
+    /// Absolute path of the file that produced this match.
+    /// For single-file searches this equals the requested path;
+    /// for directory searches it disambiguates which file matched.
+    pub file_path: String,
     /// 1-based line number within the file.
     pub line_number: u64,
     /// Raw content of the matching line (UTF-8).
+    /// Serialised as `line_text` in JSON to match the spec schema.
+    #[serde(rename = "line_text")]
     pub line: String,
 }
 
@@ -110,6 +116,7 @@ mod tests {
     fn make_records(n: usize) -> Vec<MatchRecord> {
         (1..=n)
             .map(|i| MatchRecord {
+                file_path: "/tmp/test.txt".to_owned(),
                 line_number: i as u64,
                 line: format!("line {i}"),
             })
