@@ -77,7 +77,7 @@ pub async fn handle_archive_gzip_decompress(
     if req.dry_run {
         let source_meta = std::fs::metadata(&req.source).map_err(|_| SubstrateError::NotFound {
             resource: req.source.clone(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let hints = build_inline_hints(Some("archive.hash"), None, &deps.capabilities, true);
         let content = format!(
@@ -108,7 +108,7 @@ pub async fn handle_archive_gzip_decompress(
             .await
             .map_err(|e| SubstrateError::InternalError {
                 reason: format!("spawn_blocking: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })??;
 
     let dest_path = std::path::PathBuf::from(&req.dest);
@@ -123,7 +123,7 @@ pub async fn handle_archive_gzip_decompress(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     let dest_final = jailed_dest.as_path().to_path_buf();
@@ -138,12 +138,12 @@ pub async fn handle_archive_gzip_decompress(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
 
     tmp.commit().await.map_err(|_| SubstrateError::IoError {
         path: dest_final.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let hints = build_inline_hints(
@@ -182,15 +182,15 @@ fn decompress_file_blocking(
         match e.kind() {
             ErrorKind::NotFound => SubstrateError::NotFound {
                 resource: source.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             },
             ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
                 path: source.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             },
             _ => SubstrateError::IoError {
                 path: source.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             },
         }
     })?;
@@ -198,7 +198,7 @@ fn decompress_file_blocking(
     let mut decoder = flate2::read::GzDecoder::new(in_file);
     let out_file = std::fs::File::create(tmp_path).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", tmp_path.display()),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut out = std::io::BufWriter::new(out_file);
     let mut guard = DecompressGuard::new(max_bytes);
@@ -210,7 +210,7 @@ fn decompress_file_blocking(
             .read(&mut buf)
             .map_err(|e| SubstrateError::IoError {
                 path: format!("gzip decode: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         if n == 0 {
             break;
@@ -219,13 +219,13 @@ fn decompress_file_blocking(
         out.write_all(&buf[..n])
             .map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", tmp_path.display()),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
     }
 
     out.flush().map_err(|e| SubstrateError::IoError {
         path: format!("flush: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     Ok((compressed_bytes, guard.written()))
@@ -364,7 +364,7 @@ mod tests {
         fn jail(&self, _: &JailedPath, raw: &std::path::Path) -> SubstrateResult<JailedPath> {
             let canon = std::fs::canonicalize(raw).map_err(|_| SubstrateError::NotFound {
                 resource: raw.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             Ok(JailedPath::new_jailed(canon))
         }

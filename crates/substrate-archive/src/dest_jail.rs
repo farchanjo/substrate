@@ -46,14 +46,14 @@ pub(crate) fn jail_dest_via_parent(
         .ok_or_else(|| SubstrateError::InvalidArgument {
             offending_field: "dest".to_owned(),
             reason: "destination path has no parent directory".to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
     let filename = dest
         .file_name()
         .ok_or_else(|| SubstrateError::InvalidArgument {
             offending_field: "dest".to_owned(),
             reason: "destination path has no filename component".to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
 
     // The parent must already exist for the jail to canonicalize it.
@@ -83,7 +83,7 @@ mod tests {
         fn jail(&self, _: &JailedPath, raw: &Path) -> SubstrateResult<JailedPath> {
             let canon = std::fs::canonicalize(raw).map_err(|_| SubstrateError::NotFound {
                 resource: raw.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             Ok(JailedPath::new_jailed(canon))
         }

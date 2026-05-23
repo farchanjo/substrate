@@ -75,7 +75,7 @@ pub async fn handle_archive_tar_extract(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     // Jail destination directory.
@@ -88,7 +88,7 @@ pub async fn handle_archive_tar_extract(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     // Dry-run gate.
@@ -98,13 +98,13 @@ pub async fn handle_archive_tar_extract(
 
     if !req.confirmed {
         return Err(SubstrateError::ConfirmationRequired {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
     if cancel.is_cancelled() {
         return Err(SubstrateError::Cancelled {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
@@ -117,7 +117,7 @@ pub async fn handle_archive_tar_extract(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, false);
@@ -169,23 +169,23 @@ fn scan_tar_members(
 ) -> SubstrateResult<Vec<ArchiveEntry>> {
     let file = std::fs::File::open(archive).map_err(|_| SubstrateError::NotFound {
         resource: archive.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut ar = tar::Archive::new(file);
     let mut entries = Vec::new();
 
     for entry_result in ar.entries().map_err(|e| SubstrateError::IoError {
         path: format!("tar entries: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })? {
         let entry = entry_result.map_err(|e| SubstrateError::IoError {
             path: format!("tar entry: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let header = entry.header();
         let member_path = entry.path().map_err(|e| SubstrateError::EncodingError {
             detail: format!("tar entry path: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
 
         // Zip Slip guard.
@@ -205,7 +205,7 @@ fn scan_tar_members(
                 .link_name()
                 .map_err(|e| SubstrateError::EncodingError {
                     detail: format!("tar symlink target: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?
                 .unwrap_or_default();
             let link_path = dest_root.join(&*member_path);
@@ -232,7 +232,7 @@ fn extract_tar_blocking(
 ) -> SubstrateResult<usize> {
     let file = std::fs::File::open(archive).map_err(|_| SubstrateError::NotFound {
         resource: archive.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     // Detect gzip by trying to read a gzip header lexically.
@@ -260,15 +260,15 @@ fn extract_entries<R: std::io::Read>(
     let mut count = 0usize;
     for entry_result in ar.entries().map_err(|e| SubstrateError::IoError {
         path: format!("tar entries: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })? {
         let mut entry = entry_result.map_err(|e| SubstrateError::IoError {
             path: format!("tar entry read: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let member_path = entry.path().map_err(|e| SubstrateError::EncodingError {
             detail: format!("tar entry path: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
 
         // Zip Slip guard (Tar Slip).
@@ -286,7 +286,7 @@ fn extract_entries<R: std::io::Read>(
         if kind == EntryKind::Directory {
             std::fs::create_dir_all(&resolved).map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", resolved.display()),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         } else if kind == EntryKind::Symlink {
             // Validate and restore the symlink (ADR-0004 §symlink-validation).
@@ -295,14 +295,14 @@ fn extract_entries<R: std::io::Read>(
                 .link_name()
                 .map_err(|e| SubstrateError::EncodingError {
                     detail: format!("tar symlink target: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?
                 .unwrap_or_default();
             validate_symlink_target(dest_root, &resolved, &link_target)?;
             if let Some(parent) = resolved.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
                     path: format!("{}: {e}", parent.display()),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             }
             // SAFETY: This is not `unsafe` in Rust terms; the function is safe.
@@ -311,7 +311,7 @@ fn extract_entries<R: std::io::Read>(
             std::os::unix::fs::symlink(&*link_target, &resolved).map_err(|e| {
                 SubstrateError::IoError {
                     path: format!("{}: {e}", resolved.display()),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 }
             })?;
             #[cfg(windows)]
@@ -321,7 +321,7 @@ fn extract_entries<R: std::io::Read>(
                 let _ = link_target;
                 return Err(SubstrateError::InternalError {
                     reason: "symlink extraction not supported on Windows".to_owned(),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 });
             }
         } else {
@@ -330,7 +330,7 @@ fn extract_entries<R: std::io::Read>(
             if let Some(parent) = resolved.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
                     path: format!("{}: {e}", parent.display()),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             }
             let tmp = TmpPath::new_for(&resolved);
@@ -338,18 +338,18 @@ fn extract_entries<R: std::io::Read>(
                 let mut out =
                     std::fs::File::create(tmp.tmp_path()).map_err(|e| SubstrateError::IoError {
                         path: format!("{}: {e}", tmp.tmp_path().display()),
-                        correlation_id: None,
+                        correlation_id: Some(uuid::Uuid::now_v7()),
                     })?;
                 std::io::copy(&mut entry, &mut out).map_err(|e| SubstrateError::IoError {
                     path: format!("{}: {e}", resolved.display()),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             }
             // Sync commit (blocking context).
             std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| {
                 SubstrateError::IoError {
                     path: format!("{}: {e}", resolved.display()),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 }
             })?;
             // Prevent Drop from removing the now-renamed file.

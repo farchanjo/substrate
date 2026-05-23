@@ -64,7 +64,7 @@ pub async fn handle_archive_zip_create(
     }
     if !req.confirmed {
         return Err(SubstrateError::ConfirmationRequired {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
@@ -81,7 +81,7 @@ pub async fn handle_archive_zip_create(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     // Jail sources.
@@ -96,7 +96,7 @@ pub async fn handle_archive_zip_create(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
         jailed_sources.push(jailed);
     }
@@ -113,19 +113,19 @@ pub async fn handle_archive_zip_create(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
 
     if cancel.is_cancelled() {
         drop(tmp);
         return Err(SubstrateError::Cancelled {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
     tmp.commit().await.map_err(|_| SubstrateError::IoError {
         path: dest_final.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, false);
@@ -192,7 +192,7 @@ fn build_zip_blocking(
 
     let file = std::fs::File::create(tmp_path).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", tmp_path.display()),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut writer = zip::write::ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -211,17 +211,17 @@ fn build_zip_blocking(
                 .start_file(&name, options)
                 .map_err(|e| SubstrateError::IoError {
                     path: format!("{name}: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             let data = std::fs::read(path).map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", path.display()),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             writer
                 .write_all(&data)
                 .map_err(|e| SubstrateError::IoError {
                     path: format!("{name}: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             entry_count += 1;
         }
@@ -229,7 +229,7 @@ fn build_zip_blocking(
 
     writer.finish().map_err(|e| SubstrateError::IoError {
         path: format!("zip finish: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let archive_bytes = std::fs::metadata(tmp_path).map_or(0, |m| m.len());
@@ -246,11 +246,11 @@ fn add_dir_to_zip(
 
     for entry in std::fs::read_dir(dir).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", dir.display()),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })? {
         let entry = entry.map_err(|e| SubstrateError::IoError {
             path: format!("readdir: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let path = entry.path();
         let relative = path.strip_prefix(base).unwrap_or(&path);
@@ -263,17 +263,17 @@ fn add_dir_to_zip(
                 .start_file(name.as_ref(), *options)
                 .map_err(|e| SubstrateError::IoError {
                     path: format!("{name}: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             let data = std::fs::read(&path).map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", path.display()),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             writer
                 .write_all(&data)
                 .map_err(|e| SubstrateError::IoError {
                     path: format!("{name}: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
         }
     }

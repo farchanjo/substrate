@@ -78,7 +78,7 @@ pub async fn handle_archive_zip_extract(
             .await
             .map_err(|e| SubstrateError::InternalError {
                 reason: format!("spawn_blocking: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })??;
 
     // Jail destination.
@@ -90,7 +90,7 @@ pub async fn handle_archive_zip_extract(
             .await
             .map_err(|e| SubstrateError::InternalError {
                 reason: format!("spawn_blocking: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })??;
 
     if req.dry_run {
@@ -98,13 +98,13 @@ pub async fn handle_archive_zip_extract(
     }
     if !req.confirmed {
         return Err(SubstrateError::ConfirmationRequired {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
     if cancel.is_cancelled() {
         return Err(SubstrateError::Cancelled {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
@@ -116,7 +116,7 @@ pub async fn handle_archive_zip_extract(
             .await
             .map_err(|e| SubstrateError::InternalError {
                 reason: format!("spawn_blocking: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })??;
 
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, false);
@@ -146,18 +146,18 @@ fn produce_dry_run(
 
     let file = std::fs::File::open(archive_path).map_err(|_| SubstrateError::NotFound {
         resource: archive_path.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| SubstrateError::IoError {
         path: format!("zip open: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let mut entries = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
             path: format!("zip entry {i}: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         // Copy name to owned String to avoid borrow conflict when reading content.
         let name = entry.name().to_owned();
@@ -177,12 +177,12 @@ fn produce_dry_run(
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
                 path: format!("zip symlink content: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             let target_str =
                 std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
                     detail: format!("zip symlink target utf8: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             let link_path = dest_root.join(member);
             validate_symlink_target(dest_root, &link_path, std::path::Path::new(target_str))?;
@@ -221,11 +221,11 @@ fn extract_zip_blocking(
 
     let file = std::fs::File::open(archive).map_err(|_| SubstrateError::NotFound {
         resource: archive.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| SubstrateError::IoError {
         path: format!("zip open: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     // Security-first: validate all members before any disk write (ADR-0035).
@@ -236,7 +236,7 @@ fn extract_zip_blocking(
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
             path: format!("zip entry {i}: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let name = entry.name().to_owned();
         let member = std::path::Path::new(&name);
@@ -245,18 +245,18 @@ fn extract_zip_blocking(
         if entry.is_dir() {
             std::fs::create_dir_all(&resolved).map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", resolved.display()),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         } else if entry.is_symlink() {
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
                 path: format!("zip symlink content: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             let target_str =
                 std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
                     detail: format!("zip symlink target utf8: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             zip_write_symlink(&resolved, target_str)?;
             extracted_count += 1;
@@ -288,7 +288,7 @@ fn zip_prevalidate_members(
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| SubstrateError::IoError {
             path: format!("zip entry {i}: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let name = entry.name().to_owned();
         let member = std::path::Path::new(&name);
@@ -304,12 +304,12 @@ fn zip_prevalidate_members(
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
                 path: format!("zip symlink content: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             let target_str =
                 std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
                     detail: format!("zip symlink target utf8: {e}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 })?;
             let link_path = dest_root.join(member);
             validate_symlink_target(dest_root, &link_path, std::path::Path::new(target_str))?;
@@ -333,7 +333,7 @@ fn zip_prevalidate_members(
                 // Cycle detected — two or more archive members form a symlink loop.
                 return Err(SubstrateError::PathTraversalBlocked {
                     path: format!("symlink loop involving member: {current}"),
-                    correlation_id: None,
+                    correlation_id: Some(uuid::Uuid::now_v7()),
                 });
             }
             match symlink_map.get(current) {
@@ -353,20 +353,20 @@ fn zip_write_symlink(resolved: &std::path::Path, target_str: &str) -> SubstrateR
     if let Some(parent) = resolved.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
             path: format!("{}: {e}", parent.display()),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
     }
     #[cfg(unix)]
     std::os::unix::fs::symlink(target_str, resolved).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", resolved.display()),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     #[cfg(windows)]
     {
         let _ = (target_str, resolved);
         return Err(SubstrateError::InternalError {
             reason: "symlink extraction not supported on Windows".to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
     Ok(())
@@ -383,7 +383,7 @@ fn zip_write_file(
     if let Some(parent) = resolved.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
             path: format!("{}: {e}", parent.display()),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
     }
     let tmp = TmpPath::new_for(resolved);
@@ -391,21 +391,21 @@ fn zip_write_file(
         let mut out =
             std::fs::File::create(tmp.tmp_path()).map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", tmp.tmp_path().display()),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
             path: format!("zip read entry: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         out.write_all(&buf).map_err(|e| SubstrateError::IoError {
             path: format!("{}: {e}", resolved.display()),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
     }
     std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", resolved.display()),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     std::mem::forget(tmp);
     Ok(())

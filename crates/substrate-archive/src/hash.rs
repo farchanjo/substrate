@@ -95,7 +95,7 @@ pub async fn handle_archive_hash(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking join: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     // Acquire CPU semaphore permit (owned — survives .await).
@@ -105,7 +105,7 @@ pub async fn handle_archive_hash(
         .await
         .map_err(|_| SubstrateError::InternalError {
             reason: "hash semaphore closed".to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
 
     let algorithm = req.algorithm;
@@ -125,15 +125,15 @@ pub async fn handle_archive_hash(
                         match e.kind() {
                             ErrorKind::NotFound => SubstrateError::NotFound {
                                 resource: jailed.to_string(),
-                                correlation_id: None,
+                                correlation_id: Some(uuid::Uuid::now_v7()),
                             },
                             ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
                                 path: jailed.to_string(),
-                                correlation_id: None,
+                                correlation_id: Some(uuid::Uuid::now_v7()),
                             },
                             _ => SubstrateError::IoError {
                                 path: jailed.to_string(),
-                                correlation_id: None,
+                                correlation_id: Some(uuid::Uuid::now_v7()),
                             },
                         }
                     })?;
@@ -153,7 +153,7 @@ pub async fn handle_archive_hash(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking join: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
 
     let algorithm_name = algorithm.to_string();
@@ -210,7 +210,7 @@ mod tests {
         ) -> SubstrateResult<substrate_domain::ports::hash::Blake3Digest> {
             let data = std::fs::read(path.as_path()).map_err(|_| SubstrateError::NotFound {
                 resource: path.to_string(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             let digest = blake3::hash(&data);
             Ok(substrate_domain::ports::hash::Blake3Digest::new(

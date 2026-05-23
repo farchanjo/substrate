@@ -108,7 +108,7 @@ pub async fn handle_archive_tar_create(
 
     if !req.confirmed {
         return Err(SubstrateError::ConfirmationRequired {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
@@ -124,7 +124,7 @@ pub async fn handle_archive_tar_create(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     // Jail all source paths.
@@ -139,7 +139,7 @@ pub async fn handle_archive_tar_create(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking join error: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
         jailed_sources.push(jailed);
     }
@@ -158,20 +158,20 @@ pub async fn handle_archive_tar_create(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking join error: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
 
     // Check cancellation before committing (ADR-0037).
     if cancel.is_cancelled() {
         drop(tmp); // cleanup temp file
         return Err(SubstrateError::Cancelled {
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
 
     tmp.commit().await.map_err(|_| SubstrateError::IoError {
         path: dest_final.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, false);
@@ -235,7 +235,7 @@ fn build_tar_blocking(
 ) -> SubstrateResult<(usize, u64)> {
     let file = std::fs::File::create(tmp_path).map_err(|_| SubstrateError::IoError {
         path: tmp_path.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let mut entry_count = 0usize;
@@ -250,25 +250,25 @@ fn build_tar_blocking(
                         .append_dir_all(path.file_name().map_or(path, std::path::Path::new), path)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
-                            correlation_id: None,
+                            correlation_id: Some(uuid::Uuid::now_v7()),
                         })?;
                 } else {
                     let mut f = std::fs::File::open(path).map_err(|_| SubstrateError::IoError {
                         path: path.to_string_lossy().into_owned(),
-                        correlation_id: None,
+                        correlation_id: Some(uuid::Uuid::now_v7()),
                     })?;
                     builder
                         .append_file(path.file_name().map_or(path, std::path::Path::new), &mut f)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
-                            correlation_id: None,
+                            correlation_id: Some(uuid::Uuid::now_v7()),
                         })?;
                 }
                 entry_count += 1;
             }
             builder.finish().map_err(|e| SubstrateError::IoError {
                 path: format!("tar finish: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         },
         TarCompression::Gzip => {
@@ -281,29 +281,29 @@ fn build_tar_blocking(
                         .append_dir_all(path.file_name().map_or(path, std::path::Path::new), path)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
-                            correlation_id: None,
+                            correlation_id: Some(uuid::Uuid::now_v7()),
                         })?;
                 } else {
                     let mut f = std::fs::File::open(path).map_err(|_| SubstrateError::IoError {
                         path: path.to_string_lossy().into_owned(),
-                        correlation_id: None,
+                        correlation_id: Some(uuid::Uuid::now_v7()),
                     })?;
                     builder
                         .append_file(path.file_name().map_or(path, std::path::Path::new), &mut f)
                         .map_err(|e| SubstrateError::IoError {
                             path: format!("{}: {e}", path.display()),
-                            correlation_id: None,
+                            correlation_id: Some(uuid::Uuid::now_v7()),
                         })?;
                 }
                 entry_count += 1;
             }
             let encoder = builder.into_inner().map_err(|e| SubstrateError::IoError {
                 path: format!("tar finish: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             encoder.finish().map_err(|e| SubstrateError::IoError {
                 path: format!("gz finish: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         },
     }

@@ -55,7 +55,7 @@ impl DecompressGuard {
                     "decompressed output ({} bytes) exceeds limit ({} bytes)",
                     self.written, self.max
                 ),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             });
         }
         Ok(())

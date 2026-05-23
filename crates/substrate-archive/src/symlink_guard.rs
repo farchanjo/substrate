@@ -87,7 +87,7 @@ pub fn validate_symlink_target(
         if component == Component::ParentDir {
             return Err(SubstrateError::PathTraversalBlocked {
                 path: target.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             });
         }
     }

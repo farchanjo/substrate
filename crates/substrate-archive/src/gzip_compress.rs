@@ -71,7 +71,7 @@ pub async fn handle_archive_gzip_compress(
     if req.dry_run {
         let source_meta = std::fs::metadata(&req.source).map_err(|_| SubstrateError::NotFound {
             resource: req.source.clone(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let hints = build_inline_hints(Some("archive.hash"), None, &deps.capabilities, true);
         let content = format!(
@@ -100,7 +100,7 @@ pub async fn handle_archive_gzip_compress(
             .await
             .map_err(|e| SubstrateError::InternalError {
                 reason: format!("spawn_blocking: {e}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })??;
 
     let dest_path = std::path::PathBuf::from(&req.dest);
@@ -115,7 +115,7 @@ pub async fn handle_archive_gzip_compress(
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })??;
 
     let dest_final = jailed_dest.as_path().to_path_buf();
@@ -130,12 +130,12 @@ pub async fn handle_archive_gzip_compress(
         .await
         .map_err(|e| SubstrateError::InternalError {
             reason: format!("spawn_blocking: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })??;
 
     tmp.commit().await.map_err(|_| SubstrateError::IoError {
         path: dest_final.to_string_lossy().into_owned(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     #[expect(
@@ -178,15 +178,15 @@ fn compress_file_blocking(
         match e.kind() {
             ErrorKind::NotFound => SubstrateError::NotFound {
                 resource: source.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             },
             ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
                 path: source.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             },
             _ => SubstrateError::IoError {
                 path: source.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             },
         }
     })?;
@@ -195,18 +195,18 @@ fn compress_file_blocking(
     let level = flate2::Compression::new(level.min(9));
     let out_file = std::fs::File::create(tmp_path).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", tmp_path.display()),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut encoder = flate2::write::GzEncoder::new(out_file, level);
     encoder
         .write_all(&data)
         .map_err(|e| SubstrateError::IoError {
             path: format!("gzip encode: {e}"),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
     encoder.finish().map_err(|e| SubstrateError::IoError {
         path: format!("gzip finish: {e}"),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
     let compressed_bytes = std::fs::metadata(tmp_path).map_or(0, |m| m.len());
@@ -309,7 +309,7 @@ mod tests {
         fn jail(&self, _: &JailedPath, raw: &std::path::Path) -> SubstrateResult<JailedPath> {
             let canon = std::fs::canonicalize(raw).map_err(|_| SubstrateError::NotFound {
                 resource: raw.to_string_lossy().into_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
             Ok(JailedPath::new_jailed(canon))
         }
