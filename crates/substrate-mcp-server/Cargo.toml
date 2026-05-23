@@ -73,6 +73,7 @@ libc = "0.2"
 [dev-dependencies]
 cucumber = { workspace = true }
 tar = { workspace = true }
+zip = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }

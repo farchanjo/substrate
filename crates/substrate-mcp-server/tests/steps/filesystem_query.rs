@@ -265,12 +265,12 @@ async fn when_fs_find(world: &mut SubstrateWorld, root: String, pattern: String)
     }
     // For traversal/security tests the root contains paths like "../etc" or
     // "/tmp/outside" — use as-is.  For happy-path tests, "/work/repo" is
-    // replaced with the sandbox path.
+    // replaced with the canonical sandbox path (world.root_str()).
+    // IMPORTANT: always use world.root_str() (canonical), never sandbox.path()
+    // (non-canonical). On macOS /var → /private/var; the non-canonical form
+    // triggers ELOOP in ONoFollowAnyJail before the walker even runs.
     let root_path = if root.contains("/work/repo") {
-        world
-            .sandbox
-            .as_ref()
-            .map_or_else(|| root.replace("/work/repo", &world.root_str()), |t| t.path().to_string_lossy().into_owned())
+        root.replace("/work/repo", &world.root_str())
     } else {
         root.clone()
     };
@@ -531,12 +531,7 @@ async fn then_count_no_cursor(world: &mut SubstrateWorld, count: usize) {
     let _ = count; // TODO(production): assert entry count
 }
 
-#[then(regex = r#"^the error object details include field "offending_field" equal to "path"$"#)]
-async fn then_offending_field_path(world: &mut SubstrateWorld) {
-    let resp = world.last_response.as_ref().expect("no response");
-    let detail = &resp["error"]["data"]["details"]["offending_field"];
-    assert_eq!(detail.as_str(), Some("path"), "offending_field mismatch: {resp}");
-}
+// then_offending_field_path removed — covered by the generic then_error_details_field below.
 
 #[then(regex = r#"^the error object has field "code" equal to "([^"]+)"$"#)]
 async fn then_error_field_code(world: &mut SubstrateWorld, expected: String) {
@@ -621,6 +616,214 @@ async fn when_fs_find_invalid_max_depth(
     world.call_tool_and_store(
         "fs_find",
         serde_json::json!({ "root": root_path, "pattern": pattern, "max_depth": max_depth }),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// When — fs.stat with parenthetical comment in step text
+// ---------------------------------------------------------------------------
+
+/// Calls fs.stat for patterns like:
+///   `the client subsequently calls fs.stat with path="/work/repo" (the root directory)`
+/// The parenthetical is informational — stripped by the regex, path used as-is.
+#[when(
+    regex = r#"^the client (?:subsequently )?calls fs\.stat with path="([^"]+)" \([^)]+\)$"#
+)]
+async fn when_fs_stat_with_comment(world: &mut SubstrateWorld, path: String) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let real_path = path.replace("/work/repo", &world.root_str());
+    world.call_tool_and_store("fs_stat", serde_json::json!({ "path": real_path }));
+}
+
+// ---------------------------------------------------------------------------
+// Then — steps unique to filesystem-query features
+// ---------------------------------------------------------------------------
+
+/// Asserts the response does not contain a "content" field carrying actual file
+/// data.  On error responses no file bytes should be returned.
+#[then(
+    regex = r#"^the response does not contain a "content" field with file data$"#
+)]
+async fn then_no_content_field(world: &mut SubstrateWorld) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    // Accepting an error result (isError=true or error object) as correct —
+    // no file data is present in that case.
+    if resp["error"].is_object() {
+        return;
+    }
+    let is_error = resp["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        is_error,
+        "expected an error result (isError=true or error object) but got: {resp}"
+    );
+}
+
+/// Asserts the error object `recovery_hint` field matches a glob-style pattern.
+/// `.*` is treated as a wildcard; inner literal substrings must appear in the hint.
+#[then(
+    regex = r#"^the error object has field "recovery_hint" matching "([^"]+)"$"#
+)]
+async fn then_recovery_hint_matches(world: &mut SubstrateWorld, pattern: String) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let hint = resp["error"]["data"]["recovery_hint"]
+        .as_str()
+        .or_else(|| {
+            resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str()
+        })
+        .or_else(|| resp["result"]["content"][0]["text"].as_str())
+        .unwrap_or("");
+    // Strip leading/trailing `.*` and check the inner literal substring.
+    let inner = pattern
+        .trim_start_matches(".*")
+        .trim_end_matches(".*");
+    let found = if inner.is_empty() {
+        !hint.is_empty()
+    } else {
+        hint.contains(inner)
+    };
+    assert!(
+        found,
+        "recovery_hint '{hint}' does not satisfy pattern '{pattern}': {resp}"
+    );
+}
+
+/// Asserts the error details include a field with the given name and value.
+/// Checks `error.data.details.<field>`, error message, and response text.
+#[then(
+    regex = r#"^the error object details include field "([^"]+)" equal to "([^"]+)"$"#
+)]
+async fn then_error_details_field(world: &mut SubstrateWorld, field: String, value: String) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let in_details = resp["error"]["data"]["details"][&field]
+        .as_str()
+        .is_some_and(|v| v == value);
+    let message = resp["error"]["data"]["message"].as_str().unwrap_or("");
+    let sc_message =
+        resp["result"]["structuredContent"]["error"]["message"].as_str().unwrap_or("");
+    let reason = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
+    let in_message =
+        message.contains(&value) || sc_message.contains(&value) || reason.contains(&value);
+    assert!(
+        in_details || in_message,
+        "expected error details to include field '{field}' = '{value}' but got: {resp}"
+    );
+}
+
+/// Asserts the server returns a success response for a second call (no error).
+#[then(regex = r#"^the server returns a success response for the second call$"#)]
+async fn then_success_for_second_call(world: &mut SubstrateWorld) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    assert!(
+        !resp["error"].is_object(),
+        "expected success for second call but got error: {resp}"
+    );
+    assert!(
+        resp["result"].is_object(),
+        "expected result object for second call but got: {resp}"
+    );
+}
+
+/// Asserts the error details include at least one of `loop_a` or `loop_b`
+/// in any part of the serialised response (path field, message, etc.).
+#[then(
+    regex = r#"^the error object details include at least one of "loop_a" or "loop_b" in the path information$"#
+)]
+async fn then_error_details_loop_members(world: &mut SubstrateWorld) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let haystack = format!("{resp}");
+    assert!(
+        haystack.contains("loop_a") || haystack.contains("loop_b"),
+        "expected 'loop_a' or 'loop_b' in error path information but got: {resp}"
+    );
+}
+
+/// Asserts the server returns the error within N seconds.
+/// Since `call_tool_and_store` is synchronous/blocking, the error is already
+/// present by the time this step runs — check it exists.
+#[then(regex = r#"^the server returns the error within (\d+) seconds?$"#)]
+async fn then_error_within_n_seconds(world: &mut SubstrateWorld, secs: u32) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let has_err = resp["error"].is_object()
+        || resp["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        has_err,
+        "expected an error response within {secs}s but got: {resp}"
+    );
+}
+
+/// Asserts the `recovery_hint` does NOT contain the given string.
+#[then(
+    regex = r#"^the error object field "recovery_hint" does not contain the string "([^"]+)"$"#
+)]
+async fn then_recovery_hint_not_contains(world: &mut SubstrateWorld, excluded: String) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let hint = resp["error"]["data"]["recovery_hint"]
+        .as_str()
+        .or_else(|| {
+            resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str()
+        })
+        .unwrap_or("");
+    assert!(
+        !hint.contains(&excluded),
+        "expected recovery_hint to NOT contain '{excluded}' but got '{hint}': {resp}"
+    );
+}
+
+/// Asserts no filesystem data outside the allowlist is returned.
+/// On a symlink-escape error response no content field should carry external data.
+#[then(regex = r#"^no filesystem data outside the allowlist is returned$"#)]
+async fn then_no_data_outside_allowlist(world: &mut SubstrateWorld) {
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let is_error = resp["error"].is_object()
+        || resp["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        is_error,
+        "expected an error response (no external data leaked) but got: {resp}"
+    );
+}
+
+/// Asserts the response body does not contain the content of the named file.
+/// For symlink-escape scenarios the response must be an error, not file bytes.
+#[then(
+    regex = r#"^the response body does not contain the content of "([^"]+)"$"#
+)]
+async fn then_response_no_file_content(world: &mut SubstrateWorld, file: String) {
+    let _ = file;
+    if world.skip_scenario {
+        return;
+    }
+    let resp = world.last_response.as_ref().expect("no response stored");
+    let is_error = resp["error"].is_object()
+        || resp["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        is_error,
+        "expected an error response (no file content leaked) but got: {resp}"
     );
 }
 

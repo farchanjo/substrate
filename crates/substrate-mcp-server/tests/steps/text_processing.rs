@@ -300,14 +300,25 @@ async fn when_text_search(world: &mut SubstrateWorld, root: String, pattern: Str
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
-    let root_path = world
-        .sandbox
-        .as_ref()
-        .map(|t| t.path().to_string_lossy().into_owned())
-        .unwrap_or(root.clone());
+    // Translate the placeholder /work/repo prefix to the canonicalised sandbox
+    // root (e.g. /private/var/... on macOS) so the server's path-jail does not
+    // treat a non-canonicalised symlink path (/var/...) as a SUBSTRATE_SYMLINK_ESCAPE.
+    // Preserve any sub-path after /work/repo so directory-specific searches
+    // (e.g. /work/repo/bin_only) scan the correct subdirectory.
+    let root_path = world.allowlist_root.as_ref().map_or_else(|| root.clone(), |canonical| {
+        let canonical_str = canonical.to_string_lossy();
+        if root.starts_with("/work/repo/") {
+            // Preserve the sub-path: /work/repo/foo → <canonical>/foo
+            let rel = root.trim_start_matches("/work/repo/");
+            format!("{canonical_str}/{rel}")
+        } else {
+            // Top-level /work/repo → use canonical root directly.
+            canonical_str.into_owned()
+        }
+    });
     world.call_tool_and_store(
         "text_search",
-        serde_json::json!({ "root": root_path, "pattern": pattern }),
+        serde_json::json!({ "path": root_path, "pattern": pattern }),
     );
 }
 
@@ -324,13 +335,13 @@ async fn when_text_search_cursor(
         world.spawn_and_initialize();
     }
     let root_path = world
-        .sandbox
+        .allowlist_root
         .as_ref()
-        .map(|t| t.path().to_string_lossy().into_owned())
+        .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or(root.clone());
     world.call_tool_and_store(
         "text_search",
-        serde_json::json!({ "root": root_path, "pattern": pattern, "cursor": cursor }),
+        serde_json::json!({ "path": root_path, "pattern": pattern, "cursor": cursor }),
     );
 }
 
@@ -347,14 +358,14 @@ async fn when_text_search_case_insensitive(
         world.spawn_and_initialize();
     }
     let root_path = world
-        .sandbox
+        .allowlist_root
         .as_ref()
-        .map(|t| t.path().to_string_lossy().into_owned())
+        .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or(root.clone());
     world.call_tool_and_store(
         "text_search",
         serde_json::json!({
-            "root": root_path,
+            "path": root_path,
             "pattern": pattern,
             "case_insensitive": case_insensitive,
         }),
@@ -529,13 +540,13 @@ async fn when_text_search_subsequent(world: &mut SubstrateWorld, root: String, p
         world.spawn_and_initialize();
     }
     let root_path = world
-        .sandbox
+        .allowlist_root
         .as_ref()
-        .map(|t| t.path().to_string_lossy().into_owned())
+        .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or(root.clone());
     world.call_tool_and_store(
         "text_search",
-        serde_json::json!({ "root": root_path, "pattern": pattern }),
+        serde_json::json!({ "path": root_path, "pattern": pattern }),
     );
 }
 
