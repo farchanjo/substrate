@@ -134,7 +134,10 @@ impl FsIndexWatcher {
 
     /// Spawns a Tokio task to call `FsIndexPort::invalidate` for a deleted path.
     fn spawn_invalidate(index: Arc<dyn FsIndexPort>, path: PathBuf) {
-        tokio::spawn(async move {
+        // fire-and-forget; task logs its own errors via tracing.
+        // The handle is intentionally discarded: watcher events are best-effort
+        // and the task owns its own error reporting.
+        let _ = tokio::spawn(async move {
             // Construct a JailedPath from the raw event path.
             // SAFETY (semantic): paths from notify events are absolute OS paths;
             // they may not be within the allowlist (e.g., if a watched root is

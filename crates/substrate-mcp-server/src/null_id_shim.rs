@@ -54,7 +54,10 @@
 use std::{
     io,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
 };
 
@@ -67,7 +70,9 @@ const NULL_ID_SENTINEL: i64 = i64::MIN;
 ///
 /// A single boolean suffices because the STDIO transport is strictly sequential
 /// (one client, one connection, one request at a time on the STDIO pipe).
-type NullIdActive = Arc<Mutex<bool>>;
+/// `AtomicBool` is used instead of `Mutex<bool>` because no other memory needs
+/// synchronising alongside this flag; `Relaxed` ordering is sufficient.
+type NullIdActive = Arc<AtomicBool>;
 
 /// Creates a matched (stdin shim, stdout shim) pair that transparently
 /// translates `"id": null` in JSON-RPC framing.
@@ -75,7 +80,7 @@ type NullIdActive = Arc<Mutex<bool>>;
 /// Both ends share the same `NullIdActive` flag so the outbound shim only
 /// rewrites responses when there is an active null-id request.
 pub(crate) fn null_id_pair() -> (NullIdStdin, NullIdStdout) {
-    let active: NullIdActive = Arc::new(Mutex::new(false));
+    let active: NullIdActive = Arc::new(AtomicBool::new(false));
     (
         NullIdStdin::new(tokio::io::stdin(), Arc::clone(&active)),
         NullIdStdout::new(tokio::io::stdout(), Arc::clone(&active)),
@@ -172,9 +177,7 @@ fn rewrite_null_id_inbound(line: &[u8], active: &NullIdActive) -> Vec<u8> {
             "id".to_owned(),
             serde_json::Value::Number(serde_json::Number::from(NULL_ID_SENTINEL)),
         );
-        if let Ok(mut guard) = active.lock() {
-            *guard = true;
-        }
+        active.store(true, Ordering::Relaxed);
         let mut out = serde_json::to_vec(&value).unwrap_or_else(|_| stripped.to_vec());
         out.push(b'\n');
         return out;
@@ -268,8 +271,7 @@ impl AsyncWrite for NullIdStdout {
 /// Rewrites a JSON-RPC response line, restoring `"id": null` when the
 /// sentinel id is present and the active flag is set.
 fn rewrite_null_id_outbound(line: &[u8], active: &NullIdActive) -> Vec<u8> {
-    let is_active = active.lock().is_ok_and(|g| *g);
-    if !is_active {
+    if !active.load(Ordering::Relaxed) {
         return line.to_vec();
     }
     let stripped = line.strip_suffix(b"\n").unwrap_or(line);
@@ -281,9 +283,7 @@ fn rewrite_null_id_outbound(line: &[u8], active: &NullIdActive) -> Vec<u8> {
     };
     if obj.get("id").and_then(serde_json::Value::as_i64) == Some(NULL_ID_SENTINEL) {
         obj.insert("id".to_owned(), serde_json::Value::Null);
-        if let Ok(mut guard) = active.lock() {
-            *guard = false;
-        }
+        active.store(false, Ordering::Relaxed);
         let mut out = serde_json::to_vec(&value).unwrap_or_else(|_| stripped.to_vec());
         out.push(b'\n');
         return out;
@@ -302,7 +302,7 @@ mod tests {
     use super::*;
 
     fn make_active(val: bool) -> NullIdActive {
-        Arc::new(Mutex::new(val))
+        Arc::new(AtomicBool::new(val))
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
             Some(NULL_ID_SENTINEL),
             "id must be rewritten to sentinel"
         );
-        assert!(*active.lock().expect("lock"), "active flag must be set");
+        assert!(active.load(Ordering::Relaxed), "active flag must be set");
     }
 
     #[test]
@@ -331,7 +331,7 @@ mod tests {
         let result = rewrite_null_id_inbound(line, &active);
         assert_eq!(result, line, "normal id must not be altered");
         assert!(
-            !*active.lock().expect("lock"),
+            !active.load(Ordering::Relaxed),
             "active flag must remain false"
         );
     }
@@ -357,7 +357,7 @@ mod tests {
         .expect("valid JSON");
         assert!(v["id"].is_null(), "id must be restored to null");
         assert!(
-            !*active.lock().expect("lock"),
+            !active.load(Ordering::Relaxed),
             "active flag must be cleared after restoration"
         );
     }

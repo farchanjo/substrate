@@ -56,28 +56,16 @@ fn emit_startup_error(
     code: &str,
     message: &str,
     recovery_hint: &str,
-    details: serde_json::Value,
+    details: &serde_json::Value,
 ) {
-    // UUIDv7 correlation_id: use a simple timestamp-based placeholder that
-    // satisfies the format contract without pulling uuid into main().
-    // Formatted as 01<timestamp_hex><random> — sufficient for log correlation.
+    // ADR-0036 requires a UUIDv7 correlation_id in the startup-error envelope.
+    let correlation_id =
+        uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string();
+
+    // ISO 8601 UTC timestamp (seconds precision — milliseconds not needed here).
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let ts_ms = now.as_millis();
-    // ADR-0036 requires a UUIDv7 correlation_id in the envelope.
-    // Build a minimal UUIDv7-shaped string: version=7, variant=0b10.
-    let rand_hi = (ts_ms ^ 0xABCD_EF01_2345_6789u128) & 0x0FFF_FFFF_FFFF_FFFF;
-    let correlation_id = format!(
-        "{:08x}-{:04x}-7{:03x}-{:04x}-{:012x}",
-        (ts_ms >> 16) & 0xFFFF_FFFF,
-        (ts_ms >> 4) & 0xFFFF,
-        ts_ms & 0xFFF,
-        0x8000 | (rand_hi >> 48) & 0x3FFF,
-        rand_hi & 0xFFFF_FFFF_FFFF
-    );
-
-    // ISO 8601 UTC timestamp (seconds precision — milliseconds not needed here).
     let secs = now.as_secs();
     let timestamp = format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -107,7 +95,7 @@ fn emit_startup_error(
     });
 
     // Single-line JSON per ADR-0036: consumers grep for `"$schema"`.
-    eprintln!("{}", envelope);
+    eprintln!("{envelope}");
     // stderr flush is best-effort; eprintln! auto-flushes on most platforms.
 }
 
@@ -121,7 +109,7 @@ fn main() -> ExitCode {
             "SUBSTRATE_RUNTIME_INIT_FAILED",
             &format!("logging subsystem initialization failed: {e}"),
             "check stderr for OS-level errors; ensure stderr is writable",
-            serde_json::json!({ "component": "logging", "cause": e.to_string() }),
+            &serde_json::json!({ "component": "logging", "cause": e.to_string() }),
         );
         return ExitCode::from(70);
     }
@@ -139,7 +127,7 @@ fn main() -> ExitCode {
             "SUBSTRATE_RUNTIME_INIT_FAILED",
             &format!("SIGPIPE SIG_IGN installation failed: {e}"),
             "check OS signal configuration; this is unusual on Linux/macOS",
-            serde_json::json!({ "component": "signal_handlers", "cause": e.to_string() }),
+            &serde_json::json!({ "component": "signal_handlers", "cause": e.to_string() }),
         );
         return ExitCode::from(72);
     }
@@ -158,7 +146,7 @@ fn main() -> ExitCode {
                 "SUBSTRATE_RUNTIME_INIT_FAILED",
                 &format!("tokio multi-thread runtime build failed: {e}"),
                 "check system resource limits (fd, threads); try ulimit -n 65536",
-                serde_json::json!({ "component": "tokio_runtime", "cause": e.to_string() }),
+                &serde_json::json!({ "component": "tokio_runtime", "cause": e.to_string() }),
             );
             return ExitCode::from(71);
         },
@@ -179,7 +167,7 @@ async fn async_main() -> ExitCode {
                 "SUBSTRATE_CONFIG_INVALID",
                 &format!("configuration load failed: {e}"),
                 "check TOML syntax and field names; run substrate --check-config to validate",
-                serde_json::json!({ "cause": e.to_string() }),
+                &serde_json::json!({ "cause": e.to_string() }),
             );
             return ExitCode::from(78);
         },
@@ -214,7 +202,7 @@ async fn async_main() -> ExitCode {
                 "SUBSTRATE_ALLOWLIST_ROOT_UNREADABLE",
                 "PathJail tier 1 unavailable and security.refuse_degraded_jail=true",
                 "upgrade the OS kernel (openat2 requires Linux ≥5.6) or set refuse_degraded_jail=false",
-                serde_json::json!({
+                &serde_json::json!({
                     "jail_tier": "UserspaceDegraded",
                     "has_openat2": caps.has_openat2,
                     "has_o_nofollow_any": caps.has_o_nofollow_any,
@@ -238,7 +226,7 @@ async fn async_main() -> ExitCode {
                 "SUBSTRATE_RUNTIME_INIT_FAILED",
                 &format!("composition root wiring failed: {e}"),
                 e.recovery_hint(),
-                serde_json::json!({ "error_code": e.code(), "cause": e.to_string() }),
+                &serde_json::json!({ "error_code": e.code(), "cause": e.to_string() }),
             );
             return ExitCode::from(73);
         },

@@ -545,7 +545,7 @@ impl ToolDispatcher {
             unknown => Err(SubstrateError::InvalidArgument {
                 offending_field: "tool_name".to_owned(),
                 reason: format!("unknown tool: {unknown}"),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             }),
         }
     }
@@ -566,7 +566,7 @@ impl ToolDispatcher {
     fn primary_root(&self) -> SubstrateResult<&JailedPath> {
         self.allowlist_roots.first().ok_or_else(|| SubstrateError::InternalError {
             reason: "no allowlist roots configured — composition root should have rejected empty policy.roots".to_owned(),
-            correlation_id: None,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         })
     }
 
@@ -1242,7 +1242,7 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> SubstrateResult<T> {
     serde_json::from_value(value).map_err(|e| SubstrateError::InvalidArgument {
         offending_field: "arguments".to_owned(),
         reason: e.to_string(),
-        correlation_id: None,
+        correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
     })
 }
 
@@ -1288,7 +1288,7 @@ fn check_path_for_traversal(path_str: &str) -> SubstrateResult<()> {
         if component == std::path::Component::ParentDir {
             return Err(SubstrateError::PathTraversalBlocked {
                 path: path_str.to_owned(),
-                correlation_id: None,
+                correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             });
         }
     }

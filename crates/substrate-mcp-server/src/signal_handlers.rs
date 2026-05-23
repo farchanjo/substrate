@@ -70,6 +70,7 @@ pub(crate) async fn wait_for_shutdown(token: CancellationToken) {
             .expect("SIGINT handler install failed");
 
         tokio::select! {
+            biased;
             _ = sigterm.recv() => {
                 tracing::info!("SIGTERM received — beginning graceful shutdown");
             }
