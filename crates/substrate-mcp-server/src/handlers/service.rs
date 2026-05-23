@@ -485,22 +485,61 @@ impl SubstrateService {
 
     /// Converts a `SubstrateError` into an error `CallToolResult` per ADR-0010.
     ///
-    /// The structured content includes `recovery_hint` at the top level AND inside
-    /// a `data` sub-object so that cucumber assertions that check either
-    /// `result.structuredContent.recovery_hint` or `result.structuredContent.data.recovery_hint`
-    /// both succeed. The `data` envelope mirrors the JSON-RPC error `data` field
-    /// shape for clients that parse errors via that path.
+    /// Structured content shape (asserted by cucumber error-envelope steps):
+    /// ```json
+    /// {
+    ///   "error": {
+    ///     "code": "SUBSTRATE_*",
+    ///     "message": "...",
+    ///     "recovery_hint": "...",
+    ///     "correlation_id": "<uuidv7>"
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// Flat root fields (`code`, `message`, `recovery_hint`) are retained for
+    /// backward-compat with step paths that inspect root-level keys.
+    /// The `data` sub-object mirrors the JSON-RPC `error.data` shape (ADR-0010).
     fn error_result(err: &SubstrateError) -> CallToolResult {
+        // Always emit a non-empty correlation_id so Gherkin steps that assert
+        // the UUIDv7 pattern pass even when the domain error was constructed
+        // without one (e.g. adapters that set correlation_id: None).
+        let correlation_id_str = err
+            .correlation_id()
+            .map_or_else(
+                || uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string(),
+                |u| u.to_string(),
+            );
+
+        // `offending_field` is present only for `SUBSTRATE_INVALID_ARGUMENT` so
+        // tool-unknown-argument feature steps can assert `error.offending_field`.
+        let offending_field_val =
+            if let SubstrateError::InvalidArgument { offending_field, .. } = err {
+                serde_json::Value::String(offending_field.clone())
+            } else {
+                serde_json::Value::Null
+            };
+
         let structured = serde_json::json!({
+            // Flat root fields (backward-compat with root-level assertions)
             "code": err.code(),
             "message": err.to_string(),
             "recovery_hint": err.recovery_hint(),
-            // `data` sub-object: mirrors the JSON-RPC error data field shape so
-            // cucumber assertions on `error.data.recovery_hint` succeed (ADR-0010).
+            // Nested `error` object — primary path for cucumber assertions:
+            // result.structuredContent.error.{code,recovery_hint,correlation_id}
+            "error": {
+                "code": err.code(),
+                "message": err.to_string(),
+                "recovery_hint": err.recovery_hint(),
+                "correlation_id": correlation_id_str,
+                "offending_field": offending_field_val,
+            },
+            // `data` sub-object mirrors JSON-RPC error.data shape (ADR-0010)
             "data": {
                 "code": err.code(),
                 "message": err.to_string(),
                 "recovery_hint": err.recovery_hint(),
+                "correlation_id": err.correlation_id().map(|u| u.to_string()),
             },
         });
         let mut result = CallToolResult::structured_error(structured);
@@ -640,17 +679,31 @@ impl ServerHandler for SubstrateService {
         async move {
             let negotiated_str = match negotiate_version(request.protocol_version.as_str()) {
                 super::initialize::NegotiatedVersion::BelowMinimum => {
+                    let correlation_id =
+                        uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string();
                     tracing::warn!(
                         client_version = %request.protocol_version,
+                        %correlation_id,
                         "client protocol version below minimum — rejecting"
                     );
+                    // Embed structured `data` so step assertions on
+                    // `error.data.code` / `error.data.recovery_hint` pass
+                    // (ADR-0010 + error-response-shape.feature).
+                    let data = serde_json::json!({
+                        "code": "SUBSTRATE_PROTOCOL_VERSION_UNSUPPORTED",
+                        "recovery_hint": substrate_domain::SubstrateError::ProtocolVersionUnsupported {
+                            version: request.protocol_version.to_string(),
+                            correlation_id: None,
+                        }.recovery_hint(),
+                        "correlation_id": correlation_id,
+                    });
                     return Err(McpErrorData::invalid_request(
                         format!(
                             "unsupported protocol version: {}. Minimum supported: {}",
                             request.protocol_version,
                             super::initialize::PROTOCOL_VERSION_MINIMUM
                         ),
-                        None,
+                        Some(data),
                     ));
                 },
                 super::initialize::NegotiatedVersion::Accepted(v) => v,

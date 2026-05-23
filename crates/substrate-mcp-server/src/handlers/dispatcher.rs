@@ -244,13 +244,13 @@ impl ToolDispatcher {
         match tool {
             // ---- Bucket A/D: filesystem-query (inline) ----------------------
             "fs_read_dir" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_query::handle_fs_read_dir(req, &self.fs_query, cancel)
                     .await
                     .map(from_fs_query)
             },
             "fs_stat" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_query::handle_fs_stat(req, &self.fs_query, cancel)
                     .await
                     .map(from_fs_query)
@@ -264,14 +264,14 @@ impl ToolDispatcher {
             // ---- Bucket D: filesystem-mutation (inline side-effect) ----------
             "fs_mkdir" => {
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_mkdir(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_write" => {
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_write(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
@@ -283,7 +283,7 @@ impl ToolDispatcher {
                 // SUBSTRATE_PATH_TRAVERSAL_BLOCKED before SUBSTRATE_INVALID_ARGUMENT.
                 pre_validate_field_for_traversal(&args, "src")?;
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_rename(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
@@ -292,49 +292,49 @@ impl ToolDispatcher {
                 // Security-first traversal check per ADR-0035.
                 pre_validate_field_for_traversal(&args, "path")?;
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_remove(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_set_permissions" => {
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_set_permissions(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_symlink" => {
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_symlink(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_touch" => {
                 let root = self.primary_root()?;
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 substrate_fs_mutation::handle_fs_touch(req, &self.fs_mutation, root)
                     .await
                     .map(from_fs_mutation)
             },
             // ---- Bucket A: process ------------------------------------------
             "proc_list" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 let deps = Arc::new(self.process.clone());
                 substrate_process::handle_proc_list(req, deps, Arc::clone(&self.scanner))
                     .await
                     .map(from_process)
             },
             "proc_tree" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 let deps = Arc::new(self.process.clone());
                 substrate_process::handle_proc_tree(req, deps, Arc::clone(&self.scanner))
                     .await
                     .map(from_process)
             },
             "proc_signal" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 let deps = Arc::new(self.process.clone());
                 substrate_process::handle_proc_signal(req, deps)
                     .await
@@ -387,14 +387,14 @@ impl ToolDispatcher {
                     .await
             },
             "text_head" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 let deps = Arc::new(self.text.clone());
                 substrate_text::handle_text_head(req, deps, cancel)
                     .await
                     .map(from_text)
             },
             "text_tail" => {
-                let req = parse(args)?;
+                let req = parse(&args)?;
                 let deps = Arc::new(self.text.clone());
                 substrate_text::handle_text_tail(req, deps, cancel)
                     .await
@@ -414,7 +414,7 @@ impl ToolDispatcher {
                 // SUBSTRATE_INVALID_ARGUMENT.  Schema validation (via `parse`)
                 // runs after this guard succeeds.
                 pre_validate_sources_for_traversal(&args)?;
-                let req: substrate_archive::tar_create::TarCreateRequest = parse(args.clone())?;
+                let req: substrate_archive::tar_create::TarCreateRequest = parse(&args)?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: use a standalone token so the request-level
                 // cancel (which fires when the MCP response is sent) does not
@@ -447,7 +447,7 @@ impl ToolDispatcher {
                 // `dest` are checked before schema parsing.
                 pre_validate_field_for_traversal(&args, "archive")?;
                 pre_validate_field_for_traversal(&args, "dest")?;
-                let req: substrate_archive::tar_extract::TarExtractRequest = parse(args.clone())?;
+                let req: substrate_archive::tar_extract::TarExtractRequest = parse(&args)?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: see archive_tar_create comment above.
                 let job_cancel = CancellationToken::new();
@@ -474,7 +474,7 @@ impl ToolDispatcher {
             "archive_zip_create" => {
                 // Security-first traversal check per ADR-0035: scan `sources` array.
                 pre_validate_sources_for_traversal(&args)?;
-                let req: substrate_archive::zip_create::ZipCreateRequest = parse(args.clone())?;
+                let req: substrate_archive::zip_create::ZipCreateRequest = parse(&args)?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: see archive_tar_create comment above.
                 let job_cancel = CancellationToken::new();
@@ -502,7 +502,7 @@ impl ToolDispatcher {
                 // Security-first traversal check per ADR-0035.
                 pre_validate_field_for_traversal(&args, "archive")?;
                 pre_validate_field_for_traversal(&args, "dest")?;
-                let req: substrate_archive::zip_extract::ZipExtractRequest = parse(args.clone())?;
+                let req: substrate_archive::zip_extract::ZipExtractRequest = parse(&args)?;
                 let deps = Arc::new(self.archive.clone());
                 // Job-scoped cancel: see archive_tar_create comment above.
                 let job_cancel = CancellationToken::new();
@@ -596,7 +596,7 @@ impl ToolDispatcher {
         // Currently always below threshold — executes inline.
         let _ = threshold;
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         substrate_fs_query::handle_fs_find(req, &self.fs_query, cancel)
             .await
             .map(from_fs_query)
@@ -629,7 +629,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_fs_query::read::FsReadRequest = parse(args.clone())?;
+            let req: substrate_fs_query::read::FsReadRequest = parse(&args)?;
             let fs_query = self.fs_query.clone();
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -657,7 +657,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         substrate_fs_query::handle_fs_read(req, &self.fs_query, cancel)
             .await
             .map(from_fs_query)
@@ -687,7 +687,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_fs_query::hash::FsHashRequest = parse(args.clone())?;
+            let req: substrate_fs_query::hash::FsHashRequest = parse(&args)?;
             let fs_query = self.fs_query.clone();
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -715,7 +715,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         substrate_fs_query::handle_fs_hash(req, &self.fs_query, cancel)
             .await
             .map(from_fs_query)
@@ -752,7 +752,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&src_path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_fs_mutation::copy::FsCopyRequest = parse(args.clone())?;
+            let req: substrate_fs_mutation::copy::FsCopyRequest = parse(&args)?;
             let fs_mutation = self.fs_mutation.clone();
             // Clone the primary root JailedPath for the async closure.
             // `primary_root` returns `&JailedPath`; we need an owned copy.
@@ -780,7 +780,7 @@ impl ToolDispatcher {
         }
 
         let root = self.primary_root()?;
-        let req = parse(args)?;
+        let req = parse(&args)?;
         // `_cancel` is unused in the inline path per existing dispatcher design.
         let _ = cancel;
         substrate_fs_mutation::handle_fs_copy(req, &self.fs_mutation, root)
@@ -812,7 +812,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_text::search::SearchParams = parse(args.clone())?;
+            let req: substrate_text::search::SearchParams = parse(&args)?;
             let deps = Arc::new(self.text.clone());
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -840,7 +840,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         let deps = Arc::new(self.text.clone());
         substrate_text::handle_text_search(req, deps, cancel)
             .await
@@ -869,7 +869,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_text::count_lines::CountLinesParams = parse(args.clone())?;
+            let req: substrate_text::count_lines::CountLinesParams = parse(&args)?;
             let deps = Arc::new(self.text.clone());
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -897,7 +897,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         let deps = Arc::new(self.text.clone());
         substrate_text::handle_text_count_lines(req, deps, cancel)
             .await
@@ -934,7 +934,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&source_path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_archive::gzip_compress::GzipCompressRequest = parse(args.clone())?;
+            let req: substrate_archive::gzip_compress::GzipCompressRequest = parse(&args)?;
             let archive = self.archive.clone();
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -962,7 +962,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         substrate_archive::handle_archive_gzip_compress(req, &self.archive, cancel)
             .await
             .map(from_archive)
@@ -998,7 +998,7 @@ impl ToolDispatcher {
 
         if size >= threshold {
             let req: substrate_archive::gzip_decompress::GzipDecompressRequest =
-                parse(args.clone())?;
+                parse(&args)?;
             let archive = self.archive.clone();
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -1026,7 +1026,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         substrate_archive::handle_archive_gzip_decompress(req, &self.archive, cancel)
             .await
             .map(from_archive)
@@ -1056,7 +1056,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_archive::hash::ArchiveHashRequest = parse(args.clone())?;
+            let req: substrate_archive::hash::ArchiveHashRequest = parse(&args)?;
             let archive = self.archive.clone();
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.
@@ -1084,7 +1084,7 @@ impl ToolDispatcher {
                 .await;
         }
 
-        let req = parse(args)?;
+        let req = parse(&args)?;
         substrate_archive::handle_archive_hash(req, &self.archive, cancel)
             .await
             .map(from_archive)
@@ -1145,7 +1145,7 @@ impl ToolDispatcher {
         struct Req {
             job_id: JobId,
         }
-        let req: Req = parse(args)?;
+        let req: Req = parse(&args)?;
         let entry = self.jobs.status(&req.job_id).await?;
         let content = format!("Job {} state: {:?}", req.job_id, entry.state);
         Ok(DispatchedResponse {
@@ -1162,7 +1162,7 @@ impl ToolDispatcher {
             #[serde(default)]
             wait_ms: Option<u64>,
         }
-        let req: Req = parse(args)?;
+        let req: Req = parse(&args)?;
         let wait = req.wait_ms.map(std::time::Duration::from_millis);
         let result = self.jobs.result(&req.job_id, wait).await?;
         let structured = match &result {
@@ -1189,7 +1189,7 @@ impl ToolDispatcher {
         struct Req {
             job_id: JobId,
         }
-        let req: Req = parse(args)?;
+        let req: Req = parse(&args)?;
         let state = self.jobs.cancel(&req.job_id).await?;
         Ok(DispatchedResponse {
             content: format!(
@@ -1214,7 +1214,7 @@ impl ToolDispatcher {
         let req: Req = if args.is_null() || args == Value::Object(serde_json::Map::default()) {
             Req::default()
         } else {
-            parse(args)?
+            parse(&args)?
         };
         let page = self.jobs.list(&client_id, req.cursor).await?;
         Ok(DispatchedResponse {
@@ -1238,12 +1238,92 @@ impl ToolDispatcher {
 
 /// Deserializes `Value` into `T`, mapping JSON errors to
 /// `SUBSTRATE_INVALID_ARGUMENT`.
-fn parse<T: serde::de::DeserializeOwned>(value: Value) -> SubstrateResult<T> {
-    serde_json::from_value(value).map_err(|e| SubstrateError::InvalidArgument {
-        offending_field: "arguments".to_owned(),
-        reason: e.to_string(),
-        correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+///
+/// When serde reports an unknown, missing, or wrongly-typed field, the field
+/// name is extracted from the error message and surfaced in `offending_field`
+/// so that cucumber assertions can identify the specific bad parameter.
+fn parse<T: serde::de::DeserializeOwned>(value: &Value) -> SubstrateResult<T> {
+    serde_json::from_value(value.clone()).map_err(|e| {
+        let msg = e.to_string();
+        // Try static message pattern extraction first (unknown/missing field).
+        // For type-mismatch errors ("invalid type") serde_json does not embed
+        // the field name in the message; fall back to probing the input object.
+        let offending_field = extract_offending_field(&msg)
+            .map(str::to_owned)
+            .or_else(|| {
+                if msg.contains("invalid type") {
+                    extract_type_mismatch_field(value)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "arguments".to_owned());
+        SubstrateError::InvalidArgument {
+            offending_field,
+            reason: msg,
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        }
     })
+}
+
+/// For "invalid type" serde errors, find the first field whose JSON value
+/// is an integer (the most common type-mismatch: integer where string expected).
+///
+/// Returns the field name as an owned `String` (no lifetime issues) or `None`
+/// when the pattern is not recognised.  This is a best-effort heuristic — it
+/// covers the common case `root=42` instead of `root="..."`.
+fn extract_type_mismatch_field(value: &Value) -> Option<String> {
+    let obj = value.as_object()?;
+    // Scan for the first field whose value is a JSON integer (i64/u64).
+    // Most tool-request string fields get integers as the wrong-type argument
+    // in tests and real usage.
+    for (key, val) in obj {
+        if val.is_number() && !val.is_f64() {
+            return Some(key.clone());
+        }
+    }
+    None
+}
+
+/// Extracts the field name from a serde_json error message string.
+///
+/// Handles common patterns emitted by serde_json 1.x: unknown field NAME,
+/// missing field NAME, and invalid type for field NAME.
+#[expect(
+    clippy::doc_markdown,
+    reason = "field name extraction is prose-level; backtick markers inside comments trigger the lint"
+)]
+fn extract_offending_field(msg: &str) -> Option<&str> {
+    // Pattern 1: "unknown field `NAME`" or "unknown field 'NAME'"
+    for prefix in &["unknown field `", "unknown field '"] {
+        if let Some(rest) = msg.strip_prefix(prefix) {
+            let end = rest.find(['`', '\'', ',', ' ']).unwrap_or(rest.len());
+            let name = &rest[..end];
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    // Pattern 2: "missing field `NAME`"
+    for prefix in &["missing field `", "missing field '"] {
+        if let Some(rest) = msg.strip_prefix(prefix) {
+            let end = rest.find(['`', '\'']).unwrap_or(rest.len());
+            let name = &rest[..end];
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    // Pattern 3: serde error message contains "field `NAME`" somewhere
+    if let Some(pos) = msg.find("field `") {
+        let rest = &msg[pos + 7..];
+        let end = rest.find('`').unwrap_or(rest.len());
+        let name = &rest[..end];
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
 }
 
 /// Security-first path-traversal guard for `archive_tar_create` sources.
@@ -1301,7 +1381,7 @@ fn check_path_for_traversal(path_str: &str) -> SubstrateResult<()> {
 /// [`check_path_for_traversal`]. If the field is absent or not a string the
 /// check is skipped (schema validation will report the missing field).
 ///
-/// Per ADR-0035: this pre-parse guard runs before `parse(args)?` so the
+/// Per ADR-0035: this pre-parse guard runs before `parse(&args)?` so the
 /// error-code precedence rule (security > schema) is enforced uniformly across
 /// all mutation and archive tools.
 fn pre_validate_field_for_traversal(args: &Value, field: &str) -> SubstrateResult<()> {
