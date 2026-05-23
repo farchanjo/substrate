@@ -24,17 +24,21 @@
     clippy::missing_panics_doc,
     clippy::redundant_closure_for_method_calls,
     clippy::needless_pass_by_value,
+    clippy::result_unit_err,
+    clippy::missing_errors_doc,
     unreachable_pub,
     missing_docs,
     reason = "integration-test carve-out per ADR-0044: \
               panicking assertions and std::process::Command are idiomatic here; \
               unreachable_pub suppressed for step module re-exports; \
-              missing_docs / missing_panics_doc / must_use suppressed for test harness internals"
+              missing_docs / missing_panics_doc / must_use suppressed for test harness internals; \
+              result_unit_err: unit error type is intentional for EOF-vs-timeout signalling"
 )]
 
 mod steps;
 
 use std::{
+    fmt::Write as FmtWrite,
     io::{BufRead as _, BufReader, Write as _},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
@@ -525,16 +529,11 @@ impl SubstrateWorld {
             }
             let per_read = remaining.min(slice);
             match self.recv_rpc_timeout(per_read) {
-                Ok(None) => {
-                    // EOF — server closed stdout.
-                    return true;
-                }
                 Ok(Some(_frame)) => {
                     // Another frame arrived; server is still open, keep draining.
                 }
-                Err(()) => {
-                    // Per-read timeout: recv_rpc_timeout killed the child and
-                    // cleared stdout_reader.  Treat as "connection closed".
+                Ok(None) | Err(()) => {
+                    // EOF or per-read timeout — treat as "connection closed".
                     return true;
                 }
             }
@@ -616,7 +615,7 @@ impl SubstrateWorld {
                     content.push('\n');
                     match_count += 1;
                 } else {
-                    content.push_str(&format!("line {line_idx} of file {idx}\n"));
+                    let _ = writeln!(content, "line {line_idx} of file {idx}");
                 }
             }
             std::fs::write(&file_path, &content)

@@ -14,10 +14,8 @@
     clippy::redundant_closure_for_method_calls,
     clippy::map_unwrap_or,
     clippy::unnecessary_debug_formatting,
-    clippy::unimplemented,
     reason = "cucumber step functions require &mut World and async signatures; \
-              raw strings and regex patterns are idiomatic in step definitions; \
-              unimplemented!() stubs are tracked separately"
+              raw strings and regex patterns are idiomatic in step definitions"
 )]
 
 use cucumber::{given, then, when};
@@ -164,6 +162,108 @@ async fn given_dir_takes_long(world: &mut SubstrateWorld, path: String, secs: u3
     world.context.insert("heavy_fixture_dir".to_string(), path);
 }
 
+
+// ---------------------------------------------------------------------------
+// Given steps for zip-slip blocking scenarios
+// (archive-zip-extract-zip-slip-blocked.feature)
+// ---------------------------------------------------------------------------
+
+// Minimal valid ZIP file with one stored entry (no compression).
+// Layout: local file header + data + central directory + end of central directory.
+fn make_minimal_zip(member_name: &str, content: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let name_bytes = member_name.as_bytes();
+    let name_len = u16::try_from(name_bytes.len()).expect("member name too long for ZIP");
+    let data_len = u32::try_from(content.len()).expect("content too large for ZIP");
+
+    // Local file header signature
+    let local_offset = u32::try_from(out.len()).expect("zip offset overflow");
+    out.extend_from_slice(b"PK\x03\x04"); // signature
+    out.extend_from_slice(&[0x14, 0x00]); // version needed
+    out.extend_from_slice(&[0x00, 0x00]); // flags
+    out.extend_from_slice(&[0x00, 0x00]); // compression (stored)
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // mod time/date
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // CRC-32 (0 for empty)
+    out.extend_from_slice(&data_len.to_le_bytes()); // compressed size
+    out.extend_from_slice(&data_len.to_le_bytes()); // uncompressed size
+    out.extend_from_slice(&name_len.to_le_bytes());
+    out.extend_from_slice(&[0x00, 0x00]); // extra field length
+    out.extend_from_slice(name_bytes);
+    out.extend_from_slice(content);
+
+    // Central directory header
+    let central_offset = u32::try_from(out.len()).expect("zip offset overflow");
+    out.extend_from_slice(b"PK\x01\x02"); // signature
+    out.extend_from_slice(&[0x14, 0x00]); // version made by
+    out.extend_from_slice(&[0x14, 0x00]); // version needed
+    out.extend_from_slice(&[0x00, 0x00]); // flags
+    out.extend_from_slice(&[0x00, 0x00]); // compression (stored)
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // mod time/date
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // CRC-32
+    out.extend_from_slice(&data_len.to_le_bytes()); // compressed size
+    out.extend_from_slice(&data_len.to_le_bytes()); // uncompressed size
+    out.extend_from_slice(&name_len.to_le_bytes());
+    out.extend_from_slice(&[0x00, 0x00]); // extra field length
+    out.extend_from_slice(&[0x00, 0x00]); // comment length
+    out.extend_from_slice(&[0x00, 0x00]); // disk number start
+    out.extend_from_slice(&[0x00, 0x00]); // internal attr
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // external attr
+    out.extend_from_slice(&local_offset.to_le_bytes()); // local header offset
+    out.extend_from_slice(name_bytes);
+
+    // End of central directory record
+    let central_size = u32::try_from(out.len()).expect("zip offset overflow") - central_offset;
+    out.extend_from_slice(b"PK\x05\x06");
+    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // disk #, start disk
+    out.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // entries on disk, total
+    out.extend_from_slice(&central_size.to_le_bytes());
+    out.extend_from_slice(&central_offset.to_le_bytes());
+    out.extend_from_slice(&[0x00, 0x00]); // comment length
+    out
+}
+
+#[given(
+    regex = r#"^a zip archive containing a member with path "([^"]+)"$"#
+)]
+async fn given_zip_member_path(world: &mut SubstrateWorld, member_path: String) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+    let archive_name = if member_path.contains("../") || member_path.starts_with("..") || member_path.starts_with('/') {
+        "evil.zip"
+    } else {
+        "nested_slip.zip"
+    };
+    let archive_path = root.join(archive_name);
+    let bytes = make_minimal_zip(&member_path, b"evil content");
+    std::fs::write(&archive_path, &bytes).expect("write zip fixture");
+    world.context.insert("zip_archive_path".to_string(), archive_path.to_string_lossy().into_owned());
+    world.context.insert("zip_member_path".to_string(), member_path);
+}
+
+#[given(
+    regex = r#"^a zip archive where all member paths resolve inside "([^"]+)"$"#
+)]
+async fn given_zip_safe_archive(world: &mut SubstrateWorld, extract_dst: String) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+    let archive_path = root.join("safe.zip");
+    let bytes = make_minimal_zip("safe_file.txt", b"safe content");
+    std::fs::write(&archive_path, &bytes).expect("write safe zip fixture");
+    world.context.insert("zip_archive_path".to_string(), archive_path.to_string_lossy().into_owned());
+}
+
 // ---------------------------------------------------------------------------
 // When steps
 // ---------------------------------------------------------------------------
@@ -195,7 +295,7 @@ async fn when_archive_tar_create_dry(
     }
     world.call_tool_and_store(
         "archive_tar_create",
-        serde_json::json!({ "src": full_src, "dst": full_dst, "dry_run": dry_run }),
+        serde_json::json!({ "sources": [full_src], "dst": full_dst, "dry_run": dry_run }),
     );
 }
 
@@ -225,7 +325,7 @@ async fn when_archive_tar_create_confirmed(
     world.call_tool_and_store(
         "archive_tar_create",
         serde_json::json!({
-            "src": full_src,
+            "sources": [full_src],
             "dst": full_dst,
             "dry_run": dry_run,
             "elicitation_confirmed": confirmed,
@@ -267,13 +367,13 @@ async fn then_dry_run_plan_files(world: &mut SubstrateWorld, count: u32) {
         // Dry-run plan was returned.  When the fixture was built, assert that
         // the plan's `entry_count` field matches the expected file count.
         // The field name follows the production ADR-0007 structuredContent shape.
-        if let Some(sc) = resp["result"]["structuredContent"].as_object() {
-            if let Some(entry_count) = sc.get("entry_count").and_then(|v| v.as_u64()) {
-                assert_eq!(
-                    entry_count as u32, count,
-                    "dry-run plan entry_count mismatch: expected {count}, got {entry_count}"
-                );
-            }
+        if let Some(sc) = resp["result"]["structuredContent"].as_object()
+            && let Some(entry_count) = sc.get("entry_count").and_then(|v| v.as_u64())
+        {
+            assert_eq!(
+                u32::try_from(entry_count).unwrap_or(u32::MAX), count,
+                "dry-run plan entry_count mismatch: expected {count}, got {entry_count}"
+            );
             // entry_count absent: production shape not yet finalised — pass.
         }
         return;
@@ -422,17 +522,8 @@ async fn then_no_symlinks_in_dir(world: &mut SubstrateWorld, dir: String) {
     }
 }
 
-#[then(
-    regex = r#"^the file "([^"]+)" does not exist on disk$"#
-)]
-async fn then_specific_file_not_on_disk(world: &mut SubstrateWorld, path: String) {
-    let root = world.root_str();
-    let full_path = path.replace("/work/repo", &root);
-    assert!(
-        !std::path::Path::new(&full_path).exists(),
-        "expected '{full_path}' to NOT exist but it does"
-    );
-}
+// NOTE: "the file X does not exist on disk" step is defined in filesystem_mutation.rs.
+// Removed duplicate to avoid ambiguous match.
 
 // ---------------------------------------------------------------------------
 // Tar-with-symlink fixture helper (scope-7 addition)

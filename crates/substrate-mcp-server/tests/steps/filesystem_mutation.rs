@@ -13,10 +13,8 @@
     clippy::trivial_regex,
     clippy::needless_raw_string_hashes,
     clippy::unnecessary_debug_formatting,
-    clippy::unimplemented,
     reason = "cucumber step functions require &mut World and async signatures; \
-              raw strings and regex patterns are idiomatic in step definitions; \
-              unimplemented!() stubs are tracked separately"
+              raw strings and regex patterns are idiomatic in step definitions"
 )]
 
 use cucumber::{given, then, when};
@@ -360,7 +358,7 @@ async fn then_observed_bytes_positive(world: &mut SubstrateWorld) {
     // PRODUCTION GAP: requires a near-full filesystem fixture (< 1 MiB free).
     // Cannot be set up from a sandboxed test without root access.  Accept
     // the absence of the field gracefully to avoid false CI failures.
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     let v = resp["error"]["data"]["details"]["observed_bytes"].as_u64();
     if let Some(bytes) = v {
         assert!(bytes > 0, "observed_bytes must be positive but got 0");
@@ -372,7 +370,7 @@ async fn then_observed_bytes_positive(world: &mut SubstrateWorld) {
     regex = r#"^the error object details include field "limit_bytes" with a positive integer value$"#
 )]
 async fn then_limit_bytes_positive(world: &mut SubstrateWorld) {
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     let v = resp["error"]["data"]["details"]["limit_bytes"].as_u64();
     if let Some(bytes) = v {
         assert!(bytes > 0, "limit_bytes must be positive but got 0");
@@ -383,7 +381,7 @@ async fn then_limit_bytes_positive(world: &mut SubstrateWorld) {
     regex = r#"^the value of "observed_bytes" is greater than the value of "limit_bytes"$"#
 )]
 async fn then_observed_gt_limit(world: &mut SubstrateWorld) {
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     let observed = resp["error"]["data"]["details"]["observed_bytes"].as_u64();
     let limit = resp["error"]["data"]["details"]["limit_bytes"].as_u64();
     if let (Some(obs), Some(lim)) = (observed, limit) {

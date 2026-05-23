@@ -296,7 +296,7 @@ async fn when_archive_zip_create_bucket_c(
     world.call_tool_and_store(
         "archive_zip_create",
         serde_json::json!({
-            "src": large_root,
+            "sources": [large_root],
             "dest": full_dest,
             "progress_token": "tok-bucket-c",
         }),
@@ -319,7 +319,7 @@ async fn when_archive_tar_create_bucket_c(
     let full_dest = dest.replace("/work/out.tar", &format!("{root}/out.tar"));
     world.call_tool_and_store(
         "archive_tar_create",
-        serde_json::json!({ "src": full_src, "dest": full_dest }),
+        serde_json::json!({ "sources": [full_src], "dest": full_dest }),
     );
 }
 
@@ -356,7 +356,7 @@ async fn when_job_status_active(world: &mut SubstrateWorld) {
         .context
         .get("active_job_id")
         .cloned()
-        .unwrap_or_else(|| "01JAAAAAAAAAAAAAAAAAAAAAB".to_string());
+        .unwrap_or_else(|| "00000000-0000-7000-8000-000000000001".to_string());
     world.call_tool_and_store(
         "job_status",
         serde_json::json!({ "job_id": job_id }),
@@ -375,7 +375,7 @@ async fn when_job_status_completed(world: &mut SubstrateWorld) {
         .get("completed_job_id")
         .or_else(|| world.context.get("active_job_id"))
         .cloned()
-        .unwrap_or_else(|| "01JAAAAAAAAAAAAAAAAAAAAAC".to_string());
+        .unwrap_or_else(|| "00000000-0000-7000-8000-000000000002".to_string());
     world.call_tool_and_store(
         "job_status",
         serde_json::json!({ "job_id": job_id }),
@@ -412,7 +412,7 @@ async fn when_send_cancel_notification(world: &mut SubstrateWorld) {
         .context
         .get("active_job_id")
         .cloned()
-        .unwrap_or_else(|| "01JAAAAAAAAAAAAAAAAAAAAAD".to_string());
+        .unwrap_or_else(|| "00000000-0000-7000-8000-000000000003".to_string());
     let msg = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "notifications/cancelled",
@@ -433,7 +433,7 @@ async fn when_send_cancel_notification_simple(world: &mut SubstrateWorld) {
         .get("active_job_id")
         .or_else(|| world.context.get("cancel_job_id"))
         .cloned()
-        .unwrap_or_else(|| "01JAAAAAAAAAAAAAAAAAAAAAE".to_string());
+        .unwrap_or_else(|| "00000000-0000-7000-8000-000000000004".to_string());
     let msg = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "notifications/cancelled",
@@ -551,7 +551,7 @@ async fn when_client_submits_job(world: &mut SubstrateWorld, client: String, too
     world.call_tool_and_store(
         &tool_name,
         serde_json::json!({
-            "src": root,
+            "sources": [root],
             "dest": dest,
             "client_id": client,
         }),
@@ -753,7 +753,7 @@ async fn then_response_state(world: &mut SubstrateWorld, state: String) {
         .and_then(|o| o.keys().next())
         .map(|k| k.to_lowercase())
         .unwrap_or_default();
-    let actual = if !actual_flat.is_empty() { actual_flat.clone() } else { actual_tag.clone() };
+    let actual = if actual_flat.is_empty() { actual_tag } else { actual_flat };
     // When the server returned an error the state field will be absent; accept
     // SUBSTRATE_JOB_NOT_FOUND as a structural proxy for the production gap.
     let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
@@ -1283,7 +1283,7 @@ async fn then_job_state_cancelled(world: &mut SubstrateWorld, ms: u64) {
         .context
         .get("cancel_job_id")
         .cloned()
-        .unwrap_or_else(|| "01JAAAAAAAAAAAAAAAAAAAAAD".to_string());
+        .unwrap_or_else(|| "00000000-0000-7000-8000-000000000003".to_string());
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
     loop {
         world.call_tool_and_store(
@@ -1391,7 +1391,7 @@ async fn then_job_status_cancelled(world: &mut SubstrateWorld) {
         .context
         .get("cancel_job_id")
         .cloned()
-        .unwrap_or_else(|| "01JAAAAAAAAAAAAAAAAAAAAAD".to_string());
+        .unwrap_or_else(|| "00000000-0000-7000-8000-000000000003".to_string());
     world.call_tool_and_store(
         "job_status",
         serde_json::json!({ "job_id": job_id }),

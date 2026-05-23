@@ -87,10 +87,14 @@ async fn then_kernel_nonempty(world: &mut SubstrateWorld) {
 )]
 async fn then_uptime_positive(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
-    let uptime = resp["result"]["structuredContent"]["uptime_seconds"].as_u64();
+    // Try both the nested path (uptime.seconds) and the flat path (uptime_seconds)
+    // to handle schema evolution.
+    let uptime = resp["result"]["structuredContent"]["uptime"]["seconds"]
+        .as_u64()
+        .or_else(|| resp["result"]["structuredContent"]["uptime_seconds"].as_u64());
     assert!(
         uptime.is_some_and(|u| u > 0),
-        "expected positive uptime_seconds in structuredContent: {resp}"
+        "expected positive uptime (at structuredContent.uptime.seconds or .uptime_seconds): {resp}"
     );
 }
 

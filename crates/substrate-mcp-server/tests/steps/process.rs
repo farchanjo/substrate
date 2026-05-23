@@ -12,13 +12,11 @@
     clippy::trivial_regex,
     clippy::needless_raw_string_hashes,
     clippy::cast_possible_truncation,
-    clippy::unimplemented,
     unsafe_code,
     reason = "cucumber step functions require &mut World and async signatures; \
               raw strings and regex patterns are idiomatic in step definitions; \
               u32 truncation is intentional for PID conversion in test context; \
-              unsafe_code is used only in test context for kill(pid, 0) process-existence probes; \
-              unimplemented!() stubs are tracked separately"
+              unsafe_code is used only in test context for kill(pid, 0) process-existence probes"
 )]
 
 use cucumber::{given, then, when};
@@ -74,9 +72,9 @@ async fn given_pid_not_running_simple(world: &mut SubstrateWorld, pid: u32) {
 }
 
 #[given(
-    regex = r#"^a running process with PID (\d+) owned by the current user and within the process allowlist$"#
+    regex = r#"^a running process with PID (\d+) owned by the current user(?: and within the process allowlist)?$"#
 )]
-async fn given_running_process_in_allowlist(world: &mut SubstrateWorld, _pid: u32) {
+async fn given_running_process_in_allowlist(world: &mut SubstrateWorld, pid: u32) {
     // Spawn a real background process so proc.signal has a live PID target.
     // The Gherkin hard-codes PID 9876 as a placeholder; we override it with
     // the real spawned PID so the When step sends the signal to the right process.
@@ -104,6 +102,18 @@ async fn given_proc_first_cursor(world: &mut SubstrateWorld, cursor: String) {
     world
         .context
         .insert("prior_proc_cursor".to_string(), cursor);
+}
+
+#[given(
+    regex = r#"^the substrate process signal allowlist excludes PID 1 and kernel threads$"#
+)]
+async fn given_signal_allowlist_excludes_kernel(world: &mut SubstrateWorld) {
+    // The allowlist is defined statically in the server policy.  This step is a
+    // precondition acknowledgement — no test-harness action is required.  The
+    // When step (proc.signal with pid=1) will verify the server enforces it.
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -162,27 +172,7 @@ async fn when_proc_signal(
     );
 }
 
-#[when(
-    regex = r#"^the client calls proc\.signal with pid=(\d+) and signal=([A-Z]+) and elicitation_confirmed=(true|false)$"#
-)]
-async fn when_proc_signal_unquoted(
-    world: &mut SubstrateWorld,
-    pid: u32,
-    signal: String,
-    confirmed: bool,
-) {
-    if world.child.is_none() {
-        world.spawn_and_initialize();
-    }
-    world.call_tool_and_store(
-        "proc_signal",
-        serde_json::json!({
-            "pid": pid,
-            "signal": signal,
-            "elicitation_confirmed": confirmed,
-        }),
-    );
-}
+// NOTE: when_proc_signal_unquoted removed — when_proc_signal regex uses "?([A-Z]+)"? which matches both quoted and unquoted signal names.
 
 // ---------------------------------------------------------------------------
 // Then steps
@@ -210,10 +200,7 @@ async fn then_proc_entry_fields(world: &mut SubstrateWorld) {
     }
     // Validate that every entry in the proc.list response carries the expected
     // fields.  If last_response is absent (scenario was skipped), return early.
-    let resp = match world.last_response.as_ref() {
-        Some(r) => r,
-        None => return,
-    };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             assert!(entry["pid"].is_number(), "pid field missing: {entry}");
@@ -225,7 +212,7 @@ async fn then_proc_entry_fields(world: &mut SubstrateWorld) {
 #[then(regex = r#"^every entry has a non-null pid field of integer type$"#)]
 async fn then_proc_pid_nonnull(world: &mut SubstrateWorld) {
     if world.skip_scenario { return; }
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             assert!(entry["pid"].is_number(), "expected non-null pid: {entry}");
@@ -236,7 +223,7 @@ async fn then_proc_pid_nonnull(world: &mut SubstrateWorld) {
 #[then(regex = r#"^every entry has a non-empty name field of string type$"#)]
 async fn then_proc_name_nonempty(world: &mut SubstrateWorld) {
     if world.skip_scenario { return; }
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             let name = entry["name"].as_str().unwrap_or("");
@@ -250,7 +237,7 @@ async fn then_proc_name_nonempty(world: &mut SubstrateWorld) {
 )]
 async fn then_proc_cpu_range(world: &mut SubstrateWorld) {
     if world.skip_scenario { return; }
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             if let Some(cpu) = entry["cpu_percent"].as_f64() {
@@ -265,7 +252,7 @@ async fn then_proc_cpu_range(world: &mut SubstrateWorld) {
 )]
 async fn then_proc_mem_range(world: &mut SubstrateWorld) {
     if world.skip_scenario { return; }
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             if let Some(mem) = entry["mem_percent"].as_f64() {
@@ -281,7 +268,7 @@ async fn then_proc_mem_range(world: &mut SubstrateWorld) {
 async fn then_proc_parent_pid(world: &mut SubstrateWorld) {
     if world.skip_scenario { return; }
     // parent_pid may be null for root processes — presence as null IS acceptable.
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             // The field is serialised as `ppid` (not `parent_pid`).
@@ -337,7 +324,7 @@ async fn then_proc_not_running(world: &mut SubstrateWorld, pid: u32) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             // SAFETY: kill(pid, 0) only probes existence — no signal is sent.
-            let rc = unsafe { libc::kill(real_pid as libc::pid_t, 0) };
+            let rc = unsafe { libc::kill(real_pid.cast_signed(), 0) };
             if rc == 0 {
                 // Process still alive — acceptable: the signal may have been
                 // rejected by policy (PERMISSION_DENIED) or the PID was wrong.
@@ -352,7 +339,7 @@ async fn then_proc_not_running(world: &mut SubstrateWorld, pid: u32) {
                     "proc-signal SIGKILL for pid {real_pid}: process still alive and error is not acceptable: {resp}"
                 );
                 // Clean up the background process ourselves.
-                unsafe { libc::kill(real_pid as libc::pid_t, libc::SIGKILL); }
+                unsafe { libc::kill(real_pid.cast_signed(), libc::SIGKILL); }
             }
             // ESRCH (no such process) → process gone as expected.
         }
@@ -459,3 +446,6 @@ async fn then_no_not_found_error(world: &mut SubstrateWorld) {
         "unexpected SUBSTRATE_NOT_FOUND: {resp}"
     );
 }
+
+// NOTE: given_running_process_pid_12345 handled by given_running_process_in_allowlist (line 76).
+

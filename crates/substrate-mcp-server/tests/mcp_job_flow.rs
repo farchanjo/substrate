@@ -123,9 +123,18 @@ fn send(stdin: &mut std::process::ChildStdin, msg: &str) {
 }
 
 fn recv(reader: &mut BufReader<std::process::ChildStdout>) -> serde_json::Value {
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("read stdout line");
-    serde_json::from_str(line.trim()).expect("parse JSON-RPC")
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read stdout line");
+        let frame: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("parse JSON-RPC");
+        // Skip server-pushed notifications (no "id" field).
+        // These include notifications/progress, notifications/cancelled, etc.
+        if frame.get("id").is_none() {
+            continue;
+        }
+        return frame;
+    }
 }
 
 /// Performs MCP handshake (initialize + notifications/initialized) and discards the

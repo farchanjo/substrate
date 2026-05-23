@@ -17,10 +17,8 @@
     clippy::unnecessary_map_or,
     clippy::or_fun_call,
     clippy::needless_return,
-    clippy::unimplemented,
     reason = "cucumber step functions require &mut World and async signatures; \
-              raw strings and regex patterns are idiomatic in step definitions; \
-              unimplemented!() stubs are tracked separately"
+              raw strings and regex patterns are idiomatic in step definitions"
 )]
 
 use cucumber::{given, then, when};
@@ -65,7 +63,9 @@ async fn given_dir_contains_n_files(
     // the actual sandbox pattern, but the fixture builder uses .txt extensions
     // — the server pattern "*.rs" won't match them, so we create .rs stubs
     // when the pattern ends with ".rs".
-    let use_rs = pattern.ends_with(".rs");
+    let use_rs = std::path::Path::new(&pattern)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
     let root_for_fixture = root.clone();
     let created = if use_rs {
         // Create .rs files using the archive fixture helper (reused here).
@@ -124,7 +124,9 @@ async fn given_dir_contains_exactly(
         .expect("allowlist_root not set")
         .clone();
 
-    let use_rs = pattern.ends_with(".rs");
+    let use_rs = std::path::Path::new(&pattern)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
     if use_rs {
         let src_dir = root.join("rs_files_exact");
         std::fs::create_dir_all(&src_dir)
@@ -162,6 +164,96 @@ async fn given_file_not_exist(world: &mut SubstrateWorld, path: String) {
         .insert("absent_file".to_string(), path);
 }
 
+#[given(
+    regex = r#"^the file "([^"]+)" is a symlink pointing to "([^"]+)"$"#
+)]
+async fn given_file_is_symlink(world: &mut SubstrateWorld, link_path: String, target: String) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+    // Strip placeholder prefixes, resolve relative to sandbox root.
+    let link_rel = link_path
+        .trim_start_matches("/work/repo/")
+        .trim_start_matches("/work/repo");
+    let real_link = root.join(link_rel);
+    if let Some(parent) = real_link.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    // Remove any existing file at the link path before creating the symlink.
+    let _ = std::fs::remove_file(&real_link);
+    // Use the raw target string (may be absolute, e.g. /etc/passwd, or relative).
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &real_link)
+        .expect("create symlink for given_file_is_symlink");
+    world
+        .context
+        .insert("symlink_path".to_string(), link_path);
+    world
+        .context
+        .insert("symlink_target".to_string(), target);
+}
+
+/// Step: `"/work/repo/sys_link" is a symlink pointing to "/usr/bin/env"` (without
+/// the leading keyword — Gherkin uses a bare string when the "Given" is implied
+/// by the scenario context).
+#[given(
+    regex = r#"^"([^"]+)" is a symlink pointing to "([^"]+)"$"#
+)]
+async fn given_bare_symlink(world: &mut SubstrateWorld, link_path: String, target: String) {
+    given_file_is_symlink(world, link_path, target).await;
+}
+
+#[given(
+    regex = r#"^the symlink "([^"]+)" exists and points to "([^"]+)"$"#
+)]
+async fn given_symlink_exists_points(
+    world: &mut SubstrateWorld,
+    link_path: String,
+    target: String,
+) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+    let root = world
+        .allowlist_root
+        .as_ref()
+        .expect("allowlist_root not set")
+        .clone();
+    let link_rel = link_path
+        .trim_start_matches("/work/repo/")
+        .trim_start_matches("/work/repo");
+    let real_link = root.join(link_rel);
+    if let Some(parent) = real_link.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let _ = std::fs::remove_file(&real_link);
+    // Target may itself be a sandbox-relative placeholder; resolve it.
+    let target_rel = target
+        .trim_start_matches("/work/repo/")
+        .trim_start_matches("/work/repo");
+    // If the original target was absolute and outside /work/repo keep it as-is;
+    // otherwise use the relative form so the symlink works inside the sandbox.
+    let real_target = if target.starts_with("/work/repo") {
+        root.join(target_rel).to_string_lossy().into_owned()
+    } else {
+        target.clone()
+    };
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_target, &real_link)
+        .expect("create symlink for given_symlink_exists_points");
+    world
+        .context
+        .insert("symlink_path".to_string(), link_path);
+    world
+        .context
+        .insert("symlink_target".to_string(), target);
+}
+
 // ---------------------------------------------------------------------------
 // When steps
 // ---------------------------------------------------------------------------
@@ -171,11 +263,17 @@ async fn when_fs_find(world: &mut SubstrateWorld, root: String, pattern: String)
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
-    let root_path = world
-        .sandbox
-        .as_ref()
-        .map(|t| t.path().to_string_lossy().into_owned())
-        .unwrap_or(root.clone());
+    // For traversal/security tests the root contains paths like "../etc" or
+    // "/tmp/outside" — use as-is.  For happy-path tests, "/work/repo" is
+    // replaced with the sandbox path.
+    let root_path = if root.contains("/work/repo") {
+        world
+            .sandbox
+            .as_ref()
+            .map_or_else(|| root.replace("/work/repo", &world.root_str()), |t| t.path().to_string_lossy().into_owned())
+    } else {
+        root.clone()
+    };
     world.call_tool_and_store(
         "fs_find",
         serde_json::json!({ "root": root_path, "pattern": pattern }),
@@ -228,16 +326,7 @@ async fn when_fs_find_with_page_size(
     );
 }
 
-#[when(regex = r#"^the client calls fs\.find with root="([^"]*)"\s+and pattern="([^"]+)"$"#)]
-async fn when_fs_find_traversal(world: &mut SubstrateWorld, root: String, pattern: String) {
-    if world.child.is_none() {
-        world.spawn_and_initialize();
-    }
-    world.call_tool_and_store(
-        "fs_find",
-        serde_json::json!({ "root": root, "pattern": pattern }),
-    );
-}
+// NOTE: when_fs_find_traversal removed — when_fs_find handles raw/traversal paths (no /work/repo replacement for non-sandbox paths).
 
 #[when(regex = r#"^the client calls fs\.find with cursor="([^"]+)" and page_size=(\d+)$"#)]
 async fn when_fs_find_cursor_only(
@@ -255,28 +344,7 @@ async fn when_fs_find_cursor_only(
     );
 }
 
-#[when(
-    regex = r#"^the client calls fs\.find with root="([^"]+)" and pattern="([^"]+)" and page_size=(\d+)$"#
-)]
-async fn when_fs_find_root_pattern_pagesize(
-    world: &mut SubstrateWorld,
-    root: String,
-    pattern: String,
-    page_size: u32,
-) {
-    if world.child.is_none() {
-        world.spawn_and_initialize();
-    }
-    let root_path = world
-        .sandbox
-        .as_ref()
-        .map(|t| t.path().to_string_lossy().into_owned())
-        .unwrap_or(root.clone());
-    world.call_tool_and_store(
-        "fs_find",
-        serde_json::json!({ "root": root_path, "pattern": pattern, "page_size": page_size }),
-    );
-}
+// NOTE: when_fs_find_root_pattern_pagesize is a duplicate of when_fs_find_with_page_size — removed.
 
 #[when(
     regex = r#"^the client calls fs\.find with a manually crafted cursor value "([^"]+)"$"#
@@ -320,7 +388,7 @@ async fn when_fs_read_nul_byte(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the structured content has exactly (\d+) entries$"#)]
 async fn then_structured_content_count(world: &mut SubstrateWorld, expected: usize) {
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if resp["error"].is_object() { return; } // error response — pass structurally
     let sc = &resp["result"]["structuredContent"];
     // substrate may return entries under "entries" or "matches" depending on
@@ -342,7 +410,7 @@ async fn then_structured_content_count(world: &mut SubstrateWorld, expected: usi
 #[then(regex = r#"^the structured content includes a next_cursor token$"#)]
 async fn then_has_next_cursor(world: &mut SubstrateWorld) {
     // TODO(production): assert structuredContent.next_cursor is present once fixture is wired.
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if resp["error"].is_object() { return; } // fixture absent
     // Structural pass — next_cursor presence check deferred.
 }
@@ -351,7 +419,7 @@ async fn then_has_next_cursor(world: &mut SubstrateWorld) {
 async fn then_content_text_reports(world: &mut SubstrateWorld, expected: String) {
     // TODO(production): assert content[0].text contains expected once fixture is wired.
     let _ = expected;
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if resp["error"].is_object() { return; }
 }
 
@@ -412,7 +480,7 @@ async fn then_no_filesystem_read(_world: &mut SubstrateWorld) {
     regex = r#"^the structured content has exactly (\d+) entries and includes next_cursor "([^"]+)"$"#
 )]
 async fn then_count_and_cursor(world: &mut SubstrateWorld, count: usize, cursor: String) {
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if resp["error"].is_object() { return; } // fixture absent
     let _ = (count, cursor); // TODO(production): assert entry count and cursor presence
 }
@@ -458,7 +526,7 @@ async fn then_union_equals_full_set(world: &mut SubstrateWorld, total: u32) {
 
 #[then(regex = r#"^the structured content has exactly (\d+) entries and does not include a next_cursor$"#)]
 async fn then_count_no_cursor(world: &mut SubstrateWorld, count: usize) {
-    let resp = match world.last_response.as_ref() { Some(r) => r, None => return };
+    let Some(resp) = world.last_response.as_ref() else { return };
     if resp["error"].is_object() { return; }
     let _ = count; // TODO(production): assert entry count
 }
