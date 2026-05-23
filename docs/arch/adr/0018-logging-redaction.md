@@ -106,7 +106,7 @@ Mandatory fields per audit event:
 - `SecretString` compile-time tests confirm `format!("{:?}", secret)` emits `[REDACTED]`.
 - Log output integration tests parse stderr as NDJSON and assert schema conformance.
 
-## Cross-references
+## Cross-References
 
 - ADR-0009 — Audit log retention and storage (where logs go, rotation policy)
 - ADR-0029 — Threat model (audit log injection listed as threat T-5; CRLF stripping is the mitigation)

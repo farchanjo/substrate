@@ -123,6 +123,6 @@ Value objects (from shared kernel):
 - 2026-05-21 — `text.search` and `text.count_lines` are Bucket-B auto-mode
   ([ADR-0040](../../adr/0040-async-job-control-plane.md)): inline below configured
   byte/match thresholds, async-job above. SIMD acceleration
-  ([ADR-0043](../../adr/0043-simd-acceleration-tiers.md)) covers `memchr` /
+  ([ADR-0043](../../adr/0043-simd-runtime-dispatch.md)) covers `memchr` /
   aho-corasick Teddy / regex Teddy / bytecount popcount / `simdutf8` validation.
   `text.head` and `text.tail` are Bucket-A (snapshot-capped).

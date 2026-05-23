@@ -126,7 +126,7 @@ Out of scope: network-based remote attackers (substrate binds no network listene
 - CI gate: `cargo audit` with zero high/critical advisories.
 - Elicitation integration tests verify D-2 and E-2 scenarios require confirmation before execution.
 
-## Cross-references
+## Cross-References
 
 - ADR-0004 — Security model (implements mitigations referenced in this document)
 - ADR-0016 — Archive tool design (Zip Slip mitigation details)

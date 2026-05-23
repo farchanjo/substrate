@@ -139,7 +139,7 @@ Cleanup MUST complete (or time out at one second) before the error response is d
 - Integration tests exercise `archive.zip.extract` cancellation mid-member and verify the temp extraction directory is removed.
 - Property tests generate adversarial filenames for the UUID7 suffix and verify no collision or path escape occurs.
 
-## Cross-references
+## Cross-References
 
 - [ADR-0004](0004-security-model.md) — Security model (path jail applied in step 1)
 - [ADR-0016](0016-resource-limits.md) — Resource limits (size limits enforced before preflight)

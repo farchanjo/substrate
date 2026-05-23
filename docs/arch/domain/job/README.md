@@ -133,7 +133,7 @@ Aggregates and domain services owned by this context:
   `SUBSTRATE_JOB_NOT_FOUND` (evicted or unknown job_id), `SUBSTRATE_QUOTA_EXCEEDED`
   (per-client or global limit reached); existing codes `SUBSTRATE_TIMEOUT` and
   `SUBSTRATE_INTERNAL_ERROR` apply to worker failures.
-- [ADR-0033](../../adr/0033-transactional-writes.md) — not directly applicable to
+- [ADR-0033](../../adr/0033-transactional-write-pattern.md) — not directly applicable to
   job control-plane operations (no disk writes); referenced because Bucket B/C
   tools that create jobs do perform transactional writes in their worker tasks.
 

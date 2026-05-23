@@ -83,7 +83,7 @@ The structured stderr audit log (ADR-0018) satisfies local observability require
 - `cargo audit` and dependency review gate confirms no telemetry SDK is pulled in transitively.
 - CI enforces feature matrix: `default`, `outbound-net`, `telemetry` (future) are tested independently.
 
-## Cross-references
+## Cross-References
 
 - ADR-0019 — Privacy policy baseline (data classification, retention, operator data handling obligations)
 - ADR-0011 — Configuration schema (TOML structure governing security and network features)

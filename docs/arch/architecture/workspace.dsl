@@ -68,6 +68,14 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             fsIndex = container "substrate-fs-index" "Optional filesystem index adapter (fs-index Cargo feature). Accelerates fs.find and fs.stat by maintaining a lightweight in-memory index updated at commit time." "Rust crate, opt-in" {
                 tags "Adapter"
             }
+
+            fsIndexMacosSys = container "substrate-fs-index-macos-sys" "Platform shim providing the macOS-specific FSEvents and kqueue backend bindings consumed by substrate-fs-index on Apple platforms." "Rust / macOS FFI" {
+                tags "Platform"
+            }
+
+            signalSys = container "substrate-signal-sys" "Platform shim implementing SIGPIPE disposition (SIG_IGN at startup) and other signal-safety concerns required by ADR-0032. Linked only by substrate-mcp-server." "Rust / libc" {
+                tags "Platform"
+            }
         }
 
         # External relationships
@@ -115,6 +123,10 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
         fsQuery -> fsIndex "Consults index via FsIndexPort (when fs-index feature enabled)"
         fsIndex -> domain "Implements FsIndexPort from"
         fsMutation -> fsIndex "Write-through update at commit time"
+
+        # Platform shim relationships
+        fsIndex -> fsIndexMacosSys "Uses macOS FSEvents/kqueue backend on Apple platforms"
+        mcpServer -> signalSys "Calls signal-safety setup at startup"
     }
 
     views {
@@ -157,6 +169,10 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             }
             element "Adapter" {
                 background "#1e8449"
+                color "#ffffff"
+            }
+            element "Platform" {
+                background "#7d6608"
                 color "#ffffff"
             }
             element "Software System" {

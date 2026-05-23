@@ -29,6 +29,10 @@ mindmap
       JobEntry
       JobRegistry
       JobBucket
+        Bucket A
+        Bucket B
+        Bucket C
+        Bucket D
       IdempotencyKey
       ProgressToken
       SequenceNumber
@@ -280,6 +284,16 @@ An autonomous software agent driven by a large language model that invokes
 substrate tools via the MCP protocol to accomplish OS management tasks. LLM
 agent inputs are considered untrusted; all security enforcement is server-side.
 
+## MADR
+
+Markdown Architecture Decision Records, version 4.0; the ADR template format
+used in `docs/arch/adr/`. Each record follows the MADR 4.0 front-matter schema
+(`status`, `date`, `deciders`, `consulted`, `informed`) and body structure
+(Context and Problem Statement, Decision Drivers, Considered Options, Decision
+Outcome, Consequences, Validation, Links). Records are immutable once accepted;
+superseded records link forward to their replacement. See
+[ADR-0001](adr/0001-record-architecture-decisions.md).
+
 ## MCP
 
 Model Context Protocol: the JSON-RPC-based protocol over which LLM agents
@@ -376,6 +390,16 @@ tool call to report incremental progress. Substrate uses `ProgressToken` (shared
 kernel value object) to associate notifications with the originating request.
 See [ADR-0025](adr/0025-bounded-context-interactions.md).
 
+## recovery_hint
+
+An optional string field, bounded to 150 characters, included in every error
+envelope returned by substrate tools. It provides a plain-language suggestion
+for the next operator or agent action (for example: "retry with a smaller
+page_size", "check allowlist config", "wait and retry"). The field is absent
+when no actionable remediation exists. Carried in `structuredContent` as part
+of the error value object. See [ADR-0010](adr/0010-error-taxonomy.md) and
+[ADR-0036](adr/0036-error-code-registry.md).
+
 ## SequenceNumber
 
 Monotonic integer field included in every `notifications/progress` message for
@@ -417,12 +441,34 @@ machine-readable JSON alongside the human-readable `content` text. Substrate
 populates `structuredContent` with tool output data and the `hints` object on
 every response. See [ADR-0007](adr/0007-tool-card-narrative-arc.md).
 
+## structuredContent
+
+The literal JSON field name in an MCP 2025-06-18+ tool response carrying
+machine-readable output. Substrate emits `structuredContent` on every tool
+response; the field always contains the tool output schema-validated JSON plus
+the `hints` map. Prior to MCP 2025-06-18 the field was absent; capability
+intersection at handshake determines whether the client can consume it. See
+[ADR-0013](adr/0013-mcp-protocol-version.md) and
+[ADR-0007](adr/0007-tool-card-narrative-arc.md). Synonym: see
+[structured content](#structured-content).
+
 ## substrate
 
 The MCP server defined by this architecture specification. Substrate exposes
 baseutils-equivalent OS management capabilities (filesystem inspection and
 mutation, process control, system metadata, text processing, archiving) to LLM
 agents via the Model Context Protocol over STDIO.
+
+## substrate-signal-sys
+
+Platform-specific Cargo crate implementing `signal(SIGPIPE, SIG_IGN)` and
+other signal-disposition concerns required by
+[ADR-0032](adr/0032-signal-safety.md). The crate is a thin platform shim:
+it wraps `libc::signal` (POSIX) or equivalent Win32 calls, exports a single
+`install_signal_handlers()` function, and has no dependencies on any adapter
+or domain crate. Only `substrate-mcp-server` links this crate; it calls
+`install_signal_handlers()` as the very first statement of `main`. See the
+hexagonal classification in [ADR-0022](adr/0022-project-layout.md).
 
 ## threat model
 

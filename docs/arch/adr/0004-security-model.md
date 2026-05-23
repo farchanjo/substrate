@@ -137,7 +137,7 @@ All four layers are enforced server-side, in the substrate process, before any s
 - Integration tests confirm dry-run preview output matches actual mutation diff.
 - Elicitation form rendering is verified against MCP elicitation spec conformance tests.
 
-## Cross-references
+## Cross-References
 
 - ADR-0008 — Tool surface design (which tools are exposed and their argument schemas)
 - ADR-0018 — Logging redaction policy (audit trail for security events)

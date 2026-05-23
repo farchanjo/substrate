@@ -53,10 +53,14 @@ mcp-os/
     substrate-config/         # TOML config parsing and validation
     substrate-fs-query/       # filesystem-query bounded context
     substrate-fs-mutation/    # filesystem-mutation bounded context
+    substrate-fs-index/       # optional filesystem index adapter (opt-in feature)
+    substrate-fs-index-macos-sys/ # macOS platform shim for FSEvents / kqueue index backend
     substrate-process/        # process bounded context
     substrate-system-info/    # system-info bounded context
     substrate-text/           # text-processing bounded context
     substrate-archive/        # archive bounded context
+    substrate-jobs/           # async job control-plane adapter (ADR-0040)
+    substrate-signal-sys/     # platform shim: SIGPIPE disposition + signal safety (ADR-0032)
     substrate-mcp-server/     # binary: composition root, MCP transport
   docs/
     arch/                     # spec root (ADRs, schemas, decisions)
@@ -192,7 +196,26 @@ MCP JSON-RPC surface against a spawned server process.
 - CI must run `cargo test -p substrate-domain` in isolation to verify the zero
   infra rule holds.
 
+## Amendment — 2026-05-22 — Additional domain dependencies (accepted)
+
+In practice the domain crate carries two additional dependencies beyond the
+original allow-list:
+
+- `time` (0.3) — value-object timestamp arithmetic for `IdempotencyKey` TTL
+  bounds and audit-event `seq` ordering. `time` is a pure-data crate (no I/O)
+  and does not pull in any runtime; consistent with hexagonal layering.
+- `serde_json` — error-envelope serialization for the `recovery_hint` JSON
+  path expressions and `structuredContent` value-object marshalling.
+  `serde_json` is used only inside value-object impls, never inside port
+  traits.
+
+Both are accepted on hexagonal grounds (no I/O, no runtime, no syscalls) and
+the Rego policy `hexagonal_layering.rego` is updated alongside this amendment.
+
 ## Links
 
 - Related: [ADR-0002](0002-bounded-contexts.md)
 - Related: [ADR-0028](0028-platform-feature-gates.md)
+- Related: [ADR-0040](0040-async-job-control-plane.md) — introduced `substrate-jobs`
+- Related: [ADR-0041](0041-filesystem-index-native-tiers.md) — introduced `substrate-fs-index`
+- Related: [ADR-0032](0032-signal-safety.md) — introduced `substrate-signal-sys`

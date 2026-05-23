@@ -191,7 +191,7 @@ The following risks are documented as not fully closed by the decisions above:
 - Property tests generate adversarial Unicode strings and verify NFC normalization is idempotent and does not produce allowlist bypasses.
 - Startup canonicalization tests assert that symlink roots and missing roots abort with `SUBSTRATE_CONFIG_INVALID`.
 
-## Cross-references
+## Cross-References
 
 - [ADR-0004](0004-security-model.md) — Security model (base path jail and allowlist)
 - [ADR-0018](0018-logging-redaction.md) — Logging redaction policy (extra_patterns for custom secrets)

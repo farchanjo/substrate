@@ -4,15 +4,20 @@
 # Violations indicate a dependency that crosses an architectural boundary.
 #
 # Crate taxonomy:
-#   domain   : substrate-domain          (innermost — MUST NOT import any other substrate-* crate)
-#   policy   : substrate-policy          (domain-only; MUST NOT import adapter crates)
-#   adapter  : substrate-fs, substrate-proc, substrate-sys, substrate-text, substrate-archive
-#              (MUST NOT depend on each other; allowed: domain + policy)
-#   server   : substrate-mcp-server      (only crate allowed to depend on all)
+#   domain        : substrate-domain           (innermost — MUST NOT import any other substrate-* crate)
+#   policy        : substrate-policy           (domain-only; MUST NOT import adapter crates)
+#   infra-policy  : substrate-config           (config loader; may import domain + policy; not an adapter)
+#   platform-shim : substrate-fs-index-macos-sys, substrate-signal-sys
+#                   (thin OS-abstraction shims; may import domain; MUST NOT import adapter crates)
+#   adapter       : substrate-fs-query, substrate-fs-mutation, substrate-fs-index,
+#                   substrate-process, substrate-system-info, substrate-text,
+#                   substrate-archive, substrate-jobs
+#                   (MUST NOT depend on each other; allowed: domain + policy)
+#   server        : substrate-mcp-server       (only crate allowed to depend on all)
 #
 # Input shape:
 #   {
-#     "crate_name":      "substrate-fs",
+#     "crate_name":      "substrate-fs-query",
 #     "dependencies":    ["substrate-domain", "substrate-policy", "tokio", "rmcp"],
 #     "allowed_external": ["tokio", "serde", "anyhow"]
 #   }
@@ -20,36 +25,36 @@
 # Test vectors (inline):
 #
 #   PASS — domain with no substrate-* deps
-#   input = {"crate_name":"substrate-domain","dependencies":["serde","thiserror"],"allowed_external":["serde","thiserror"]}
+#   input = {"crate_name":"substrate-domain","dependencies":["serde","thiserror","time","serde_json"],"allowed_external":["serde","thiserror","time","serde_json"]}
 #
 #   PASS — policy depends on domain only
 #   input = {"crate_name":"substrate-policy","dependencies":["substrate-domain","anyhow"],"allowed_external":["anyhow"]}
 #
 #   PASS — adapter depends on domain + policy
-#   input = {"crate_name":"substrate-fs","dependencies":["substrate-domain","substrate-policy","tokio","serde"],"allowed_external":["tokio","serde"]}
+#   input = {"crate_name":"substrate-fs-query","dependencies":["substrate-domain","substrate-policy","tokio","serde"],"allowed_external":["tokio","serde"]}
 #
 #   PASS — server depends on all
-#   input = {"crate_name":"substrate-mcp-server","dependencies":["substrate-domain","substrate-policy","substrate-fs","rmcp","tokio"],"allowed_external":["rmcp","tokio"]}
+#   input = {"crate_name":"substrate-mcp-server","dependencies":["substrate-domain","substrate-policy","substrate-fs-query","rmcp","tokio"],"allowed_external":["rmcp","tokio"]}
 #
 #   FAIL — domain imports another substrate-* crate
 #   input = {"crate_name":"substrate-domain","dependencies":["substrate-policy"],"allowed_external":[]}
 #   expected deny: "substrate-domain (domain layer) MUST NOT depend on substrate-policy"
 #
 #   FAIL — policy imports an adapter crate
-#   input = {"crate_name":"substrate-policy","dependencies":["substrate-domain","substrate-fs"],"allowed_external":[]}
-#   expected deny: "substrate-policy (policy layer) MUST NOT depend on adapter crate substrate-fs"
+#   input = {"crate_name":"substrate-policy","dependencies":["substrate-domain","substrate-fs-query"],"allowed_external":[]}
+#   expected deny: "substrate-policy (policy layer) MUST NOT depend on adapter crate substrate-fs-query"
 #
 #   FAIL — adapter depends on another adapter
-#   input = {"crate_name":"substrate-fs","dependencies":["substrate-domain","substrate-proc"],"allowed_external":[]}
-#   expected deny: "substrate-fs (adapter) MUST NOT depend on another adapter crate substrate-proc"
+#   input = {"crate_name":"substrate-fs-query","dependencies":["substrate-domain","substrate-process"],"allowed_external":[]}
+#   expected deny: "substrate-fs-query (adapter) MUST NOT depend on another adapter crate substrate-process"
 #
 #   FAIL — non-server crate pulls in rmcp
-#   input = {"crate_name":"substrate-fs","dependencies":["substrate-domain","rmcp"],"allowed_external":["rmcp"]}
-#   expected deny: "substrate-fs: only substrate-mcp-server may depend on rmcp (MCP wire layer)"
+#   input = {"crate_name":"substrate-fs-query","dependencies":["substrate-domain","rmcp"],"allowed_external":["rmcp"]}
+#   expected deny: "substrate-fs-query: only substrate-mcp-server may depend on rmcp (MCP wire layer)"
 #
 #   FAIL — non-server crate pulls in tokio net feature (detected by "tokio" + "net" marker)
-#   input = {"crate_name":"substrate-fs","dependencies":["substrate-domain","tokio/net"],"allowed_external":["tokio/net"]}
-#   expected deny: "substrate-fs: only substrate-mcp-server may activate tokio net feature"
+#   input = {"crate_name":"substrate-fs-query","dependencies":["substrate-domain","tokio/net"],"allowed_external":["tokio/net"]}
+#   expected deny: "substrate-fs-query: only substrate-mcp-server may activate tokio net feature"
 
 package substrate.hexagonal
 
@@ -63,12 +68,28 @@ _is_domain(name) if name == "substrate-domain"
 
 _is_policy(name) if name == "substrate-policy"
 
+# substrate-config is an infra-policy crate: may import domain + policy,
+# but MUST NOT import adapter crates (same rule as policy layer).
+_is_infra_policy(name) if name == "substrate-config"
+
+# Platform shims are thin OS-abstraction crates: may import domain,
+# MUST NOT import adapter crates or pull in rmcp / tokio-net.
+_platform_shim_crates := {
+    "substrate-fs-index-macos-sys",
+    "substrate-signal-sys",
+}
+
+_is_platform_shim(name) if _platform_shim_crates[name]
+
 _adapter_crates := {
-    "substrate-fs",
-    "substrate-proc",
-    "substrate-sys",
+    "substrate-fs-query",
+    "substrate-fs-mutation",
+    "substrate-fs-index",
+    "substrate-process",
+    "substrate-system-info",
     "substrate-text",
     "substrate-archive",
+    "substrate-jobs",
 }
 
 _is_adapter(name) if _adapter_crates[name]
@@ -101,6 +122,34 @@ deny contains msg if {
     _is_adapter(dep)
     msg := sprintf(
         "%s (policy layer) MUST NOT depend on adapter crate %s",
+        [input.crate_name, dep],
+    )
+}
+
+# ---------------------------------------------------------------------------
+# Rule 2b: infra-policy (substrate-config) MUST NOT import adapter crates
+# ---------------------------------------------------------------------------
+
+deny contains msg if {
+    _is_infra_policy(input.crate_name)
+    dep := input.dependencies[_]
+    _is_adapter(dep)
+    msg := sprintf(
+        "%s (infra-policy layer) MUST NOT depend on adapter crate %s",
+        [input.crate_name, dep],
+    )
+}
+
+# ---------------------------------------------------------------------------
+# Rule 2c: platform shims MUST NOT import adapter crates
+# ---------------------------------------------------------------------------
+
+deny contains msg if {
+    _is_platform_shim(input.crate_name)
+    dep := input.dependencies[_]
+    _is_adapter(dep)
+    msg := sprintf(
+        "%s (platform shim) MUST NOT depend on adapter crate %s",
         [input.crate_name, dep],
     )
 }

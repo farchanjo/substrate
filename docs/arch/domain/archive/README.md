@@ -149,6 +149,6 @@ Value objects (from shared kernel):
   [ADR-0040](../../adr/0040-async-job-control-plane.md) (long-running, mandatory
   job dispatch). `archive.gzip.compress`, `archive.gzip.decompress`, and
   `archive.hash` are Bucket-B auto-mode. SIMD-accelerated deflate (libdeflater or
-  zlib-ng per [ADR-0043](../../adr/0043-simd-acceleration-tiers.md)) and CRC32
+  zlib-ng per [ADR-0043](../../adr/0043-simd-runtime-dispatch.md)) and CRC32
   (CLMUL/PMULL) are on the critical path; BLAKE3 SIMD tier is supplied by the
   capability factory ([ADR-0042](../../adr/0042-capability-adapter-factory.md)).
