@@ -16,9 +16,11 @@ use std::sync::atomic::AtomicU64;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use substrate_domain::subprocess::request::CaptureKind;
 use substrate_domain::subprocess::{StdinKind, SubprocessError, SubprocessRequest};
 use substrate_domain::value_objects::{JobId, ProcessGroup};
 
+use crate::tmp_file::TmpFileWriter;
 use crate::watchdog::WatchdogPipe;
 
 /// The maximum decoded size of a single stream chunk, per ADR-0054.
@@ -52,6 +54,12 @@ pub struct ChildHandle {
     pub cancel: CancellationToken,
 
     /// Temporary file paths registered during this invocation.
+    ///
+    /// Both the transit (`.tmp.<uuid7>`) and the final paths are pushed here at
+    /// spawn time so the cascade cleanup chain handles interrupted renames too.
+    /// The transit entry is removed from this Vec by `ChildHandle::unregister_tmp_path`
+    /// after a successful [`TmpFileWriter::finalize`]; the final path entry stays
+    /// until the client reads the result and explicitly requests cleanup.
     ///
     /// Cleaned up explicitly in the cancel path per ADR-0033 + ADR-0014
     /// (panic=abort means Drop is not guaranteed).
@@ -89,6 +97,26 @@ pub struct ChildHandle {
 
     /// Monotonic sequence counter for stderr stream chunks per ADR-0054.
     pub stderr_seq: Arc<AtomicU64>,
+
+    /// The capture kind requested for this job per ADR-0054.
+    ///
+    /// Used by the registry's `result()` method to decide whether to finalize
+    /// tmp files and populate [`SubprocessResult::stdout_tmp_path`] /
+    /// [`SubprocessResult::stderr_tmp_path`].
+    pub capture_kind: CaptureKind,
+
+    /// Stdout tmp file writer; `Some` only when `capture_kind == TmpFile`.
+    ///
+    /// The writer is wrapped in `Arc` so it can be shared with the reader task
+    /// and the registry result path without cloning the file handle.
+    ///
+    /// References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
+    pub stdout_tmp_writer: Option<Arc<TmpFileWriter>>,
+
+    /// Stderr tmp file writer; `Some` only when `capture_kind == TmpFile`.
+    ///
+    /// References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
+    pub stderr_tmp_writer: Option<Arc<TmpFileWriter>>,
 }
 
 impl ChildHandle {
@@ -111,6 +139,19 @@ impl ChildHandle {
             return Ok(None);
         };
         child.wait().await.map(Some)
+    }
+
+    /// Removes `path` from the registered tmp-file list.
+    ///
+    /// Called after [`TmpFileWriter::finalize`] succeeds to deregister the
+    /// transit path (which no longer exists after the rename). The final path
+    /// remains registered so the cascade reaper can handle an interrupted
+    /// rename scenario.
+    ///
+    /// References: ADR-0033 §"Transactional Write Pattern".
+    pub async fn unregister_tmp_path(&self, path: &std::path::Path) {
+        let mut guard = self.tmp_files.lock().await;
+        guard.retain(|p| p != path);
     }
 }
 
@@ -173,14 +214,20 @@ impl RingBuffer {
 /// 2. Builds the `tokio::process::Command` with stdio pipes per ADR-0052.
 /// 3. Installs watchdog pipe (macOS) and pre-exec hook (both platforms).
 /// 4. Spawns the child and records its PID/PGID in a [`ProcessGroup`].
-/// 5. Returns a [`ChildHandle`] for use by reader tasks and the cascade kill chain.
+/// 5. When `req.capture_kind == TmpFile`: creates stdout and stderr [`TmpFileWriter`]
+///    instances under `tmp_root` and registers both the transit and final paths in
+///    `ChildHandle.tmp_files` for cascade cleanup per ADR-0033.
+/// 6. Returns a [`ChildHandle`] for use by reader tasks and the cascade kill chain.
 ///
 /// # Errors
 ///
-/// - [`SubprocessError::InvalidRequest`] — field validation failed.
-/// - [`SubprocessError::SpawnFailed`] — OS `fork`/`exec` returned an error.
+/// - [`SubprocessError::InvalidRequest`] — field validation failed, or `TmpFile`
+///   capture mode requested but `tmp_root` is `None`.
+/// - [`SubprocessError::SpawnFailed`] — OS `fork`/`exec` returned an error, or
+///   transit file could not be created.
 ///
-/// References: ADR-0052 §"Subprocess Sandbox", ADR-0053 §"Process Group Leadership".
+/// References: ADR-0052 §"Subprocess Sandbox", ADR-0053 §"Process Group Leadership",
+/// ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
 #[expect(
     clippy::disallowed_types,
     reason = "substrate-subprocess is the single authorized host of tokio::process::Command \
@@ -195,6 +242,7 @@ pub async fn spawn_supervised(
     req: &SubprocessRequest,
     parent_cancel: CancellationToken,
     aggregate_buffer_bytes: usize,
+    tmp_root: Option<&std::path::Path>,
 ) -> Result<ChildHandle, SubprocessError> {
     // Step 1: domain validation (no OS calls).
     req.validate()?;
@@ -264,11 +312,52 @@ pub async fn spawn_supervised(
 
     let job_id = JobId::now_v7();
 
+    // Step 9: TmpFile writers (only when capture_kind == TmpFile).
+    //
+    // For Stream and InMemory: no file I/O, writers stay None.
+    // For TmpFile: create transit files, register both transit AND final paths in
+    //   tmp_files so the cascade reaper can handle interrupted renames.
+    let (stdout_tmp_writer, stderr_tmp_writer, tmp_files_vec) = match req.capture_kind {
+        CaptureKind::TmpFile => {
+            let root = tmp_root.ok_or_else(|| SubprocessError::InvalidRequest {
+                msg: "capture_kind TmpFile requires a configured subprocess.tmp_root; \
+                      no tmp_root was provided to spawn_supervised"
+                    .to_owned(),
+            })?;
+            let stdout_writer = TmpFileWriter::create(
+                root,
+                &job_id,
+                substrate_domain::subprocess::stream::Stream::Stdout,
+            )
+            .await?;
+            let stderr_writer = TmpFileWriter::create(
+                root,
+                &job_id,
+                substrate_domain::subprocess::stream::Stream::Stderr,
+            )
+            .await?;
+            // Register both transit AND final paths for cascade cleanup.
+            // Cleanup of the transit path after finalize is handled by unregister_tmp_path.
+            let registered = vec![
+                stdout_writer.tmp_path().to_owned(),
+                stdout_writer.final_path().to_owned(),
+                stderr_writer.tmp_path().to_owned(),
+                stderr_writer.final_path().to_owned(),
+            ];
+            (
+                Some(Arc::new(stdout_writer)),
+                Some(Arc::new(stderr_writer)),
+                registered,
+            )
+        },
+        CaptureKind::Stream | CaptureKind::InMemory => (None, None, Vec::new()),
+    };
+
     Ok(ChildHandle {
         job_id,
         process_group,
         cancel,
-        tmp_files: Mutex::new(Vec::new()),
+        tmp_files: Mutex::new(tmp_files_vec),
         watchdog,
         child: Mutex::new(Some(child)),
         stdout_ring: Arc::new(Mutex::new(RingBuffer::new(aggregate_buffer_bytes))),
@@ -278,5 +367,8 @@ pub async fn spawn_supervised(
         stream_chunks_dropped: Arc::new(AtomicU64::new(0)),
         stdout_seq: Arc::new(AtomicU64::new(0)),
         stderr_seq: Arc::new(AtomicU64::new(0)),
+        capture_kind: req.capture_kind.clone(),
+        stdout_tmp_writer,
+        stderr_tmp_writer,
     })
 }

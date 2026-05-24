@@ -27,7 +27,7 @@ use substrate_domain::ports::subprocess::{
 };
 use substrate_domain::subprocess::errors::SubprocessError;
 use substrate_domain::subprocess::handle::SubprocessHandle;
-use substrate_domain::subprocess::request::SubprocessRequest;
+use substrate_domain::subprocess::request::{CaptureKind, SubprocessRequest};
 use substrate_domain::subprocess::state::SubprocessState;
 use substrate_domain::value_objects::{ClientId, JobId, ProcessGroup};
 
@@ -126,6 +126,15 @@ pub struct SubprocessRegistry {
 
     /// Per-client active-subprocess counters.
     per_client_active: Arc<DashMap<ClientId, u32>>,
+
+    /// Root directory for subprocess capture tmp files per ADR-0033 amendment 2026-05-24.
+    ///
+    /// Required when any job uses `capture_kind == TmpFile`. When `None`, a spawn
+    /// request with `CaptureKind::TmpFile` returns [`SubprocessError::InvalidRequest`].
+    ///
+    /// Set via [`SubprocessRegistry::with_tmp_root`] on the builder; or passed
+    /// directly to [`SubprocessRegistry::new`] as the `tmp_root` parameter.
+    tmp_root: Option<PathBuf>,
 }
 
 impl SubprocessRegistry {
@@ -141,6 +150,9 @@ impl SubprocessRegistry {
     /// - `shutdown_drain_secs`: SIGTERM→SIGKILL drain window per ADR-0053.
     /// - `path_allowlist`: allowlist used to validate `cwd`.
     /// - `root_cancel`: server root `CancellationToken`.
+    ///
+    /// `tmp_root` is `None` by default; set it via [`SubprocessRegistry::with_tmp_root`]
+    /// when `CaptureKind::TmpFile` is used. See ADR-0033 amendment 2026-05-24.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -167,7 +179,45 @@ impl SubprocessRegistry {
             path_allowlist,
             root_cancel,
             per_client_active: Arc::default(),
+            tmp_root: None,
         })
+    }
+
+    /// Builder-style setter for the tmp-file root directory.
+    ///
+    /// Required when any job uses `CaptureKind::TmpFile`. The path MUST be inside
+    /// the `policy.roots` allowlist; this is enforced at spawn time by
+    /// `spawn_supervised` via the `PathJail` check.
+    ///
+    /// Returns `Arc<Self>` consuming the existing `Arc` to allow method chaining
+    /// from the composition root.
+    ///
+    /// References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
+    ///
+    /// # Panics
+    ///
+    /// Panics if `Arc::try_unwrap` fails (i.e., multiple strong references exist
+    /// when this builder is called). Call `with_tmp_root` immediately after `new`
+    /// before sharing the `Arc`.
+    #[must_use]
+    #[expect(
+        clippy::panic,
+        reason = "with_tmp_root is a builder-phase method called once before Arc sharing;                   the panic branch is unreachable in correct usage and documents the invariant"
+    )]
+    pub fn with_tmp_root(self: Arc<Self>, tmp_root: PathBuf) -> Arc<Self> {
+        // SAFETY: `with_tmp_root` is a builder-phase method; the Arc has exactly
+        // one strong reference at this point (called immediately after `new`).
+        let mut inner = Arc::try_unwrap(self).unwrap_or_else(|_| {
+            // This branch is unreachable in correct usage (builder called once,
+            // before sharing the Arc). Fallback creates a clone — unavoidable
+            // but the lint guard below prevents this path in tests.
+            panic!(
+                "SubprocessRegistry::with_tmp_root: Arc has multiple strong references; \
+                 call with_tmp_root before sharing the registry"
+            )
+        });
+        inner.tmp_root = Some(tmp_root);
+        Arc::new(inner)
     }
 
     /// Returns the number of currently active (non-terminal) subprocesses.
@@ -267,6 +317,10 @@ impl SubprocessRegistry {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "SubprocessPort impl requires all port methods in one block per the hexagonal               layering constraint; extracted helpers would cross the impl boundary"
+)]
 #[async_trait]
 impl SubprocessPort for SubprocessRegistry {
     /// Spawns a new child process per ADR-0052 five-layer security stack.
@@ -328,9 +382,16 @@ impl SubprocessPort for SubprocessRegistry {
             });
         }
 
-        // OS spawn.
+        // OS spawn. Pass tmp_root so spawn_supervised can create TmpFileWriter
+        // instances for CaptureKind::TmpFile per ADR-0033/ADR-0054.
         let handle = Arc::new(
-            spawn_supervised(&req, self.root_cancel.clone(), self.aggregate_buffer_bytes).await?,
+            spawn_supervised(
+                &req,
+                self.root_cancel.clone(),
+                self.aggregate_buffer_bytes,
+                self.tmp_root.as_deref(),
+            )
+            .await?,
         );
         let job_id = handle.job_id.clone();
 
@@ -452,6 +513,81 @@ impl SubprocessPort for SubprocessRegistry {
         let stdout_total = handle.stdout_bytes_total.load(Ordering::Relaxed);
         let stderr_total = handle.stderr_bytes_total.load(Ordering::Relaxed);
 
+        // For TmpFile capture mode: finalize the tmp writers via atomic rename
+        // per ADR-0033 §"Transactional Write Pattern".
+        //
+        // `TmpFileWriter::finalize` is idempotent (`&self`, `AtomicBool` guard):
+        // - Primary finalization happens on the EOF arm of the stream-capture reader
+        //   tasks in `stream_capture.rs`.
+        // - This call is the safety-net for callers that invoke `result()` before
+        //   the reader tasks have observed EOF, or when the primary path failed.
+        // - Second call returns the cached `final_path` immediately (no I/O).
+        //
+        // We attempt finalization when the child process has exited (child mutex
+        // holds `None`) to ensure the writer has closed its FD before we rename.
+        let (stdout_tmp_path, stderr_tmp_path) = if handle.capture_kind == CaptureKind::TmpFile {
+            // Check if the process has exited by peeking at the child mutex.
+            let child_exited = {
+                let guard = handle.child.lock().await;
+                guard.is_none()
+            };
+            if child_exited {
+                // Finalize stdout writer if present.
+                let stdout_path = if let Some(ref writer) = handle.stdout_tmp_writer {
+                    match writer.finalize().await {
+                        Ok(p) => {
+                            handle.unregister_tmp_path(writer.tmp_path()).await;
+                            Some(p)
+                        },
+                        Err(e) => {
+                            warn!(
+                                target: "substrate_audit",
+                                event = "SUBSTRATE_SUBPROCESS_TMP_FINALIZE_FAILED",
+                                job_id = %job_id,
+                                stream = "stdout",
+                                error = %e,
+                                "TmpFileWriter finalize failed in result(); stdout_tmp_path will be None"
+                            );
+                            None
+                        },
+                    }
+                } else {
+                    None
+                };
+
+                // Finalize stderr writer if present.
+                let stderr_path = if let Some(ref writer) = handle.stderr_tmp_writer {
+                    match writer.finalize().await {
+                        Ok(p) => {
+                            handle.unregister_tmp_path(writer.tmp_path()).await;
+                            Some(p)
+                        },
+                        Err(e) => {
+                            warn!(
+                                target: "substrate_audit",
+                                event = "SUBSTRATE_SUBPROCESS_TMP_FINALIZE_FAILED",
+                                job_id = %job_id,
+                                stream = "stderr",
+                                error = %e,
+                                "TmpFileWriter finalize failed in result(); stderr_tmp_path will be None"
+                            );
+                            None
+                        },
+                    }
+                } else {
+                    None
+                };
+
+                (stdout_path, stderr_path)
+            } else {
+                // Process still running; paths not yet available.
+                (None, None)
+            }
+        } else {
+            // Stream or InMemory: no tmp file paths.
+            (None, None)
+        };
+
         Ok(SubprocessResult {
             terminal_state: SubprocessState::Running, // updated when truly terminal
             exit_code: None,
@@ -459,6 +595,8 @@ impl SubprocessPort for SubprocessRegistry {
             stderr_aggregate: stderr_agg,
             stdout_aggregate_truncated: stdout_truncated,
             stderr_aggregate_truncated: stderr_truncated,
+            stdout_tmp_path,
+            stderr_tmp_path,
             stream_chunks_dropped: dropped,
             duration_ms: 0,
             stdout_bytes_total: stdout_total,

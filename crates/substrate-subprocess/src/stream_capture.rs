@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{error, info, warn};
 
 use substrate_domain::subprocess::stream::Stream;
 use substrate_domain::subprocess::{StreamChunk, SubprocessError};
@@ -91,8 +91,17 @@ pub fn make_stream_channel() -> (mpsc::Sender<StreamChunk>, mpsc::Receiver<Strea
 /// Single-stream reader task.
 ///
 /// Reads from `reader` into a 4 KiB buffer. Flushes on buffer-full or 100 ms
-/// interval. Writes all bytes into the ring buffer. Sends to `sender` via
-/// `try_send`; drops on `Err::Full` and increments the dropped counter.
+/// interval. Writes all bytes into the ring buffer. For `CaptureKind::TmpFile`,
+/// also persists bytes to the transit file via `TmpFileWriter`. Sends to `sender`
+/// via `try_send`; drops on `Err::Full` and increments the dropped counter.
+///
+/// Processing order per ADR-0054 §"`TmpFile` Branch":
+/// 1. Ring buffer (in-memory aggregate safety net).
+/// 2. Tmp file write (if `capture_kind == TmpFile`).
+/// 3. mpsc `try_send` (live notifications; may drop on backpressure).
+///
+/// On `TmpFileWriter::write` error: logs via `tracing::error!` and continues the
+/// read loop. Partial persistence is preferable to aborting the worker entirely.
 ///
 /// Exits when `handle.cancel` fires or when EOF is reached on `reader`.
 async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
@@ -107,6 +116,12 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     interval.tick().await;
     let mut accumulated: Vec<u8> = Vec::with_capacity(CHUNK_CAPACITY);
     let mut byte_offset: u64 = 0;
+
+    // Resolve the TmpFileWriter for this stream once, outside the hot loop.
+    let tmp_writer = match stream {
+        Stream::Stdout => handle.stdout_tmp_writer.as_ref().map(Arc::clone),
+        Stream::Stderr => handle.stderr_tmp_writer.as_ref().map(Arc::clone),
+    };
 
     loop {
         tokio::select! {
@@ -131,7 +146,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
             n = reader.read(&mut buf) => {
                 match n {
                     Ok(0) => {
-                        // EOF: flush accumulated bytes and exit.
+                        // EOF: flush accumulated bytes, then finalize the TmpFileWriter.
                         if !accumulated.is_empty() {
                             flush_chunk(
                                 &accumulated,
@@ -142,13 +157,30 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                             );
                             // byte_offset update omitted: loop exits immediately after.
                         }
+                        finalize_on_eof(tmp_writer.as_ref(), stream, &handle).await;
                         break;
                     },
                     Ok(n) => {
                         let data = &buf[..n];
-                        // Write to ring buffer unconditionally (even if mpsc drops).
+                        // 1. Write to ring buffer unconditionally (even if mpsc drops).
                         write_ring(&handle, stream, data).await;
-                        // Accumulate for flush.
+                        // 2. Persist to tmp file if capture_kind == TmpFile.
+                        //    On write error: log and continue — partial persistence
+                        //    beats aborting the capture worker entirely.
+                        if let Some(writer) = &tmp_writer
+                            && let Err(e) = writer.write(data).await
+                        {
+                            error!(
+                                target: "substrate_audit",
+                                event = "SUBSTRATE_SUBPROCESS_TMP_WRITE_ERROR",
+                                job_id = %handle.job_id,
+                                stream = %stream,
+                                bytes_attempted = data.len(),
+                                error = %e,
+                                "TmpFileWriter::write failed; continuing capture (partial persistence)"
+                            );
+                        }
+                        // 3. Accumulate for mpsc flush.
                         accumulated.extend_from_slice(data);
                         byte_offset += u64::try_from(n).unwrap_or(u64::MAX);
 
@@ -194,6 +226,47 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 }
             },
         }
+    }
+}
+
+/// Finalizes the [`TmpFileWriter`](crate::tmp_file::TmpFileWriter) for the given stream on EOF.
+///
+/// Called from the `Ok(0)` (EOF) arm of `read_stream`. This is the **primary**
+/// finalize call: it triggers the atomic rename from the transit path to the
+/// final path per ADR-0033. `registry.result()` may also call `finalize()`, but
+/// `TmpFileWriter::finalize` is idempotent so the second call is a no-op.
+///
+/// Best-effort: errors are logged via `tracing` but not propagated — the reader
+/// task result is discarded by the spawn site, and partial persistence is
+/// preferable to aborting the capture worker.
+async fn finalize_on_eof(
+    tmp_writer: Option<&Arc<crate::tmp_file::TmpFileWriter>>,
+    stream: Stream,
+    handle: &ChildHandle,
+) {
+    let Some(writer) = tmp_writer else { return };
+    match writer.finalize().await {
+        Ok(final_path) => {
+            info!(
+                target: "substrate_audit",
+                event = "SUBSTRATE_SUBPROCESS_TMP_FINALISED",
+                job_id = %handle.job_id,
+                stream = %stream,
+                final_path = %final_path.display(),
+                "TmpFileWriter finalised on stream EOF"
+            );
+            handle.unregister_tmp_path(writer.tmp_path()).await;
+        },
+        Err(e) => {
+            error!(
+                target: "substrate_audit",
+                event = "SUBSTRATE_SUBPROCESS_TMP_FINALISE_FAILED",
+                job_id = %handle.job_id,
+                stream = %stream,
+                error = %e,
+                "TmpFileWriter::finalize failed on stream EOF; transit file may remain"
+            );
+        },
     }
 }
 
