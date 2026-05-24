@@ -432,3 +432,375 @@ async fn then_chunk_base64_content(world: &mut SubstrateWorld) {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// TmpFile capture steps — capture-tmp-file-persistence.feature
+// ---------------------------------------------------------------------------
+
+/// `Given subprocess.tmp_root is configured to a writable directory inside policy.roots`
+///
+/// Creates an isolated per-test `TempDir` and stores it in the world context
+/// for use by the When step.  The TempDir is stored as a raw path string so it
+/// can be recovered across step functions; the TempDir itself is stored so its
+/// lifetime extends to the end of the scenario.
+#[given(
+    regex = r#"^subprocess\.tmp_root is configured to a writable directory inside policy\.roots$"#
+)]
+async fn given_tmp_root_configured(world: &mut SubstrateWorld) {
+    let sandbox = TempDir::new().expect("TempDir for tmp_root");
+    let root = sandbox
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| sandbox.path().to_path_buf());
+    world
+        .context
+        .insert("tmp_root".to_string(), root.display().to_string());
+    // Keep sandbox alive until the scenario ends by storing the path string;
+    // the TempDir is leaked intentionally here — tests clean it up on process exit.
+    // We cannot store Box<TempDir> in BTreeMap<String, String>, so we use
+    // std::mem::forget to avoid the implicit Drop that would destroy the dir
+    // before the When step runs.
+    std::mem::forget(sandbox);
+}
+
+/// `And subprocess.spawn is invoked with capture_kind "tmp_file" emitting 4096 stdout bytes`
+///
+/// Spawns the fixture binary in TmpFile capture mode and waits for it to exit.
+/// Stores the `SubprocessResult` fields needed for Then assertions.
+#[given(
+    regex = r#"^subprocess\.spawn is invoked with capture_kind "tmp_file" emitting (\d+) stdout bytes$"#
+)]
+async fn given_spawn_tmp_file_capture(world: &mut SubstrateWorld, byte_count: usize) {
+    let fixture = super::fixture_binary_path();
+    if !fixture.exists() {
+        world
+            .context
+            .insert("capture_skipped".to_string(), "true".to_string());
+        world.context.insert(
+            "capture_skip_reason".to_string(),
+            format!("fixture binary not found at {}", fixture.display()),
+        );
+        return;
+    }
+
+    let tmp_root_str = world.context.get("tmp_root").cloned().unwrap_or_default();
+    if tmp_root_str.is_empty() {
+        world
+            .context
+            .insert("capture_skipped".to_string(), "true".to_string());
+        world.context.insert(
+            "capture_skip_reason".to_string(),
+            "tmp_root not set; given step must precede this step".to_string(),
+        );
+        return;
+    }
+
+    let tmp_root = std::path::PathBuf::from(&tmp_root_str);
+    let registry =
+        make_registry_with_fixture_and_tmp_root(vec![tmp_root.clone()], tmp_root.clone());
+
+    let req = SubprocessRequest {
+        binary_path: fixture,
+        args: vec![
+            "--stdout-bytes".to_string(),
+            byte_count.to_string(),
+            "--stderr-bytes".to_string(),
+            "0".to_string(),
+            "--exit-code".to_string(),
+            "0".to_string(),
+        ],
+        env_allowlist: Vec::new(),
+        env_override: BTreeMap::new(),
+        cwd: tmp_root.clone(),
+        stdin_kind: StdinKind::None,
+        capture_kind: CaptureKind::TmpFile,
+        timeout_secs: Some(10),
+        idempotency_key: None,
+        elicitation_confirmed: true,
+    };
+
+    let spawn_result = registry.spawn(req, &NoCancel).await;
+    match spawn_result {
+        Ok(handle) => {
+            let job_id = handle.job_id.clone();
+            world
+                .context
+                .insert("tmp_file_job_id".to_string(), job_id.to_string());
+            // First result call: wait up to 8 s for the child to exit.
+            let outcome = registry.result(&job_id, 8000, true).await;
+            // Retry result up to 3 times after yielding to the runtime: the first call
+            // waited for the child to exit. After the child exits, its stdout/stderr
+            // pipes close. The reader tasks get EOF on the next poll and drop their
+            // Arc<TmpFileWriter> clones. Once strong_count drops to 1, the registry
+            // can finalize the TmpFileWriter. We yield to give reader tasks time to run.
+            let outcome = {
+                let mut current = outcome;
+                for attempt in 0u8..3 {
+                    match &current {
+                        Ok(r) if r.stdout_tmp_path.is_none() => {
+                            let delay_ms = 200u64 * u64::from(attempt + 1);
+                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                            current = registry.result(&job_id, 200, true).await;
+                        },
+                        _ => break,
+                    }
+                }
+                current
+            };
+            match outcome {
+                Ok(r) => {
+                    world
+                        .context
+                        .insert("capture_success".to_string(), "true".to_string());
+                    world
+                        .context
+                        .insert("expected_bytes".to_string(), byte_count.to_string());
+                    if let Some(ref p) = r.stdout_tmp_path {
+                        world
+                            .context
+                            .insert("stdout_tmp_path".to_string(), p.display().to_string());
+                    }
+                    world.context.insert(
+                        "terminal_state".to_string(),
+                        format!("{:?}", r.terminal_state),
+                    );
+                    world.context.insert(
+                        "stdout_bytes_total".to_string(),
+                        r.stdout_bytes_total.to_string(),
+                    );
+                },
+                Err(e) => {
+                    world
+                        .context
+                        .insert("capture_success".to_string(), "false".to_string());
+                    world
+                        .context
+                        .insert("capture_error".to_string(), e.to_string());
+                },
+            }
+            // Do NOT call registry.cancel() here for TmpFile capture mode.
+            // terminate_cascade removes all registered tmp files (including the
+            // final post-rename path), which would delete the file we're asserting
+            // on in Then steps. The child has already exited; no live process remains.
+            // The registry entry will be cleaned up when the Arc<SubprocessRegistry>
+            // is dropped at the end of this step function.
+        },
+        Err(e) => {
+            world
+                .context
+                .insert("capture_success".to_string(), "false".to_string());
+            world
+                .context
+                .insert("capture_error".to_string(), e.to_string());
+        },
+    }
+}
+
+/// `When the child exits with code 0 and the job transitions to Succeeded`
+///
+/// Validates that the prior spawn + result call completed with the expected
+/// terminal state.  The actual work was done in the Given step.
+#[when(regex = r#"^the child exits with code 0 and the job transitions to Succeeded$"#)]
+async fn when_child_exits_succeeded(world: &mut SubstrateWorld) {
+    if world
+        .context
+        .get("capture_skipped")
+        .is_some_and(|v| v == "true")
+    {
+        return;
+    }
+    let success = world
+        .context
+        .get("capture_success")
+        .is_some_and(|v| v == "true");
+    assert!(
+        success,
+        "expected spawn+result to succeed but got: {:?}",
+        world.context.get("capture_error")
+    );
+}
+
+/// `Then subprocess.result returns stdout_tmp_path pointing to a file`
+#[then(regex = r#"^subprocess\.result returns stdout_tmp_path pointing to a file$"#)]
+async fn then_result_has_stdout_tmp_path(world: &mut SubstrateWorld) {
+    if world
+        .context
+        .get("capture_skipped")
+        .is_some_and(|v| v == "true")
+    {
+        eprintln!(
+            "SKIP: {}",
+            world
+                .context
+                .get("capture_skip_reason")
+                .cloned()
+                .unwrap_or_default()
+        );
+        return;
+    }
+    let path_str = world
+        .context
+        .get("stdout_tmp_path")
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !path_str.is_empty(),
+        "expected stdout_tmp_path to be populated in SubprocessResult but it was None"
+    );
+}
+
+/// `And the file at stdout_tmp_path exists on disk`
+#[then(regex = r#"^the file at stdout_tmp_path exists on disk$"#)]
+async fn then_tmp_path_exists(world: &mut SubstrateWorld) {
+    if world
+        .context
+        .get("capture_skipped")
+        .is_some_and(|v| v == "true")
+    {
+        return;
+    }
+    let path_str = world
+        .context
+        .get("stdout_tmp_path")
+        .cloned()
+        .unwrap_or_default();
+    if path_str.is_empty() {
+        // Path was not populated — already failed in the prior step.
+        return;
+    }
+    let p = std::path::Path::new(&path_str);
+    assert!(
+        p.exists(),
+        "expected file {path_str:?} to exist on disk after atomic rename"
+    );
+}
+
+/// `And the file size equals 4096 bytes`
+#[then(regex = r#"^the file size equals (\d+) bytes$"#)]
+async fn then_file_size_equals(world: &mut SubstrateWorld, expected: u64) {
+    if world
+        .context
+        .get("capture_skipped")
+        .is_some_and(|v| v == "true")
+    {
+        return;
+    }
+    let path_str = world
+        .context
+        .get("stdout_tmp_path")
+        .cloned()
+        .unwrap_or_default();
+    if path_str.is_empty() {
+        return;
+    }
+    let metadata = std::fs::metadata(&path_str).expect("metadata of stdout_tmp_path must succeed");
+    assert_eq!(
+        metadata.len(),
+        expected,
+        "file size at {path_str:?} should be {expected} bytes but was {}",
+        metadata.len()
+    );
+}
+
+/// `And the stdout_tmp_path matches the pattern ".*/.substrate-subprocess-stream-[0-9a-f-]+\\.stdout$"`
+#[then(regex = r#"^the stdout_tmp_path matches the pattern "([^"]+)"$"#)]
+async fn then_tmp_path_matches_pattern(world: &mut SubstrateWorld, pattern: String) {
+    if world
+        .context
+        .get("capture_skipped")
+        .is_some_and(|v| v == "true")
+    {
+        return;
+    }
+    let path_str = world
+        .context
+        .get("stdout_tmp_path")
+        .cloned()
+        .unwrap_or_default();
+    if path_str.is_empty() {
+        return;
+    }
+    // Simple suffix check rather than pulling in a regex crate.
+    // The pattern ".*/.substrate-subprocess-stream-[0-9a-f-]+\\.stdout$" has two
+    // structural requirements: contains "/.substrate-subprocess-stream-" and ends
+    // with ".stdout".
+    let _ = pattern; // pattern is the Gherkin literal; we assert structurally.
+    assert!(
+        path_str.contains("/.substrate-subprocess-stream-"),
+        "stdout_tmp_path {path_str:?} should contain '/.substrate-subprocess-stream-'"
+    );
+    assert!(
+        path_str.ends_with(".stdout"),
+        "stdout_tmp_path {path_str:?} should end with '.stdout'"
+    );
+    // Must NOT end with .tmp.<uuid>
+    assert!(
+        !path_str.contains(".tmp."),
+        "stdout_tmp_path {path_str:?} must not contain '.tmp.' — transit file was not renamed"
+    );
+}
+
+/// `And no transit file matching ".*\\.tmp\\.[0-9a-f-]+$" remains under tmp_root`
+#[then(regex = r#"^no transit file matching "([^"]+)" remains under tmp_root$"#)]
+async fn then_no_transit_file_remains(world: &mut SubstrateWorld, _pattern: String) {
+    if world
+        .context
+        .get("capture_skipped")
+        .is_some_and(|v| v == "true")
+    {
+        return;
+    }
+    let tmp_root_str = world.context.get("tmp_root").cloned().unwrap_or_default();
+    if tmp_root_str.is_empty() {
+        return;
+    }
+    let tmp_root = std::path::Path::new(&tmp_root_str);
+    let Ok(entries) = std::fs::read_dir(tmp_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        // Transit files have the shape: .substrate-subprocess-stream-<job>.stdout.tmp.<uuid7>
+        // Final files have no .tmp. suffix.
+        // We check that no file under tmp_root contains ".tmp." in its name after spawn.
+        assert!(
+            !name_str.contains(".tmp."),
+            "transit file {:?} still present under tmp_root after job completion",
+            entry.path()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helper — TmpFile capture registry
+// ---------------------------------------------------------------------------
+
+/// Builds a [`SubprocessRegistry`] that allows the fixture binary and passes
+/// an explicit `tmp_root` for TmpFile capture mode.
+///
+/// This is a local helper for the TmpFile step implementations.
+/// The existing `make_registry_with_fixture` in `mod.rs` is left untouched.
+fn make_registry_with_fixture_and_tmp_root(
+    roots: Vec<std::path::PathBuf>,
+    tmp_root: std::path::PathBuf,
+) -> std::sync::Arc<substrate_subprocess::registry::SubprocessRegistry> {
+    use substrate_subprocess::registry::BinaryAllowlist;
+    let fixture_path = super::fixture_binary_path();
+    let binary_allowlist = BinaryAllowlist::new(vec![super::echo_binary_path(), fixture_path]);
+    let path_allowlist =
+        substrate_policy::Allowlist::new(roots).expect("create test Allowlist for TmpFile");
+    let root_cancel = tokio_util::sync::CancellationToken::new();
+    // Wave 3a uses a builder pattern: new() then .with_tmp_root(path).
+    substrate_subprocess::registry::SubprocessRegistry::new(
+        binary_allowlist,
+        Vec::new(),
+        4,
+        8,
+        65_536,
+        5,
+        path_allowlist,
+        root_cancel,
+    )
+    .with_tmp_root(tmp_root)
+}
