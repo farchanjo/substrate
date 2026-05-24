@@ -261,6 +261,13 @@ impl JobRegistryPort for InMemoryJobRegistry {
         // Clone the notifier Arc so the worker can push progress events per ADR-0040.
         let worker_notifier = Arc::clone(&self.notifier);
         let notify_job_id = job_id.clone();
+        // Quota counters captured by the worker so it can decrement on terminal
+        // state. The `commit()` calls below transfer the release obligation from
+        // the `QuotaGuard` (which would otherwise rollback on Drop) to the worker.
+        // Without these clones the counters leak: after `max_per_client` submits
+        // the client is permanently locked out per `quota::try_increment`.
+        let worker_global_inflight = Arc::clone(&self.global_inflight);
+        let worker_client_counter = Arc::clone(&client_counter);
         let worker_handle = tokio::spawn(async move {
             // Transition to Running before executing the handler.
             {
@@ -331,6 +338,14 @@ impl JobRegistryPort for InMemoryJobRegistry {
                     let _ = result_tx_clone.send(Some(JobResult::Cancelled));
                 }
             }
+
+            // Release the inflight quota slots reserved at submit time.
+            // Honours the invariant documented at the top of this module:
+            // "Per-client and global inflight counters decremented atomically on
+            // terminal entry." `decrement` is saturating, so this is safe even
+            // if the slot has been GC'd or already decremented elsewhere.
+            crate::quota::decrement(&worker_global_inflight);
+            crate::quota::decrement(&worker_client_counter);
         });
         let abort = worker_handle.abort_handle();
 
@@ -686,6 +701,62 @@ mod tests {
         assert!(
             state2.is_terminal(),
             "second cancel must return terminal state"
+        );
+    }
+
+    /// Regression for the quota-leak bug: the per-client inflight counter MUST
+    /// be released once a job reaches a terminal state. Before the fix, the
+    /// counter incremented on submit but never decremented, so submitting
+    /// `max_per_client + 1` jobs from the same client (even sequentially)
+    /// returned `SUBSTRATE_QUOTA_EXCEEDED` for the surplus submit.
+    #[tokio::test]
+    async fn inflight_quota_released_on_terminal() {
+        use std::time::Duration;
+
+        let registry = make_registry();
+        let cap = JobConfig::default().quotas.max_per_client as usize;
+
+        // Submit (cap + 1) jobs sequentially under the same client_id. Each
+        // job's stub future resolves immediately, so the worker should reach
+        // `Succeeded` and decrement both inflight counters before the next
+        // submit runs.
+        for _ in 0..=cap {
+            let req = make_request("quota-release-client");
+            let id = registry
+                .submit(req)
+                .await
+                .expect("submit must succeed once prior jobs release the inflight quota");
+
+            // Drain the result so the worker runs through its terminal branch.
+            let _ = registry
+                .result(&id, Some(Duration::from_secs(1)))
+                .await
+                .expect("worker should publish a terminal result");
+
+            // Yield repeatedly so the worker spawn task can execute the
+            // `quota::decrement` calls that follow `result_tx_clone.send`.
+            // Without this the next `submit` may race the decrement and observe
+            // a stale counter — flaky but not incorrect.
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // Final assertion: the per-client counter has drained back to zero.
+        let counter = registry.client_counter(
+            &ClientId::parse("quota-release-client").expect("client_id"),
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "per-client inflight counter must drain back to 0 after all terminal jobs"
+        );
+        assert_eq!(
+            registry
+                .global_inflight
+                .load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "global inflight counter must drain back to 0 after all terminal jobs"
         );
     }
 
