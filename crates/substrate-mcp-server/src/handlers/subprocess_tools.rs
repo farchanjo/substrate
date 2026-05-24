@@ -274,14 +274,41 @@ pub(crate) async fn handle_subprocess_result(
     let stdout_b64 = base64_encode(&result.stdout_aggregate);
     let stderr_b64 = base64_encode(&result.stderr_aggregate);
 
+    // Build the LLM-facing content text.
+    // When TmpFile captures are present, append a one-line note so the model
+    // can correlate the structured payload paths with the human-readable summary.
+    let tmp_note = match (&result.stdout_tmp_path, &result.stderr_tmp_path) {
+        (Some(p), _) => format!(
+            " Captures persisted to {}.",
+            p.parent()
+                .map_or_else(|| p.display().to_string(), |d| d.display().to_string())
+        ),
+        (None, Some(p)) => format!(
+            " Captures persisted to {}.",
+            p.parent()
+                .map_or_else(|| p.display().to_string(), |d| d.display().to_string())
+        ),
+        (None, None) => String::new(),
+    };
     let content = format!(
-        "subprocess.result: job_id={} state={:?} exit_code={:?} stdout={}B stderr={}B.",
+        "subprocess.result: job_id={} state={:?} exit_code={:?} stdout={}B stderr={}B.{tmp_note}",
         req.job_id,
         result.terminal_state,
         result.exit_code,
         result.stdout_bytes_total,
         result.stderr_bytes_total,
     );
+
+    // Serialize optional tmp paths as string or null for JSON consumers.
+    let stdout_tmp_path_str: Option<String> = result
+        .stdout_tmp_path
+        .as_ref()
+        .map(|p| p.display().to_string());
+    let stderr_tmp_path_str: Option<String> = result
+        .stderr_tmp_path
+        .as_ref()
+        .map(|p| p.display().to_string());
+
     let structured = json!({
         "job_id": req.job_id,
         "terminal_state": result.terminal_state,
@@ -290,6 +317,8 @@ pub(crate) async fn handle_subprocess_result(
         "stderr_aggregate_b64": stderr_b64,
         "stdout_aggregate_truncated": result.stdout_aggregate_truncated,
         "stderr_aggregate_truncated": result.stderr_aggregate_truncated,
+        "stdout_tmp_path": stdout_tmp_path_str,
+        "stderr_tmp_path": stderr_tmp_path_str,
         "stream_chunks_dropped": result.stream_chunks_dropped,
         "duration_ms": result.duration_ms,
         "stdout_bytes_total": result.stdout_bytes_total,

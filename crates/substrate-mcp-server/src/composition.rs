@@ -237,16 +237,43 @@ pub(crate) async fn wire(
     // Two `Arc` clones are derived: one goes into `ToolDispatcher.subprocess` for
     // tool dispatch; one is stored in `RuntimeComponents.subprocess_for_shutdown`
     // for the signal-handler cascade termination per ADR-0032 amendment 2026-05-24.
+    //
+    // `tmp_root` is resolved per the ADR-0033 amendment 2026-05-24 contract:
+    //   - explicit `subprocess.tmp_root` from TOML → use verbatim.
+    //   - absent → fall back to `policy.roots.first().cloned()`.
+    //   - still absent → pass `None`; the registry rejects TmpFile captures at
+    //     spawn time with `SubprocessError::InvalidRequest`.
     #[cfg(feature = "subprocess")]
     let (subprocess_port, subprocess_port_for_shutdown): (
         std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
         Option<std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>>,
     ) = {
+        let subprocess_cfg = config.subprocess.clone().unwrap_or_default();
+
+        // Resolve tmp_root: explicit TOML value wins; fall back to first policy root.
+        let tmp_root: Option<std::path::PathBuf> = subprocess_cfg
+            .tmp_root
+            .or_else(|| config.policy.roots.first().cloned());
+
         let path_allowlist_clone = Allowlist::new(config.policy.roots.clone())?;
-        let registry = substrate_subprocess::registry::deny_all_registry(
+        // Wave 3a used a builder pattern for tmp_root instead of the originally
+        // spec'd constructor parameter. We adapt: call `new` then chain
+        // `with_tmp_root` when a tmp_root is available.
+        let registry_base = substrate_subprocess::registry::SubprocessRegistry::new(
+            substrate_subprocess::registry::BinaryAllowlist::deny_all(),
+            Vec::new(),
+            subprocess_cfg.max_per_client,
+            subprocess_cfg.max_concurrent,
+            subprocess_cfg.aggregate_buffer_bytes,
+            subprocess_cfg.shutdown_drain_secs,
             path_allowlist_clone,
             shutdown_token.child_token(),
         );
+        let registry = if let Some(root) = tmp_root {
+            registry_base.with_tmp_root(root)
+        } else {
+            registry_base
+        };
         let port_a: std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort> =
             Arc::clone(&registry)
                 as std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>;
