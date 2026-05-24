@@ -174,3 +174,44 @@ Orphan temporary files — those that were not cleaned up because substrate was 
 The disk-space preflight defined in this ADR applies to subprocess stream capture: before creating the stdout and stderr temporary files, substrate checks available space in the `<capture_root>` filesystem and returns `SUBSTRATE_STORAGE_FULL` if the projected capture size exceeds available capacity. When the projected size is unknown (streaming capture without a known size bound), the preflight is skipped and ENOSPC is handled as a write error during capture.
 
 Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0054](0054-subprocess-stream-capture.md) — stream capture and aggregation; [ADR-0055](0055-subprocess-orphan-reaper.md) — orphan reaper.
+
+### 2026-05-24 (revision 2) — TmpFile capture finalisation invariants
+
+The [ADR-0054](0054-subprocess-stream-multiplex.md) amendment of the same date
+closes the implementation of the TmpFile capture branch. The following invariants
+extend the subprocess stream-capture amendment above and MUST be enforced by any
+implementation of that branch.
+
+**Mode 0600 on creation.** Every subprocess stream transit file MUST be created
+with permissions mode `0600` (owner read/write only). This prevents subprocess
+output from being readable by other users on multi-user hosts, where the shared
+`tmp_root` directory may be world-accessible. The mode MUST be set at file
+creation time, not applied as a subsequent `chmod`, to avoid a race window in
+which a concurrent process could observe a file with broader permissions.
+
+**Atomic rename precondition.** The atomic rename guarantee from step 5 of this
+ADR (`rename(2)` is atomic on POSIX same-filesystem paths) holds for subprocess
+stream files only because the transit path and the final path both reside under
+`tmp_root`. This is guaranteed structurally: both the `.tmp.<uuid7>` transit name
+and the final name omit the suffix and live in the same directory. Operators MUST
+NOT configure `subprocess.tmp_root` to span a filesystem boundary with
+`policy.roots` entries; validation at startup enforces that `tmp_root` canonicalises
+to a path inside `policy.roots` (returning `SUBSTRATE_CONFIG_INVALID` on failure).
+
+**ENOENT-safe cleanup.** The `cleanup_tmp_files` routine MUST silently ignore
+`ENOENT` errors when removing transit files. The orphan reaper introduced by
+[ADR-0055](0055-subprocess-orphan-reaper.md) may remove a transit file between the
+terminal state write and the cleanup call (a legitimate race on SIGKILL-forced
+shutdown). Treating `ENOENT` as a fatal error in cleanup would mask the real
+terminal state and prevent the error response from reaching the client.
+
+**No Drop-based cleanup.** Cleanup of transit files MUST NOT be implemented via a
+`Drop` impl. Under `panic = "abort"` (per [ADR-0014](0014-build-system-and-toolchain.md)),
+unwinding does not run `Drop` destructors; a panic in any task aborts the process
+before `Drop` can fire. Cleanup MUST be driven explicitly from the cancel arm of
+the job worker's `tokio::select!` loop, consistent with the pattern described in
+this ADR.
+
+Cross-references: [ADR-0054](0054-subprocess-stream-multiplex.md) — TmpFile capture
+branch; [ADR-0014](0014-build-system-and-toolchain.md) — `panic = "abort"` cleanup
+contract; [ADR-0017](0017-concurrency-limits.md) — `subprocess.tmp_root` configuration.

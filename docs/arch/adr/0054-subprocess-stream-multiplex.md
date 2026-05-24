@@ -302,3 +302,148 @@ chain):
 - [ADR-0038](0038-audit-event-semantics.md) — audit event semantics
 - [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess BC architecture
 - [ADR-0053](0053-process-lifecycle-cascade-contract.md) — cascade kill + cleanup ordering
+
+## Amendments
+
+### 2026-05-24 — TmpFile capture branch (closes ADR-0033 cross-cutting hook)
+
+The original decision outcome specified the live `notifications/progress` channel
+with a bounded `mpsc(64)` per stream and a 64 KiB ring buffer aggregate. It
+deferred the TmpFile persistence path — whose naming convention was formalised in
+the [ADR-0033](0033-transactional-write-pattern.md) amendment of the same date —
+to a follow-up implementation wave. This amendment closes that gap.
+
+#### Activation condition
+
+When `SubprocessRequest.capture_kind` equals `"tmp_file"`, the
+substrate-subprocess adapter activates the TmpFile branch in addition to the
+standard live notification path. The two paths are not mutually exclusive: stream
+chunks continue to flow through the `mpsc(64)` dispatcher and are emitted as
+`notifications/progress` events at the same 100 ms / 4 KiB flush cadence defined
+in the original decision outcome. The tmp file provides the authoritative
+persistence path; the live channel remains best-effort (backpressure may still
+drop chunks from the mpsc channel, as documented in the Backpressure section).
+
+#### Temporary file creation
+
+Two `tokio::fs::File` writers are opened at spawn time — one for stdout, one for
+stderr — at the transit paths defined by [ADR-0033](0033-transactional-write-pattern.md):
+
+```
+<tmp_root>/.substrate-subprocess-stream-<job_id>.stdout.tmp.<uuid7>
+<tmp_root>/.substrate-subprocess-stream-<job_id>.stderr.tmp.<uuid7>
+```
+
+where `<tmp_root>` is resolved from the `subprocess.tmp_root` configuration key
+(see [ADR-0017](0017-concurrency-limits.md) amendment). Files are created with
+mode `0600` (owner read/write only) to prevent subprocess output from leaking to
+other users on shared hosts.
+
+Both files are created before the child process is spawned so that cleanup
+registration covers both writers regardless of which stream produces output first.
+The transit paths are added to `ChildHandle.tmp_files` immediately on creation.
+
+#### Write ordering in the reader task
+
+For each 4 KiB chunk read from the OS pipe, the reader task executes the
+following sequence in order:
+
+1. Append bytes to the in-memory ring buffer (aggregate retention, unchanged).
+2. Await `writer.write_all(chunk).await` — file write is the authoritative
+   persistence path and is not best-effort. A write error here transitions the job
+   to `Failed` with `SUBSTRATE_IO_ERROR`.
+3. Call `mpsc::Sender::try_send(chunk)` — best-effort live delivery. If the
+   channel is full, the chunk is dropped from the live channel but has already
+   been persisted to disk in step 2. The `SUBSTRATE_STREAM_CHUNKS_DROPPED`
+   counter and audit event still fire on mpsc drop.
+
+#### Finalisation on terminal Succeeded
+
+When the child exits with a zero exit code and the job transitions to `Succeeded`:
+
+1. `writer.flush().await` is called for both writers to drain OS buffers.
+2. `tokio::fs::rename(transit_path, final_path).await` performs the atomic rename
+   per [ADR-0033](0033-transactional-write-pattern.md):
+
+```
+<tmp_root>/.substrate-subprocess-stream-<job_id>.stdout
+<tmp_root>/.substrate-subprocess-stream-<job_id>.stderr
+```
+
+The rename is atomic on POSIX because source and destination share the same
+filesystem (both live under `tmp_root`). After a successful rename, the transit
+path entry is removed from `ChildHandle.tmp_files` so the cascade cleanup chain
+does not eradicate the persisted final file.
+
+3. The final paths are recorded in `SubprocessResult.stdout_tmp_path` and
+   `SubprocessResult.stderr_tmp_path` (both `Option<PathBuf>`).
+
+#### Cleanup on non-Succeeded terminal states
+
+On `Cancelled`, `Failed`, `Killed`, or `TimedOut`, the transit `.tmp.<uuid7>`
+paths remain in `ChildHandle.tmp_files` and the standard
+`cleanup_tmp_files` cascade removes them. `SubprocessResult.stdout_tmp_path` and
+`stderr_tmp_path` are `None`. Cleanup MUST handle `ENOENT` gracefully (the orphan
+reaper from [ADR-0055](0055-subprocess-orphan-reaper.md) may have already removed
+the file between the terminal state write and the cleanup call).
+
+#### Dual-channel flow
+
+The following diagram shows the parallel persistence and live notification paths
+when `capture_kind = "tmp_file"`.
+
+```mermaid
+sequenceDiagram
+    participant Pipe as Kernel Pipe
+    participant Reader as Reader Task
+    participant Ring as Ring Buffer (64 KiB)
+    participant TmpFile as Tmp File (disk)
+    participant Chan as mpsc:64
+    participant Dispatcher as Dispatcher Task
+    participant Client as MCP Client
+
+    Pipe->>Reader: chunk (up to 4 KiB)
+    Reader->>Ring: append bytes (in-memory aggregate)
+    Reader->>TmpFile: write_all(chunk) [authoritative, awaited]
+    Reader->>Chan: try_send(chunk) [best-effort, may drop]
+    Chan->>Dispatcher: recv chunk
+    Dispatcher->>Client: notifications/progress stream=stdout seq=N
+
+    Note over Reader,TmpFile: On terminal Succeeded
+    Reader->>TmpFile: flush()
+    Reader->>TmpFile: rename transit→final (atomic POSIX)
+    Note over TmpFile: final path reported in SubprocessResult
+
+    Note over Reader,Chan: On Cancelled/Failed/Killed/TimedOut
+    Reader->>TmpFile: cleanup_tmp_files removes transit path (ENOENT-safe)
+```
+
+#### New SubprocessResult fields
+
+`SubprocessResult` gains two optional fields:
+
+- `stdout_tmp_path: Option<PathBuf>` — absolute path to the final stdout capture
+  file; set only when `capture_kind == "tmp_file"` and `state == Succeeded`.
+- `stderr_tmp_path: Option<PathBuf>` — absolute path to the final stderr capture
+  file; set only when `capture_kind == "tmp_file"` and `state == Succeeded`.
+
+These fields are surfaced in the `subprocess.result` tool response and in the
+hints map extension defined by [ADR-0040](0040-async-job-control-plane.md).
+
+#### SubprocessRegistry::new signature change
+
+`SubprocessRegistry::new` gains a `tmp_root: Option<PathBuf>` parameter (last
+positional). When `None`, any `subprocess.spawn` call with `capture_kind ==
+"tmp_file"` returns `SUBSTRATE_INVALID_INPUT` synchronously without creating a
+job entry. This makes TmpFile mode operationally opt-in: operators that have not
+configured `subprocess.tmp_root` cannot accidentally trigger disk persistence.
+
+#### Cross-references
+
+- [ADR-0033](0033-transactional-write-pattern.md) — transit file naming convention and
+  atomic rename invariants
+- [ADR-0014](0014-build-system-and-toolchain.md) — `panic = "abort"` cleanup contract
+  (no unwind-based RAII; cleanup driven from `tokio::select!` cancel arm)
+- [ADR-0017](0017-concurrency-limits.md) — `subprocess.tmp_root` configuration key
+- [ADR-0040](0040-async-job-control-plane.md) — hints map extension for
+  `subprocess_stdout_tmp_path` and `subprocess_stderr_tmp_path`

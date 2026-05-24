@@ -194,3 +194,42 @@ Enforcement rules consistent with this ADR:
 - Permit release on terminal state transition is explicit: the job worker drops the `OwnedSemaphorePermit` as part of the terminal state write inside the `parking_lot::Mutex` lock sequence, before the result watch channel is set.
 
 Cross-references: [ADR-0040](0040-async-job-control-plane.md) — JobRegistry quota enforcement; [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture.
+
+### 2026-05-24 (revision 2) — subprocess.tmp_root configuration key
+
+The TmpFile capture branch formalised in the
+[ADR-0054](0054-subprocess-stream-multiplex.md) amendment introduces a new
+configuration key that determines where subprocess stream transit files are
+written. This key extends the `[subprocess]` TOML section defined above.
+
+New configuration key:
+
+- `subprocess.tmp_root` (`Option<PathBuf>`, default: first entry in
+  `policy.roots`) — the directory under which TmpFile capture-mode stream
+  transit files and their final renamed counterparts are stored. When absent
+  from the TOML config, substrate resolves the default at startup by taking
+  the first entry from `policy.roots`; if `policy.roots` is empty, startup
+  fails with `SUBSTRATE_CONFIG_INVALID`.
+
+Validation rules applied at startup, before the tokio runtime is initialised:
+
+1. The configured path is canonicalised. If canonicalisation fails (path does
+   not exist or is not a directory), startup fails with `SUBSTRATE_CONFIG_INVALID`.
+2. The canonicalised path MUST be a prefix of at least one entry in
+   `policy.roots`, or MUST equal a `policy.roots` entry. A `tmp_root` that
+   falls outside every `policy.roots` entry is rejected with
+   `SUBSTRATE_CONFIG_INVALID`, because the path jail enforced by
+   [ADR-0004](0004-security-model.md) would prevent substrate from creating or
+   reading files there.
+3. Both validations use the same `SUBSTRATE_CONFIG_INVALID` error code and
+   startup error contract as defined in [ADR-0036](0036-startup-error-contract.md).
+
+When `subprocess.tmp_root` is not present in the TOML config and no default
+can be derived (empty `policy.roots`), `SubprocessRegistry::new` receives
+`tmp_root = None`. Any subsequent `subprocess.spawn` call with
+`capture_kind = "tmp_file"` returns `SUBSTRATE_INVALID_INPUT` synchronously.
+
+Cross-references: [ADR-0054](0054-subprocess-stream-multiplex.md) — TmpFile capture
+branch; [ADR-0033](0033-transactional-write-pattern.md) — transit file naming and
+atomic rename invariants; [ADR-0036](0036-startup-error-contract.md) — startup
+error contract; [ADR-0004](0004-security-model.md) — path jail.

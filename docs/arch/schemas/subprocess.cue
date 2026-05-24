@@ -106,6 +106,56 @@ package schemas
 	tmp_files: [...string]
 }
 
+// #SubprocessResult is the terminal output returned by the subprocess.result tool
+// call once a job has reached a terminal state. It combines the ring-buffer
+// aggregate with optional disk-persistence paths (TmpFile capture branch).
+//
+// DDD role: ValueObject (returned by SubprocessPort::result; never mutated).
+//
+// Cross-reference: ADR-0054 amendment 2026-05-24 — TmpFile capture branch.
+#SubprocessResult: {
+	// exit_code is the process exit status. Present only when terminal_state
+	// is Succeeded or Failed. Absent for Cancelled, Killed, and TimedOut
+	// (POSIX does not guarantee a meaningful exit code after SIGKILL, and
+	// Cancelled jobs may not have exited before cancellation was processed).
+	exit_code?: int
+
+	// stdout_aggregate_base64 contains the base64-encoded last 64 KiB of
+	// stdout from the ring buffer. Empty string when no bytes were captured.
+	stdout_aggregate_base64: string
+
+	// stderr_aggregate_base64 contains the base64-encoded last 64 KiB of
+	// stderr from the ring buffer. Empty string when no bytes were captured.
+	stderr_aggregate_base64: string
+
+	// stdout_tmp_path is the absolute path to the final (post-rename) stdout
+	// capture file. Present only when capture_kind == "tmp_file" AND
+	// terminal_state == Succeeded. Absent in all other cases, including when
+	// the job is still Running or when the terminal state is not Succeeded.
+	stdout_tmp_path?: string
+
+	// stderr_tmp_path is the absolute path to the final (post-rename) stderr
+	// capture file. Present only when capture_kind == "tmp_file" AND
+	// terminal_state == Succeeded. Absent in all other cases.
+	stderr_tmp_path?: string
+
+	// stream_chunks_dropped is the cumulative count of stdout and stderr
+	// chunks dropped due to bounded mpsc channel backpressure since the job
+	// was created. A non-zero value indicates the aggregate may be incomplete
+	// even when stdout_tmp_path / stderr_tmp_path are present (dropped chunks
+	// are still written to the tmp file; only the live notification was lost).
+	stream_chunks_dropped: int & >=0
+
+	// duration_ms is the elapsed wall-clock time from child process start
+	// (Running state entry) to terminal state entry, in milliseconds.
+	duration_ms: int & >=0
+
+	// terminal_state is the final lifecycle state of the child process.
+	// Always a terminal value; SubprocessResult is never returned for
+	// non-terminal jobs.
+	terminal_state: #SubprocessState
+}
+
 // #StreamChunk is the value object carried in each notifications/progress event
 // for subprocess stdout and stderr output per ADR-0054. Chunks are numbered
 // per-stream (not globally) and include a byte offset for reassembly.

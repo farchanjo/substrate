@@ -12,6 +12,19 @@ Commit messages follow the Angular convention defined in
 
 ### Added
 
+- TmpFile capture mode for subprocess.spawn (ADR-0054 revision 2) — persists
+  stdout/stderr to `.substrate-subprocess-stream-<job_id>.<stream>` via atomic
+  rename of `.tmp.<uuid7>` transit file; coexists with live
+  notifications/progress channel.
+- `subprocess.tmp_root` TOML config key (defaults to first `policy.roots`
+  entry) — controls the directory where TmpFile capture-mode stream transit and
+  final files reside (ADR-0017 revision 2).
+- `SubprocessResult.stdout_tmp_path` / `stderr_tmp_path` `Option<PathBuf>`
+  fields — absolute paths to persisted final stream files; set only when
+  `capture_kind = "tmp_file"` and the job terminates with `Succeeded`.
+- `#SubprocessResult` CUE definition added to `docs/arch/schemas/subprocess.cue`
+  formalising the terminal output shape including tmp path fields.
+
 - subprocess bounded context (ADR-0052 supersedes ADR-0044) with tools
   `subprocess.spawn`, `subprocess.list`, `subprocess.cancel`,
   `subprocess.result`, and `subprocess.signal` behind Cargo feature
@@ -41,6 +54,9 @@ Commit messages follow the Angular convention defined in
 
 ### Security
 
+- Subprocess stream transit files created with mode `0600` (owner read/write
+  only) — prevents subprocess output leakage to other users on shared hosts
+  (ADR-0033 revision 2, ADR-0054 revision 2).
 - Layer 5 (subprocess sandbox) added to the security model (ADR-0004
   amendment): `setsid` process group isolation, unconditional stripping of
   `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`/`LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`,
