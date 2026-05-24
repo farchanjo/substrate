@@ -88,42 +88,20 @@ flowchart TD
 
 ### Job State Machine
 
-```text
-              submit
-                |
-                v
-          +---------+
-          | Pending |
-          +---------+
-                |  worker picked up
-                v
-          +---------+
-          | Running |
-          +---------+
-         /     |     \
-        /      |      \
-       v       v       v
-  +-----+  +-----+  +-----------+
-  |Succ.|  |Fail.|  | Cancelled |
-  +-----+  +-----+  +-----------+
-             |
-             v
-         +--------+
-         |TimedOut|
-         +--------+
-```
-
-The following diagram shows the complete `JobState` machine with terminal states that never regress.
+The `JobState` machine has two non-terminal states (`Pending`, `Running`) and four
+terminal states (`Succeeded`, `Failed`, `Cancelled`, `TimedOut`) that never regress.
+A `cancel()` request received before the worker has picked up the job transitions
+the job directly from `Pending` to `Cancelled` (see [ADR-0037](0037-async-cancellation-patterns.md)).
 
 ```mermaid
 stateDiagram-v2
     [*] --> Pending : submit
     Pending --> Running : worker picked up
+    Pending --> Cancelled : cancel() before pickup
     Running --> Succeeded : worker completed
     Running --> Failed : worker error
     Running --> Cancelled : cancel() called
     Running --> TimedOut : deadline exceeded
-    Pending --> Cancelled : cancel() before pickup
     Succeeded --> [*]
     Failed --> [*]
     Cancelled --> [*]
