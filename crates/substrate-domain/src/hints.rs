@@ -81,4 +81,40 @@ pub struct Hints {
     /// One of the `#WalkerTier` string values.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub walker_tier_used: Option<String>,
+
+    // ---- Subprocess keys (ADR-0040 §"2026-05-24 amendment", ADR-0052) -------
+    /// OS process identifier of the spawned subprocess.
+    ///
+    /// Present in the `subprocess.spawn` response hint map after a successful
+    /// spawn. Enables agents to correlate the job with OS-level monitoring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subprocess_pid: Option<i32>,
+
+    /// Process group identifier assigned by `setsid()` per ADR-0053.
+    ///
+    /// Used by `subprocess.signal` with `target=process_group` to address
+    /// the entire process group including grandchildren.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subprocess_pgid: Option<i32>,
+
+    /// OS exit code of the subprocess.
+    ///
+    /// Present in `subprocess.result` hints when `terminal_state` is
+    /// `Succeeded` or `Failed`. `null` for `Killed` (SIGKILL) or `Cancelled`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subprocess_exit_code: Option<i32>,
+
+    /// Count of stdout/stderr stream chunks dropped due to mpsc backpressure.
+    ///
+    /// Non-zero values indicate that `stdout_aggregate` / `stderr_aggregate`
+    /// may be incomplete per ADR-0054. Agents should surface this to users.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subprocess_stream_chunks_dropped: Option<u64>,
+
+    /// When `true`, the cascade kill chain will use `killpg(pgid, signal)`.
+    ///
+    /// Set in the `subprocess.cancel` and `subprocess.signal` responses to
+    /// inform agents whether the entire process group was targeted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cascade_kill_pgid: Option<bool>,
 }

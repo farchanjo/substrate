@@ -228,6 +228,10 @@ impl JobRegistryPort for InMemoryJobRegistry {
             updated_at: now,
             terminal_at: None,
             progress_events_dropped: 0,
+            // Non-subprocess jobs do not carry a SubprocessHandle.
+            // Bucket E jobs (ADR-0052) populate this field via a registry update
+            // in the substrate-subprocess adapter after successful spawn.
+            subprocess: None,
         };
 
         let job_cancel = self.parent_cancel.child_token();
@@ -728,7 +732,10 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        let page = registry.list(&client, None).await.expect("list must succeed");
+        let page = registry
+            .list(&client, None)
+            .await
+            .expect("list must succeed");
         let listed = page
             .jobs
             .into_iter()
@@ -772,10 +779,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        let entry = registry
-            .status(&job_id)
-            .await
-            .expect("status must succeed");
+        let entry = registry.status(&job_id).await.expect("status must succeed");
         assert_eq!(
             entry.state,
             JobState::Succeeded,
@@ -830,10 +834,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        let entry = registry
-            .status(&job_id)
-            .await
-            .expect("status must succeed");
+        let entry = registry.status(&job_id).await.expect("status must succeed");
         assert_eq!(
             entry.state,
             JobState::Cancelled,
@@ -880,9 +881,8 @@ mod tests {
         }
 
         // Final assertion: the per-client counter has drained back to zero.
-        let counter = registry.client_counter(
-            &ClientId::parse("quota-release-client").expect("client_id"),
-        );
+        let counter =
+            registry.client_counter(&ClientId::parse("quota-release-client").expect("client_id"));
         assert_eq!(
             counter.load(std::sync::atomic::Ordering::Acquire),
             0,
@@ -1030,7 +1030,10 @@ mod ttl_tests {
         // Acquire slot reference and immediately clone/deref what we need so the
         // DashMap guard is released before taking the entry lock (avoids holding
         // two significant Drop temporaries simultaneously).
-        let slot = registry.jobs.get(job_id).expect("slot must exist for backdating");
+        let slot = registry
+            .jobs
+            .get(job_id)
+            .expect("slot must exist for backdating");
         let entry_ref = Arc::clone(&slot.entry);
         drop(slot);
         let mut entry = entry_ref.lock();
@@ -1050,13 +1053,9 @@ mod ttl_tests {
     async fn terminal_state_gc_after_ttl() {
         let registry = make_registry_with_ttl(1);
         let req = make_request("client-gc-1");
-        let client_id =
-            ClientId::parse("client-gc-1").expect("test client_id must be valid");
+        let client_id = ClientId::parse("client-gc-1").expect("test client_id must be valid");
 
-        let job_id = registry
-            .submit(req)
-            .await
-            .expect("submit must succeed");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
 
         drive_to_succeeded(&registry, &job_id).await;
 
@@ -1083,10 +1082,7 @@ mod ttl_tests {
         // After eviction: status must return JobNotFound.
         let status_result = registry.status(&job_id).await;
         assert!(
-            matches!(
-                status_result,
-                Err(SubstrateError::JobNotFound { .. })
-            ),
+            matches!(status_result, Err(SubstrateError::JobNotFound { .. })),
             "status after GC must return JobNotFound, got: {status_result:?}"
         );
 
@@ -1113,10 +1109,7 @@ mod ttl_tests {
         let registry = make_registry_with_ttl(1);
         let req = make_request("client-gc-2");
 
-        let job_id = registry
-            .submit(req)
-            .await
-            .expect("submit must succeed");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
 
         // Drive to Running (non-terminal).
         {
@@ -1153,19 +1146,12 @@ mod ttl_tests {
         let registry = make_registry_with_ttl(1);
         let req = make_request("client-gc-3");
 
-        let job_id = registry
-            .submit(req)
-            .await
-            .expect("submit must succeed");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
 
         drive_to_cancelled(&registry, &job_id).await;
         backdate_terminal_at(&registry, &job_id, 1);
 
-        let evicted = ttl_gc::sweep_once(
-            &registry.jobs,
-            &registry.idempotency_index,
-            1,
-        );
+        let evicted = ttl_gc::sweep_once(&registry.jobs, &registry.idempotency_index, 1);
         assert_eq!(evicted, 1, "cancelled job must be evicted after TTL");
 
         let status_result = registry.status(&job_id).await;
@@ -1183,19 +1169,12 @@ mod ttl_tests {
         let registry = make_registry_with_ttl(1);
         let req = make_request("client-gc-4");
 
-        let job_id = registry
-            .submit(req)
-            .await
-            .expect("submit must succeed");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
 
         drive_to_failed(&registry, &job_id).await;
         backdate_terminal_at(&registry, &job_id, 1);
 
-        let evicted = ttl_gc::sweep_once(
-            &registry.jobs,
-            &registry.idempotency_index,
-            1,
-        );
+        let evicted = ttl_gc::sweep_once(&registry.jobs, &registry.idempotency_index, 1);
         assert_eq!(evicted, 1, "failed job must be evicted after TTL");
 
         let status_result = registry.status(&job_id).await;
@@ -1231,10 +1210,7 @@ mod ttl_tests {
         let registry = InMemoryJobRegistry::new(config, notifier, cancel);
 
         let req = make_request("client-gc-loop");
-        let job_id = registry
-            .submit(req)
-            .await
-            .expect("submit must succeed");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
 
         drive_to_succeeded(&registry, &job_id).await;
 
@@ -1395,14 +1371,8 @@ mod idempotency_tests {
         let req_a = make_request_with_key("client-idem-3", Some(key_a));
         let req_b = make_request_with_key("client-idem-3", Some(key_b));
 
-        let job_a = registry
-            .submit(req_a)
-            .await
-            .expect("submit A must succeed");
-        let job_b = registry
-            .submit(req_b)
-            .await
-            .expect("submit B must succeed");
+        let job_a = registry.submit(req_a).await.expect("submit A must succeed");
+        let job_b = registry.submit(req_b).await.expect("submit B must succeed");
 
         assert_ne!(
             job_a, job_b,

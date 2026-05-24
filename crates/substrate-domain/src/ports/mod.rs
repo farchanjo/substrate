@@ -12,6 +12,7 @@ pub mod hash;
 pub mod job_registry;
 pub mod path_jail;
 pub mod stat;
+pub mod subprocess;
 
 pub use dir_walker::{DirEntry, DirWalkerPort, WalkOpts};
 pub use factory::PortFactory;
@@ -21,3 +22,4 @@ pub use hash::{Blake3Digest, HashPort};
 pub use job_registry::{JobPage, JobRegistryPort, JobResult, JobSubmitRequest};
 pub use path_jail::PathJailPort;
 pub use stat::{FileStat, StatPort};
+pub use subprocess::{SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName};

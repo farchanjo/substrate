@@ -10,6 +10,7 @@
 //! - [`hints`] — structured response hints map (ADR-0007 + ADR-0040 extension).
 //! - [`jobs`] — async job control-plane value objects (ADR-0040).
 //! - [`ports`] — inbound port traits implemented by adapter crates.
+//! - [`subprocess`] — subprocess BC domain types: request, handle, state, stream, errors (ADR-0052).
 //! - [`value_objects`] — shared value objects used across bounded contexts.
 
 #![cfg_attr(not(test), forbid(unsafe_code))]
@@ -20,6 +21,7 @@ pub mod errors;
 pub mod hints;
 pub mod jobs;
 pub mod ports;
+pub mod subprocess;
 pub mod value_objects;
 
 // ---- Flat re-exports from value_objects ------------------------------------
@@ -30,6 +32,8 @@ pub use value_objects::idempotency_key::IdempotencyKey;
 pub use value_objects::jailed_path::JailedPath;
 pub use value_objects::job_id::JobId;
 pub use value_objects::page_cursor::PageCursor;
+pub use value_objects::process_group::ProcessGroup;
+pub use value_objects::subprocess_id::SubprocessId;
 
 // ---- Flat re-exports from errors -------------------------------------------
 
@@ -51,6 +55,14 @@ pub use capabilities::{
 
 pub use hints::Hints;
 
+// ---- Flat re-exports from subprocess ---------------------------------------
+
+pub use subprocess::errors::SubprocessError;
+pub use subprocess::handle::SubprocessHandle;
+pub use subprocess::request::{CaptureKind, StdinKind, SubprocessRequest};
+pub use subprocess::state::SubprocessState;
+pub use subprocess::stream::{Stream, StreamChunk};
+
 // ---- Flat re-exports from ports --------------------------------------------
 
 pub use ports::dir_walker::DirWalkerPort;
@@ -61,3 +73,4 @@ pub use ports::hash::HashPort;
 pub use ports::job_registry::JobRegistryPort;
 pub use ports::path_jail::PathJailPort;
 pub use ports::stat::StatPort;
+pub use ports::subprocess::SubprocessPort;

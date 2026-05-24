@@ -3,6 +3,10 @@
 //! Mirrors `#JobBucket` in `docs/arch/schemas/job.cue`.
 //! Bucket assignment is compile-time constant per tool except for Bucket B,
 //! whose actual inline-vs-job path is decided at runtime based on payload size.
+//!
+//! Bucket E was added in the 2026-05-24 amendment to ADR-0040 to accommodate
+//! `subprocess.spawn`, which requires both async execution (like Bucket C) and
+//! a streaming stdout/stderr multiplex channel per ADR-0054.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +44,18 @@ pub enum JobBucket {
     /// Examples: `fs.mkdir`, `fs.rename`, `fs.touch`, `proc.signal`.
     #[serde(rename = "D_sync_side_effect")]
     DSyncSideEffect,
+
+    /// **E — Always async with streaming progress (subprocess only).**
+    ///
+    /// Extends Bucket C with a per-job stdout/stderr stream-multiplex channel
+    /// per ADR-0054. The worker task emits `notifications/progress` events for
+    /// each stream chunk in addition to the normal job lifecycle events.
+    ///
+    /// Currently assigned exclusively to `subprocess.spawn`.
+    ///
+    /// References: ADR-0040 §"2026-05-24 amendment — Bucket E", ADR-0052, ADR-0054.
+    #[serde(rename = "E_always_async_streaming")]
+    EAlwaysAsyncStreaming,
 }
 
 impl std::fmt::Display for JobBucket {
@@ -49,6 +65,7 @@ impl std::fmt::Display for JobBucket {
             Self::BAutoMode => "B_auto_mode",
             Self::CAlwaysAsync => "C_always_async",
             Self::DSyncSideEffect => "D_sync_side_effect",
+            Self::EAlwaysAsyncStreaming => "E_always_async_streaming",
         };
         f.write_str(s)
     }
