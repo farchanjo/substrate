@@ -133,7 +133,17 @@ pub trait SubprocessPort: Send + Sync {
 
 /// Terminal result of a subprocess, returned by [`SubprocessPort::result`].
 ///
-/// See ADR-0054 §"Result Shape".
+/// See ADR-0054 §"Result Shape" and ADR-0033 amendment 2026-05-24.
+///
+/// When `capture_kind == TmpFile`, the adapter atomically renames the transit
+/// file (`<tmp_root>/.substrate-subprocess-stream-<job_id>.<stream>.tmp.<uuid7>`)
+/// to the final path (`<tmp_root>/.substrate-subprocess-stream-<job_id>.<stream>`)
+/// on terminal `Succeeded`, then populates [`stdout_tmp_path`] and
+/// [`stderr_tmp_path`]. For non-`Succeeded` terminal states the files are cleaned
+/// up by the cascade kill chain and both fields remain `None`.
+///
+/// [`stdout_tmp_path`]: SubprocessResult::stdout_tmp_path
+/// [`stderr_tmp_path`]: SubprocessResult::stderr_tmp_path
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubprocessResult {
     /// Terminal state of the subprocess.
@@ -161,6 +171,32 @@ pub struct SubprocessResult {
 
     /// `true` when the stderr ring buffer overflowed and oldest bytes were discarded.
     pub stderr_aggregate_truncated: bool,
+
+    /// Filesystem path of the final stdout capture file.
+    ///
+    /// Populated only when `capture_kind == TmpFile` AND the subprocess reached
+    /// `Succeeded`. The file contains the complete stdout byte stream; the ring
+    /// buffer aggregate is also populated as a safety net per ADR-0054 amendment
+    /// 2026-05-24.
+    ///
+    /// `None` for `Stream`, `InMemory`, or any non-`Succeeded` terminal state.
+    ///
+    /// References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_tmp_path: Option<std::path::PathBuf>,
+
+    /// Filesystem path of the final stderr capture file.
+    ///
+    /// Populated only when `capture_kind == TmpFile` AND the subprocess reached
+    /// `Succeeded`. The file contains the complete stderr byte stream; the ring
+    /// buffer aggregate is also populated as a safety net per ADR-0054 amendment
+    /// 2026-05-24.
+    ///
+    /// `None` for `Stream`, `InMemory`, or any non-`Succeeded` terminal state.
+    ///
+    /// References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_tmp_path: Option<std::path::PathBuf>,
 
     /// Total number of stream chunks dropped due to mpsc backpressure per ADR-0054.
     pub stream_chunks_dropped: u64,

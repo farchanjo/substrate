@@ -48,7 +48,7 @@ pub enum StdinKind {
 }
 
 /// Controls how stdout and stderr are captured from the child process.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureKind {
     /// Bytes are emitted chunk-by-chunk via `notifications/progress` per ADR-0054.
