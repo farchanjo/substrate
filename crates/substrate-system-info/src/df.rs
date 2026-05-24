@@ -138,13 +138,31 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
 // ---- macOS implementation ---------------------------------------------------
 //
 // `libc::getmntinfo` (MNT_NOWAIT mode) fills a kernel-owned array of
-// `statfs` structs in a single syscall. The returned pointer is valid until
-// the next `getmntinfo` call on this thread.
+// `statfs` structs in a single syscall.  The returned pointer is valid until
+// the next `getmntinfo` call **anywhere in the process** — the man page
+// documents a process-wide internal static buffer:
+//
+//   "The getmntinfo() function is not thread-safe."  (BUGS section, macOS man page)
+//
+// We therefore guard every call with a process-wide `Mutex<()>` and hold it
+// until we have copied all fields out of the buffer.  The thread-safe variant
+// `getmntinfo_r_np` (macOS ≥10.13) is preferred in principle, but it is not
+// yet exposed by the `libc` crate; the Mutex approach is equivalent.
 //
 // Safety justification (ADR-0042 + ADR-0044 sysctl FFI carve-out):
 // The unsafe block is narrowly scoped to `getmntinfo` + slice construction.
-// We copy every field we need out of the kernel-owned buffer before the
-// function returns, so no raw pointer escapes.
+// We copy every field we need out of the kernel-owned buffer before releasing
+// the lock, so no raw pointer escapes and the buffer cannot be mutated while
+// we hold the guard.
+
+/// Process-wide serialisation lock for `libc::getmntinfo`.
+///
+/// `getmntinfo` writes into a single process-global static buffer; concurrent
+/// calls from different threads clobber each other's results.  Every call-site
+/// that reads `getmntinfo` output **must** hold this lock for the entire
+/// duration of the syscall + copy.
+#[cfg(target_os = "macos")]
+static GETMNTINFO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Pseudo-filesystem type names skipped on macOS (virtual/kernel-internal).
 #[cfg(target_os = "macos")]
@@ -152,13 +170,22 @@ const PSEUDO_FS_TYPES_MACOS: &[&str] = &["devfs", "autofs", "nullfs", "fdesc", "
 
 #[cfg(target_os = "macos")]
 fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
-    // SAFETY: `getmntinfo` with `MNT_NOWAIT` is a standard macOS call.
-    // The function returns the count of entries written and a pointer to a
-    // kernel-owned, thread-local buffer of `statfs` structs.
-    // We read each element's fields immediately and do NOT store the raw pointer
-    // beyond this function. The buffer is valid until the next `getmntinfo`
-    // call on this thread; since we read synchronously and return owned data,
-    // there is no aliasing concern.
+    // Acquire the process-wide lock before calling getmntinfo.
+    // We use `lock().unwrap_or_else(|e| e.into_inner())` to recover from a
+    // poisoned mutex (which would only happen if a previous caller panicked
+    // inside the critical section — extremely unlikely, and the buffer is
+    // still fully readable after poisoning).
+    let _guard = GETMNTINFO_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    // SAFETY: `getmntinfo` with `MNT_NOWAIT` is a standard macOS syscall.
+    // The function returns the count of entries written and a pointer to the
+    // process-global static buffer of `statfs` structs.
+    // The lock above guarantees no other thread can call `getmntinfo` and
+    // overwrite the buffer while we hold `_guard`.
+    // We read synchronously and copy all needed fields before dropping the
+    // guard, so the raw pointer never escapes and there is no aliasing.
     let mut mounts_ptr: *mut libc::statfs = std::ptr::null_mut();
     let count = unsafe { libc::getmntinfo(&raw mut mounts_ptr, libc::MNT_NOWAIT) };
 
@@ -175,9 +202,11 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
 
     // SAFETY: `mounts_ptr` is a valid, aligned pointer to `count` consecutive
     // `statfs` elements. We create a shared slice covering exactly that range;
-    // the kernel guarantees the buffer is readable. We immediately copy all
-    // fields we need into owned Rust types before this function returns, so
-    // the raw slice does not escape.
+    // the kernel guarantees the buffer is readable for the duration of this call.
+    // `GETMNTINFO_LOCK` is held above, preventing any other thread from calling
+    // `getmntinfo` and overwriting the buffer while we iterate.
+    // We copy all fields into owned Rust types before `_guard` is dropped at
+    // function exit, so the raw slice never escapes the lock's critical section.
     // SAFETY: count is proven non-negative by the `count < 0` guard above.
     #[expect(
         clippy::cast_sign_loss,
