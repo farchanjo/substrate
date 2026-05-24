@@ -144,3 +144,42 @@ All four layers are enforced server-side, in the substrate process, before any s
 - ADR-0029 — Threat model (STRIDE-Lite mapping of attacks to these mitigations)
 - [ADR-0033](0033-transactional-write-pattern.md) — Transactional write pattern (temp + atomic rename + cleanup-on-cancel)
 - [ADR-0035](0035-path-safety-hardening.md) — Path safety hardening (openat2, O_NOFOLLOW_ANY, Unicode normalization, firmlink, /proc, archive symlink-member ban)
+
+## Amendments
+
+### 2026-05-24 — Layer 5 (Subprocess Sandbox) introduced via ADR-0052
+
+[ADR-0052](0052-subprocess-execution-architecture.md) adds a fifth security layer that applies exclusively to the subprocess bounded context tools (`subprocess.spawn`, `subprocess.signal`). The four existing layers are unchanged for all other tool namespaces.
+
+Layer 5 controls are enforced by `crates/substrate-subprocess/` before any `tokio::process::Command` is constructed:
+
+- **Binary path PathJail.** The target binary must appear in `security.subprocess_binary_allowlist` (TOML list, default empty — effectively deny-all when no entries are configured). The binary path is canonicalized and compared against the allowlist in the same manner as filesystem paths in Layer 1.
+- **Env-var allowlist.** Environment variables passed in the `subprocess.spawn` env map must be present in `security.subprocess_env_allowlist` (TOML list). Regardless of the allowlist, the following variables are hard-banned and rejected at Layer 5 even when they appear in the allowlist: `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`. This hard-ban list is evaluated independently and cannot be overridden by configuration.
+- **cwd PathJail.** The working directory supplied to `subprocess.spawn` must be under an existing entry in `security.allowed_paths`. The same `strict-path` canonicalization applied in Layer 2 is used.
+- **Resource caps (optional).** When the `sandbox` Cargo feature is enabled, substrate sets per-child resource limits before exec via `prlimit(2)` on Linux (`RLIMIT_NPROC`, `RLIMIT_CPU`, `RLIMIT_AS`) and `setrlimit(2)` on macOS (limited to `RLIMIT_CPU` and `RLIMIT_NOFILE` due to macOS constraints). Resource cap values are configurable under `[security.subprocess_resource_limits]` in TOML.
+- **Elicitation mandatory.** Unlike other destructive tools that only require elicitation after `dry_run: false`, every `subprocess.spawn` invocation triggers Layer 4 elicitation regardless of the `dry_run` flag. This is the highest elicitation level in the system.
+
+The updated five-layer model, with Layer 5 applying only to subprocess tools, is shown below.
+
+```mermaid
+flowchart TD
+    REQ[Tool Invocation] --> L1{Layer 1\nAllowlist check}
+    L1 -->|denied| DENY1[Reject: PATH_OUTSIDE_ALLOWLIST]
+    L1 -->|allowed| L2{Layer 2\nPath Jail}
+    L2 -->|escape detected| DENY2[Reject: PATH_TRAVERSAL_BLOCKED]
+    L2 -->|jailed| L3{Layer 3\nDry-run gate}
+    L3 -->|dry_run not false| DRY[Return dry-run preview]
+    L3 -->|dry_run: false| L4{Layer 4\nElicitation}
+    L4 -->|no token| ELIC[Emit elicitation form]
+    L4 -->|confirmed| ROUTE{subprocess tool?}
+    ROUTE -->|no| EXEC[Execute OS call]
+    ROUTE -->|yes| L5{Layer 5\nSubprocess Sandbox}
+    L5 -->|binary not in allowlist| DENY5A[Reject: SUBPROCESS_BINARY_DENIED]
+    L5 -->|env-var hard-banned| DENY5B[Reject: SUBPROCESS_ENV_BANNED]
+    L5 -->|cwd outside allowed_paths| DENY5C[Reject: PATH_OUTSIDE_ALLOWLIST]
+    L5 -->|all checks pass| SPAWN[tokio::process::Command spawn]
+    EXEC --> RESP[Tool Response]
+    SPAWN --> RESP
+```
+
+Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-subprocess-process-group-lifecycle.md) — process group lifecycle and cascade kill.

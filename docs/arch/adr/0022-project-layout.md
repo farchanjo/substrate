@@ -196,6 +196,31 @@ MCP JSON-RPC surface against a spawned server process.
 - CI must run `cargo test -p substrate-domain` in isolation to verify the zero
   infra rule holds.
 
+## Amendment — 2026-05-24 — New crate substrate-subprocess (ADR-0052)
+
+[ADR-0052](0052-subprocess-execution-architecture.md) introduces `crates/substrate-subprocess/` as the adapter for the subprocess bounded context.
+
+**Layering.** `substrate-subprocess` depends on `substrate-domain` (port traits, `SubprocessPort` definition), `substrate-policy` (binary allowlist and env allowlist enforcement at Layer 5 of ADR-0004), and `substrate-jobs` (JobRegistry integration for Bucket E dispatch per ADR-0040). It does not depend on any other bounded context adapter crate. It is the only crate in the workspace permitted to import `tokio::process::Command`.
+
+**Cargo feature gating.** The crate is a workspace member and is compiled as part of the workspace build. However, `substrate-mcp-server` declares it as an optional dependency:
+
+```toml
+# crates/substrate-mcp-server/Cargo.toml
+[dependencies]
+substrate-subprocess = { path = "../substrate-subprocess", optional = true }
+
+[features]
+subprocess = ["substrate-subprocess"]
+# default does not include subprocess
+default = []
+```
+
+When the `subprocess` feature is not enabled, the subprocess BC tools are absent from the MCP tool list and no subprocess execution paths are compiled into the server binary.
+
+**Hexagonal layering rule.** `substrate-subprocess` is the ONLY crate in the workspace permitted to import `tokio::process::Command` (and by extension `tokio::process::Child`, `tokio::process::Stdio`). All other crates remain subject to the prohibition from [ADR-0044](0044-no-subprocess-policy.md). This restriction is enforced by updating the `no_subprocess.rego` Rego policy to include a whitelist entry for the path `crates/substrate-subprocess/`; the policy continues to deny `Command` usage in all other crate paths.
+
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
 ## Amendment — 2026-05-22 — Additional domain dependencies (accepted)
 
 In practice the domain crate carries two additional dependencies beyond the

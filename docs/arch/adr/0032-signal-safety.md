@@ -178,6 +178,50 @@ ADR-0040 introduces a JobRegistry that tracks long-running tool calls as named j
 - Before the STDIO transport closes, the dispatch layer MUST emit one final `notifications/progress` MCP event per active job that was cancelled, with `state=cancelled` and `message="server shutting down"`. This notification is best-effort: if the pipe is already broken, the BrokenPipe error is silently ignored (not logged at warn or error level).
 - The SIGPIPE-ignored invariant established by this ADR remains in force during the drain phase. Any broken-pipe errors that occur while emitting cancellation notifications MUST be downgraded to `tracing::debug!` to avoid noise in operator logs during controlled shutdown.
 
+### 2026-05-24 — Subprocess termination integrated into graceful drain (ADR-0052/ADR-0053)
+
+[ADR-0052](0052-subprocess-execution-architecture.md) and [ADR-0053](0053-subprocess-process-group-lifecycle.md) extend the SIGTERM/SIGINT graceful drain sequence described in this ADR to cover active subprocess jobs. The existing shutdown sequence (steps 1–4 above) is extended to the following eight-step sequence when the `subprocess` Cargo feature is enabled. Steps 1 and the existing drain window behavior are unchanged for non-subprocess jobs.
+
+Extended shutdown sequence:
+
+1. The root `CancellationToken` is cancelled, propagating to all in-flight tool calls and job worker child tokens. (Existing — unchanged.)
+2. For each subprocess `JobEntry` currently in state `Pending` or `Running` in the `JobRegistry`: call `killpg(pgid, SIGTERM)` to deliver a cooperative termination signal to the entire process group. This step runs concurrently for all active subprocess jobs before the drain window begins. (New — subprocess extension.)
+3. Enter the drain window (`shutdown_drain_secs`). The drain now races two completion sets: the existing `JoinSet` of non-subprocess worker futures AND a new `JoinSet` of subprocess `wait()` futures (one per active child). The root `tokio::select!` waits for both sets to resolve or for the drain timeout to elapse. (New — subprocess extension.)
+4. On drain timeout expiry, for any subprocess `JobEntry` still in state `Running`: call `killpg(pgid, SIGKILL)` to force-terminate the remaining process group. The `subprocess_exit_code` hint is set to null and the terminal state is written as `Cancelled` with `kill_required: true` in the audit annotation. (New — subprocess extension.)
+5. Drain all mpsc stream-chunk buffers for subprocess jobs; emit `notifications/progress` with `job_state=cancelled` per active subprocess job. The SIGPIPE-ignored invariant and BrokenPipe downgrade-to-debug rule from this ADR remain in force. (Extended scope — subprocess chunks added.)
+6. For each terminal subprocess `JobEntry`: remove all registered `tmp_files` paths (stream-capture temporary files per ADR-0033 and ADR-0054) via `tokio::fs::remove_file`. Cleanup failure is logged at WARN and does not block exit. (New — subprocess extension.)
+7. Call `JoinSet::abort_all()` on the non-subprocess worker `JoinSet` for any remaining non-subprocess workers. (Existing — unchanged.)
+8. Close the rmcp service and allow stdout EOF to propagate. (Existing — unchanged.)
+
+The updated shutdown sequence including the subprocess termination phase is shown below.
+
+```mermaid
+sequenceDiagram
+    participant Signal as SIGTERM/SIGINT
+    participant Root as Root CancellationToken
+    participant JobReg as JobRegistry
+    participant SubprocWait as Subprocess wait() JoinSet
+    participant MsgDrain as mpsc drain
+    participant Cleanup as tmp_files cleanup
+
+    Signal->>Root: cancel()
+    Root->>JobReg: propagate to all child tokens
+    JobReg->>JobReg: killpg(pgid, SIGTERM) for each Running subprocess job
+    Root->>SubprocWait: start drain window (shutdown_drain_secs)
+    alt all subprocess jobs exit within drain window
+        SubprocWait-->>Root: all wait() futures resolved
+    else drain timeout elapsed
+        Root->>JobReg: killpg(pgid, SIGKILL) for remaining Running subprocess jobs
+    end
+    Root->>MsgDrain: drain mpsc stream-chunk buffers
+    MsgDrain->>MsgDrain: emit notifications/progress state=cancelled per job
+    Root->>Cleanup: remove tmp_files for terminal subprocess jobs
+    Root->>Root: JoinSet::abort_all() for non-subprocess workers
+    Root->>Root: rmcp service close on stdout EOF
+```
+
+Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-subprocess-process-group-lifecycle.md) — process group lifecycle and cascade kill.
+
 ### 2026-05-21 — Extended by ADR-0042 capability-adapter-factory
 
 ADR-0042 introduces a capability probe that runs at server startup to select adapter tiers. The probe's failure mode interacts with the signal-handler installation sequence described in this ADR.

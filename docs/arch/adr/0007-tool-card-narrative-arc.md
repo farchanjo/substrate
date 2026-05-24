@@ -203,6 +203,19 @@ ADR-0042 introduces a capability adapter factory that selects native adapter tie
 - `walker_tier_used` (string, optional) — records the filesystem walker tier selected by ADR-0042 for the operation (e.g., `native-fts`, `ignore-crate`, `portable`). Emitted only when the operation executed through a walker adapter path. Diagnostic; clients MUST NOT branch on this value.
 - Neither annotation counts toward the 80-token text budget of the narrative arc and neither is part of the hint grammar validated by `xtask check-cards`. Both annotations are appended to `structuredContent` outside the `hints` map as top-level sibling keys.
 
+### 2026-05-24 — Subprocess tool category introduced via ADR-0052
+
+[ADR-0052](0052-subprocess-execution-architecture.md) adds the `subprocess` namespace with five tools: `subprocess.spawn`, `subprocess.list`, `subprocess.cancel`, `subprocess.result`, and `subprocess.signal`. All subprocess tools follow the same USE/DOES/ARGS/RETURNS/NEXT/AVOID narrative arc template prescribed by this ADR, subject to the token-budget revision of the 2026-05-22 amendment (description string ≤100 chars; SKILL.md carries the full lookup reference).
+
+All `subprocess.*` tool cards MUST set the following keys in the `structuredContent.hints` map:
+
+- `confirm_destructive: true` — subprocess execution is classified as a destructive operation; this key must be present and `true` on every subprocess tool response, including read-side tools (`subprocess.list`, `subprocess.result`, `subprocess.status`) where it serves as a provenance marker indicating the associated job involved subprocess execution.
+- `cascade_kill_pgid: true` — signals to the client that cancelling this job will send `SIGKILL` to the entire process group if the child does not exit within the drain window; clients should surface this in confirmation UIs.
+
+The `subprocess.spawn` tool card MUST include the literal phrase "elicitation required" in its AVOID section, making the mandatory human-confirmation step discoverable at the tool-card level before the client constructs the invocation. No other `subprocess.*` tool card is required to carry this phrase; the spawn tool is the sole entry point for child process creation.
+
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
 ### 2026-05-22 -- MCP + skill synergy (token efficiency)
 
 The original USE/DOES/ARGS/RETURNS/NEXT/AVOID narrative-arc template

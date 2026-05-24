@@ -134,3 +134,54 @@ Out of scope: network-based remote attackers (substrate binds no network listene
 - [ADR-0032](0032-signal-safety.md) — Signal safety (SIGBUS via mmap mitigation, D-NEW-2)
 - [ADR-0033](0033-transactional-write-pattern.md) — Transactional write pattern (ENOSPC and cancellation mitigation, D-NEW-1)
 - [ADR-0035](0035-path-safety-hardening.md) — Path safety hardening (TOCTOU, firmlink, Unicode, /proc, archive symlink-member, hard-link threats)
+
+## Amendments
+
+### 2026-05-24 — STRIDE expansion for subprocess BC (ADR-0052)
+
+[ADR-0052](0052-subprocess-execution-architecture.md) introduces the subprocess bounded context, which substantially expands the threat surface. The following STRIDE entries are added to the threat table. They use the same format as existing `T-NEW-*` entries above; GFM tables are not used per spec conventions.
+
+**S-NEW-3 — Child process spoofs identity via argv[0] manipulation.**
+Scenario: a LLM-supplied binary name sets argv[0] to a trusted program name, causing audit logs to attribute actions to a different process.
+Mitigation: substrate preserves the argv verbatim from the SubprocessRequest value object without modification. Every audit event emitted for the child carries both the `binary_path` resolved through the binary allowlist and a `binary_hash` (blake3 of the executable at spawn time) alongside the `correlation_id` and `job_id`. Identity is tied to the spawn record, not to argv[0].
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
+**T-NEW-6 — Env-var injection via LLM-supplied env map containing LD_PRELOAD or equivalent.**
+Scenario: the LLM includes `LD_PRELOAD=/tmp/evil.so` in the `subprocess.spawn` env map, causing the child to load a malicious shared library that escapes containment.
+Mitigation: the env-var allowlist (Layer 5 of ADR-0004) hard-bans `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `LD_LIBRARY_PATH`, and `DYLD_LIBRARY_PATH` independently of the allowlist. Any spawn request containing a hard-banned key is rejected with `SUBPROCESS_ENV_BANNED` before construction of `tokio::process::Command`.
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
+**R-NEW-1 — Stream chunk emitted to client without correlation to spawn.**
+Scenario: stdout or stderr stream chunks arrive at the client with no way to associate them with the originating `subprocess.spawn` call, enabling repudiation of which child produced which output.
+Mitigation: every stdout and stderr chunk carries `job_id` and `correlation_id` in its structuredContent envelope per [ADR-0054](0054-subprocess-stream-capture.md). The audit event trail for each chunk includes both identifiers, ensuring complete traceability from spawn to every byte delivered.
+Cross-reference: [ADR-0054](0054-subprocess-stream-capture.md).
+
+**I-NEW-2 — Child writes secret to stdout, surfaced to LLM via stream.**
+Scenario: the child process emits an API key or credential to stdout; the stream is forwarded to the LLM agent without sanitization, causing information disclosure.
+Mitigation: the redaction filter defined in [ADR-0018](0018-logging-redaction.md) is extended to cover subprocess stdout and stderr stream chunks. Redaction runs on each chunk before it is placed into the mpsc channel for delivery, ensuring secrets matching known patterns are replaced with `[REDACTED]` before any forwarding occurs.
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md), [ADR-0054](0054-subprocess-stream-capture.md).
+
+**D-NEW-3 — Child fork-bomb exhausts process table.**
+Scenario: the spawned child process forks recursively (intentionally or due to a bug), exhausting the process table and causing denial of service for the substrate server and the host OS.
+Mitigation: process group ID (pgid) scoped `killpg(SIGKILL)` is triggered on Cancelled or TimedOut JobEntry terminal transitions. The per-client quota `subprocess.max_per_client` and the global `subprocess.max_concurrent` limit the number of concurrently active subprocess jobs. On Linux, `RLIMIT_NPROC` is set on the child when the `sandbox` Cargo feature is enabled, capping the total number of child processes spawnable by the child's UID.
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md), [ADR-0053](0053-subprocess-process-group-lifecycle.md).
+
+**E-NEW-1 — Child inherits substrate UID/GID/privileges.**
+Scenario: the spawned child runs as the same user as substrate, inheriting all its filesystem access and OS capabilities, allowing the child to act with full substrate privileges.
+Mitigation: the optional `subprocess.drop_privs_to_uid` configuration key causes substrate to call `setuid(target_uid)` in the `pre_exec` hook before exec, dropping to a less-privileged UID. When `drop_privs_to_uid` is unset, this is documented as a residual risk in the operator guide; the binary allowlist and env allowlist (Layer 5 of ADR-0004) reduce but do not eliminate the privilege surface.
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
+**E-NEW-2 — Child escapes cwd via chdir() syscall after spawn.**
+Scenario: the spawned child calls `chdir("/")` after process start, escaping the cwd restriction enforced at spawn time, and subsequently accesses files outside the intended working directory.
+Mitigation: the cwd PathJail in Layer 5 covers only spawn-time argument validation; it cannot prevent a cooperative child from calling `chdir()` post-spawn. This is documented as a residual risk. The binary allowlist restricts which programs may be executed, reducing the likelihood that an unintended program with `chdir` behavior is spawned.
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
+**D-NEW-4 — Subprocess orphaned on Linux SIGKILL of substrate.**
+Scenario: `SIGKILL` is delivered to the substrate process on Linux; the child process continues running as an orphan adopted by init/systemd, consuming resources and potentially executing actions that were intended to be cancelled.
+Mitigation: `PR_SET_PDEATHSIG(SIGTERM)` is set in the `pre_exec` hook before exec per [ADR-0053](0053-subprocess-process-group-lifecycle.md). When the parent process dies, the kernel delivers `SIGTERM` to the child automatically. Child binaries MUST implement a `SIGTERM` cleanup handler; this is documented as a contract requirement in the operator guide.
+Cross-reference: [ADR-0053](0053-subprocess-process-group-lifecycle.md).
+
+**D-NEW-5 — Subprocess orphaned on macOS SIGKILL of substrate.**
+Scenario: `SIGKILL` is delivered to the substrate process on macOS; `PR_SET_PDEATHSIG` is not available; the child process continues as an orphan.
+Mitigation: a watchdog pipe (cooperative, per [ADR-0053](0053-subprocess-process-group-lifecycle.md)) is established between substrate and each child at spawn. When the substrate process dies, the write end of the pipe closes; a cooperative child monitoring the read end receives EOF and self-terminates. At next substrate startup, an orphan reaper routine per [ADR-0055](0055-subprocess-orphan-reaper.md) scans for processes matching the watchdog pipe fingerprint and terminates them. Non-cooperative binaries that do not monitor the watchdog pipe represent a residual risk documented in the operator guide.
+Cross-reference: [ADR-0053](0053-subprocess-process-group-lifecycle.md), [ADR-0055](0055-subprocess-orphan-reaper.md).

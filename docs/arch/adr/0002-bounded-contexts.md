@@ -155,6 +155,78 @@ mindmap
   boundaries except through `substrate-domain`.
 - Integration tests for each context live under `crates/<context>/tests/`.
 
+## Amendments
+
+### 2026-05-24 — Eighth bounded context: subprocess (ADR-0052)
+
+[ADR-0052](0052-subprocess-execution-architecture.md) introduces an eighth bounded context: `subprocess`. The original decision selected six contexts; the `job` control-plane introduced by [ADR-0040](0040-async-job-control-plane.md) constitutes the seventh. The `subprocess` BC is the eighth.
+
+**subprocess**
+
+Purpose: spawn and supervise child processes with stream capture and cascade cleanup.
+
+Ubiquitous language: `SubprocessRequest`, `SubprocessHandle`, `ProcessGroup`, `StreamEvent`, `BinaryAllowlist`, `EnvAllowlist`, `WatchdogPipe`, `CascadeKill`, `OrphanReaper`.
+
+Aggregates: `SubprocessHandle` (aggregate root; owns the full lifecycle of a single spawned child process from pre-exec validation through terminal state cleanup).
+
+Tools exposed: `subprocess.spawn`, `subprocess.list`, `subprocess.cancel`, `subprocess.result`, `subprocess.signal`.
+
+Mutation risk: HIGHEST — subprocess execution causes irreversible side effects on the host OS. Elicitation is mandatory for every `subprocess.spawn` invocation regardless of the `dry_run` flag (Layer 4 of ADR-0004 applied unconditionally). The subprocess BC is behind Cargo feature `subprocess` (default-OFF) and is excluded from the default binary.
+
+The context map mindmap is updated to include the subprocess branch:
+
+```mermaid
+mindmap
+  root((substrate-domain))
+    filesystem-query
+      ls
+      find
+      stat
+      du
+      file
+    filesystem-mutation
+      mkdir
+      cp
+      mv
+      rm
+      ln
+      touch
+      chmod
+    process
+      ps
+      kill
+      pgrep
+      lsof
+    system-info
+      uname
+      uptime
+      df
+      free
+      hostname
+    text-processing
+      grep
+      sed
+      awk
+      wc
+    archive
+      tar
+      gzip
+      zip
+    job
+      job.status
+      job.result
+      job.cancel
+      job.list
+    subprocess
+      subprocess.spawn
+      subprocess.list
+      subprocess.cancel
+      subprocess.result
+      subprocess.signal
+```
+
+Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
+
 ## Links
 
 - Related: [ADR-0025](0025-bounded-context-interactions.md)

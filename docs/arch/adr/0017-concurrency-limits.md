@@ -174,3 +174,23 @@ max_concurrent = 0       # 0 = inherits cpu_permits (Zone C default)
 - [ADR-0032](0032-signal-safety.md): signal safety; SIGTERM triggers drain; `JoinSet::abort_all()` on shutdown.
 - [ADR-0036](0036-startup-error-contract.md): startup error contract; `SUBSTRATE_CONFIG_INVALID` for zero-permit Semaphore.
 - [ADR-0037](0037-async-cancellation-patterns.md): `OwnedSemaphorePermit` lifetime rule; `JoinSet` rule; biased-select for permit acquisition vs cancellation.
+
+## Amendments
+
+### 2026-05-24 — Subprocess concurrency limits (ADR-0052)
+
+[ADR-0052](0052-subprocess-execution-architecture.md) introduces Bucket E (always-async subprocess dispatch) and requires four new concurrency configuration keys under the `[subprocess]` TOML section. These keys extend the concurrency model of this ADR without modifying the existing Zone A/B/C Semaphore machinery.
+
+New configuration keys:
+
+- `subprocess.max_per_client` (u32, default 4) — maximum number of simultaneously active subprocess jobs per client_id. Enforcement uses the same per-client job counter already maintained by the JobRegistry (ADR-0040). Exceeding this limit returns `SUBSTRATE_QUOTA_EXCEEDED` synchronously from `subprocess.spawn` without creating a job entry.
+- `subprocess.max_concurrent` (u32, default 8) — global maximum number of simultaneously active subprocess jobs across all clients. Enforced by a dedicated `Arc<Semaphore>` with `max_concurrent` permits, acquired before the Bucket E job worker is spawned.
+- `subprocess.spawn_rate_per_sec` (f64, default 1.0) — token-bucket rate limit on `subprocess.spawn` invocations per client_id. Clients that exceed this rate receive `SUBSTRATE_RESOURCE_LIMIT` without consuming a concurrent-subprocess permit. The token bucket is replenished continuously at the configured rate; burst capacity equals `spawn_rate_per_sec * 2.0` tokens (two-second burst).
+- `subprocess.aggregate_buffer_bytes` (usize, default 65536) — per-stream ring buffer capacity for the aggregated stdout and stderr content stored by `subprocess.result`. When the ring buffer is full and the child is still writing, new chunks are dropped and `subprocess_stream_chunks_dropped` in the hints map is incremented.
+
+Enforcement rules consistent with this ADR:
+
+- The subprocess `Arc<Semaphore>` permit MUST be acquired using `Arc::clone(&ctx.subprocess_semaphore).acquire_owned().await` in async scope. The `OwnedSemaphorePermit` is passed into the Bucket E job closure and held until the JobEntry reaches a terminal state. The permit MUST NOT be moved into a `spawn_blocking` closure (per ADR-0037 and the `panic = "abort"` constraint of ADR-0014).
+- Permit release on terminal state transition is explicit: the job worker drops the `OwnedSemaphorePermit` as part of the terminal state write inside the `parking_lot::Mutex` lock sequence, before the result watch channel is set.
+
+Cross-references: [ADR-0040](0040-async-job-control-plane.md) — JobRegistry quota enforcement; [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture.

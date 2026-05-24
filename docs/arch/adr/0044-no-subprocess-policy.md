@@ -1,7 +1,9 @@
 ---
-status: accepted
+status: superseded
 accepted_date: 2026-05-21
 date: 2026-05-21
+superseded_by: ADR-0052
+superseded_date: 2026-05-24
 deciders: [com.archanjo]
 consulted: []
 informed: []
@@ -43,6 +45,8 @@ if not, what the enforcement mechanism is.
    external binaries as fallback when no crate exists.
 
 ## Decision Outcome
+
+> **SUPERSEDED 2026-05-24 by [ADR-0052](0052-subprocess-execution-architecture.md):** subprocess execution is now permitted as an opt-in bounded context (`crates/substrate-subprocess/`) behind Cargo feature `subprocess` (default-OFF); the no-subprocess constraint is preserved for all other crates.
 
 Chosen option: "No subprocess, ever", because it is the only option that
 preserves STDIO sanctity, eliminates a class of security vulnerabilities, and
@@ -290,6 +294,20 @@ The decision to ban subprocesses was informed by the STDIO transport invariant
 sibling of the existing `security_invariants.rego`, `hexagonal_layering.rego`,
 and `audit_event_invariants.rego` policies.
 
+## Amendments
+
+### 2026-05-24 — Superseded by ADR-0052
+
+[ADR-0052](0052-subprocess-execution-architecture.md) introduces subprocess execution as an eighth bounded context behind the Cargo feature flag `subprocess` (default-OFF). This ADR is superseded in its absolute prohibition; the constraint is narrowed rather than removed.
+
+The no-subprocess rule remains in force for all existing crates under `crates/` except the single new adapter `crates/substrate-subprocess/`. That crate is the only location in the workspace permitted to import `tokio::process::Command`. The `no_subprocess.rego` Rego policy is updated to whitelist the path `crates/substrate-subprocess/` from the `Command`-usage denial rule; all other crates remain subject to the original prohibition.
+
+All five defensive rationales stated in this ADR (STDIO sanctity, security, determinism, portability, and performance) remain valid. ADR-0052 does not contradict them; instead it accepts their implications as constraints on the subprocess BC design and builds a fifth security layer (Layer 5 of ADR-0004) to enforce them within the subprocess execution path. The binary allowlist (default-deny), env-var allowlist, cwd PathJail, and mandatory elicitation for every `subprocess.spawn` call directly honor the security and determinism concerns articulated here.
+
+The performance concern is explicitly acknowledged in ADR-0052: subprocess tools are always assigned to Bucket E (always-async, see ADR-0040), ensuring fork-exec overhead never appears on any synchronous hot path measured by ADR-0030.
+
+The Permitted Exceptions section of this ADR (test code, build scripts, process introspection) is unchanged and unaffected by ADR-0052.
+
 ## Links
 
 - [ADR-0003](0003-crate-stack-and-async-zones.md) — crate stack and async zones
@@ -302,3 +320,4 @@ and `audit_event_invariants.rego` policies.
 - [ADR-0041](0041-filesystem-index-native-tiers.md) — filesystem index native tiers
 - [ADR-0042](0042-capability-adapter-factory.md) — capability adapter factory
 - [ADR-0043](0043-simd-runtime-dispatch.md) — SIMD runtime dispatch
+- [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture (supersedes this ADR)

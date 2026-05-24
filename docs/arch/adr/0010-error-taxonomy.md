@@ -254,3 +254,19 @@ One new startup error code is introduced to cover the case where PathJail cannot
 **Additions:**
 
 - `SUBSTRATE_JAIL_DEGRADED_REFUSED` — startup error code emitted when PathJail tier 1 (kernel-enforced) is unavailable for the detected platform and `security.refuse_degraded_jail = true` (default). The composition root exits with this code in the startup banner before accepting any MCP requests. recovery_hint: `"upgrade kernel to Linux >= 5.6 or macOS >= 12, or set security.refuse_degraded_jail = false"`.
+
+### 2026-05-24 — Subprocess error codes (ADR-0052)
+
+Nine new runtime error codes are introduced for the subprocess BC. See [ADR-0052](0052-subprocess-execution-architecture.md), [ADR-0053](0053-process-lifecycle-cascade-contract.md), [ADR-0054](0054-subprocess-stream-multiplex.md), and [ADR-0055](0055-orphan-reaper-on-startup.md) for the corresponding design decisions. Codes occupy `-32034` through `-32042` in the substrate-reserved JSON-RPC range.
+
+**Additions:**
+
+- `SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED` (-32034) — binary path rejected because it is absent from `security.subprocess_binary_allowlist`. Category: security_violation. Cross-ref: ADR-0052 Layer 1 (binary allowlist).
+- `SUBSTRATE_SUBPROCESS_ENV_BANNED` (-32035) — hard-banned environment variable (`LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`) present in `env_override` or `env_allowlist`. Category: security_violation. Cross-ref: ADR-0052 Layer 2 (env sanitisation).
+- `SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST` (-32036) — subprocess `cwd` is not under any entry in `security.allowed_paths`. Category: security_violation. Cross-ref: ADR-0052 Layer 3 (path jail).
+- `SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED` (-32037) — per-client active subprocess quota exhausted; caller must wait for a child to reach a terminal state or invoke `subprocess.cancel`. Category: resource_limit. Cross-ref: ADR-0052 quota model.
+- `SUBSTRATE_SUBPROCESS_SPAWN_FAILED` (-32038) — `tokio::process::Command::spawn` returned an error after all allowlist checks passed; typically an OS-level errno (ENOENT, EACCES, ENOMEM). Category: io_error. Cross-ref: ADR-0052 spawn path, ADR-0053 cascade contract.
+- `SUBSTRATE_SUBPROCESS_TIMEOUT` (-32039) — subprocess ran past `timeout_secs`; child was SIGTERM-then-SIGKILLed per the cascade contract. Category: timeout. Cross-ref: ADR-0053 lifecycle, ADR-0054 stream teardown.
+- `SUBSTRATE_SUBPROCESS_KILLED` (-32040) — subprocess received SIGKILL after the drain window expired (either from explicit `subprocess.cancel force=true`, from a timeout cascade, or from substrate shutdown drain). Category: cancellation. Cross-ref: ADR-0053 cascade, ADR-0055 orphan reaper.
+- `SUBSTRATE_ELICITATION_REQUIRED` (-32041) — tool requires operator confirmation via the MCP elicitation flow before execution proceeds; re-invoke with `elicitation_confirmed: true`. Category: user_consent. Cross-ref: ADR-0052 elicitation mandate, ADR-0004 Layer 4.
+- `SUBSTRATE_STREAM_CHUNK_DROPPED` (-32042) — a stream chunk for a subprocess job was dropped due to mpsc backpressure; the client was not draining the notifications/progress channel fast enough. Category: backpressure. Cross-ref: ADR-0054 bounded mpsc channel model.
