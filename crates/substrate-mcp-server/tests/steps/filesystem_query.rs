@@ -35,9 +35,7 @@ async fn given_allowlist_root(world: &mut SubstrateWorld, root: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
-    world
-        .context
-        .insert("allowlist_root".to_string(), root);
+    world.context.insert("allowlist_root".to_string(), root);
 }
 
 #[given(regex = r#"^the directory "([^"]+)" contains (\d+) files matching "([^"]+)"$"#)]
@@ -70,13 +68,11 @@ async fn given_dir_contains_n_files(
     let created = if use_rs {
         // Create .rs files using the archive fixture helper (reused here).
         let src_dir = root_for_fixture.join("rs_files");
-        std::fs::create_dir_all(&src_dir)
-            .expect("create rs_files fixture directory");
+        std::fs::create_dir_all(&src_dir).expect("create rs_files fixture directory");
         let mut paths = Vec::with_capacity(count as usize);
         for i in 0..(count as usize) {
             let f = src_dir.join(format!("file_{i:04}.rs"));
-            std::fs::write(&f, b"// fixture\n")
-                .expect("write .rs fixture file");
+            std::fs::write(&f, b"// fixture\n").expect("write .rs fixture file");
             paths.push(f);
         }
         paths
@@ -129,12 +125,10 @@ async fn given_dir_contains_exactly(
         .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
     if use_rs {
         let src_dir = root.join("rs_files_exact");
-        std::fs::create_dir_all(&src_dir)
-            .expect("create rs_files_exact fixture directory");
+        std::fs::create_dir_all(&src_dir).expect("create rs_files_exact fixture directory");
         for i in 0..(count as usize) {
             let f = src_dir.join(format!("exact_{i:04}.rs"));
-            std::fs::write(&f, b"// exact fixture\n")
-                .expect("write .rs exact fixture file");
+            std::fs::write(&f, b"// exact fixture\n").expect("write .rs exact fixture file");
         }
     } else {
         SubstrateWorld::create_fs_find_fixture(&root, count as usize);
@@ -157,12 +151,16 @@ async fn given_file_exists(world: &mut SubstrateWorld, path: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
-    world.context.insert("target_file".to_string(), path.clone());
+    world
+        .context
+        .insert("target_file".to_string(), path.clone());
     // Materialize the fixture file under the sandbox so subsequent tool calls
     // can act on a real inode (capability-elicitation-missing + similar
     // scenarios assert post-conditions like "the file still exists on disk").
     let root = world.root_str();
-    let real_path = path.replace("/work/repo", &root).replace("/work/dist", &root);
+    let real_path = path
+        .replace("/work/repo", &root)
+        .replace("/work/dist", &root);
     if let Some(parent) = std::path::Path::new(&real_path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -171,14 +169,10 @@ async fn given_file_exists(world: &mut SubstrateWorld, path: String) {
 
 #[given(regex = r#"^the file "([^"]+)" does not exist$"#)]
 async fn given_file_not_exist(world: &mut SubstrateWorld, path: String) {
-    world
-        .context
-        .insert("absent_file".to_string(), path);
+    world.context.insert("absent_file".to_string(), path);
 }
 
-#[given(
-    regex = r#"^the file "([^"]+)" is a symlink pointing to "([^"]+)"$"#
-)]
+#[given(regex = r#"^the file "([^"]+)" is a symlink pointing to "([^"]+)"$"#)]
 async fn given_file_is_symlink(world: &mut SubstrateWorld, link_path: String, target: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -215,27 +209,19 @@ async fn given_file_is_symlink(world: &mut SubstrateWorld, link_path: String, ta
     #[cfg(unix)]
     std::os::unix::fs::symlink(&real_target, &real_link)
         .expect("create symlink for given_file_is_symlink");
-    world
-        .context
-        .insert("symlink_path".to_string(), link_path);
-    world
-        .context
-        .insert("symlink_target".to_string(), target);
+    world.context.insert("symlink_path".to_string(), link_path);
+    world.context.insert("symlink_target".to_string(), target);
 }
 
 /// Step: `"/work/repo/sys_link" is a symlink pointing to "/usr/bin/env"` (without
 /// the leading keyword — Gherkin uses a bare string when the "Given" is implied
 /// by the scenario context).
-#[given(
-    regex = r#"^"([^"]+)" is a symlink pointing to "([^"]+)"$"#
-)]
+#[given(regex = r#"^"([^"]+)" is a symlink pointing to "([^"]+)"$"#)]
 async fn given_bare_symlink(world: &mut SubstrateWorld, link_path: String, target: String) {
     given_file_is_symlink(world, link_path, target).await;
 }
 
-#[given(
-    regex = r#"^the symlink "([^"]+)" exists and points to "([^"]+)"$"#
-)]
+#[given(regex = r#"^the symlink "([^"]+)" exists and points to "([^"]+)"$"#)]
 async fn given_symlink_exists_points(
     world: &mut SubstrateWorld,
     link_path: String,
@@ -271,12 +257,8 @@ async fn given_symlink_exists_points(
     #[cfg(unix)]
     std::os::unix::fs::symlink(&real_target, &real_link)
         .expect("create symlink for given_symlink_exists_points");
-    world
-        .context
-        .insert("symlink_path".to_string(), link_path);
-    world
-        .context
-        .insert("symlink_target".to_string(), target);
+    world.context.insert("symlink_path".to_string(), link_path);
+    world.context.insert("symlink_target".to_string(), target);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +267,9 @@ async fn given_symlink_exists_points(
 
 #[when(regex = r#"^the client calls fs\.find with root="([^"]+)" and pattern="([^"]+)"$"#)]
 async fn when_fs_find(world: &mut SubstrateWorld, root: String, pattern: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -315,7 +299,9 @@ async fn when_fs_find_with_cursor(
     pattern: String,
     cursor: String,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -339,7 +325,9 @@ async fn when_fs_find_with_page_size(
     pattern: String,
     page_size: u32,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -357,12 +345,10 @@ async fn when_fs_find_with_page_size(
 // NOTE: when_fs_find_traversal removed — when_fs_find handles raw/traversal paths (no /work/repo replacement for non-sandbox paths).
 
 #[when(regex = r#"^the client calls fs\.find with cursor="([^"]+)" and page_size=(\d+)$"#)]
-async fn when_fs_find_cursor_only(
-    world: &mut SubstrateWorld,
-    cursor: String,
-    page_size: u32,
-) {
-    if world.skip_scenario { return; }
+async fn when_fs_find_cursor_only(world: &mut SubstrateWorld, cursor: String, page_size: u32) {
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -375,11 +361,11 @@ async fn when_fs_find_cursor_only(
 
 // NOTE: when_fs_find_root_pattern_pagesize is a duplicate of when_fs_find_with_page_size — removed.
 
-#[when(
-    regex = r#"^the client calls fs\.find with a manually crafted cursor value "([^"]+)"$"#
-)]
+#[when(regex = r#"^the client calls fs\.find with a manually crafted cursor value "([^"]+)"$"#)]
 async fn when_fs_find_crafted_cursor(world: &mut SubstrateWorld, cursor: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -392,7 +378,9 @@ async fn when_fs_find_crafted_cursor(world: &mut SubstrateWorld, cursor: String)
 
 #[when(regex = r#"^the client calls fs\.find with cursor="([^"]+)"$"#)]
 async fn when_fs_find_invalid_cursor(world: &mut SubstrateWorld, cursor: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -403,9 +391,13 @@ async fn when_fs_find_invalid_cursor(world: &mut SubstrateWorld, cursor: String)
     );
 }
 
-#[when(regex = r#"^the client calls fs\.read with a path argument that contains an embedded NUL byte$"#)]
+#[when(
+    regex = r#"^the client calls fs\.read with a path argument that contains an embedded NUL byte$"#
+)]
 async fn when_fs_read_nul_byte(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -420,9 +412,15 @@ async fn when_fs_read_nul_byte(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the structured content has exactly (\d+) entries$"#)]
 async fn then_structured_content_count(world: &mut SubstrateWorld, expected: usize) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; } // error response — pass structurally
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    } // error response — pass structurally
     let sc = &resp["result"]["structuredContent"];
     // substrate may return entries under "entries" or "matches" depending on
     // the handler version.  Try both keys and use whichever is present.
@@ -442,32 +440,48 @@ async fn then_structured_content_count(world: &mut SubstrateWorld, expected: usi
 
 #[then(regex = r#"^the structured content includes a next_cursor token$"#)]
 async fn then_has_next_cursor(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // TODO(production): assert structuredContent.next_cursor is present once fixture is wired.
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; } // fixture absent
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    } // fixture absent
     // Structural pass — next_cursor presence check deferred.
 }
 
 #[then(regex = r#"^the content text reports "(.+)"$"#)]
 async fn then_content_text_reports(world: &mut SubstrateWorld, expected: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // TODO(production): assert content[0].text contains expected once fixture is wired.
     let _ = expected;
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
 }
 
 #[then(regex = r#"^the entries do not overlap with the first page$"#)]
 async fn then_no_overlap_first(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // TODO(production): retain page-1 entries across the scenario and check overlap here.
     // Structural pass — fixture and multi-call state not yet wired.
 }
 
 #[then(regex = r#"^the structured content does not include a next_cursor token$"#)]
 async fn then_no_next_cursor(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // Verify no cursor in structured content.
     if let Some(resp) = &world.last_response {
         if let Some(sc) = resp["result"]["structuredContent"].as_object() {
@@ -485,11 +499,11 @@ async fn then_no_next_cursor(world: &mut SubstrateWorld) {
     // No response yet — step passes vacuously pending full implementation.
 }
 
-#[then(
-    regex = r#"^the tool returns error code (SUBSTRATE_[A-Z_]+)$"#
-)]
+#[then(regex = r#"^the tool returns error code (SUBSTRATE_[A-Z_]+)$"#)]
 async fn then_error_code(world: &mut SubstrateWorld, code: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world
         .last_response
         .as_ref()
@@ -518,35 +532,41 @@ async fn then_no_filesystem_read(_world: &mut SubstrateWorld) {
     regex = r#"^the structured content has exactly (\d+) entries and includes next_cursor "([^"]+)"$"#
 )]
 async fn then_count_and_cursor(world: &mut SubstrateWorld, count: usize, cursor: String) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; } // fixture absent
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    } // fixture absent
     let _ = (count, cursor); // TODO(production): assert entry count and cursor presence
 }
 
 #[then(regex = r#"^the entries on page (\d+) do not overlap with page (\d+)$"#)]
 async fn then_pages_no_overlap(world: &mut SubstrateWorld, page_a: u32, page_b: u32) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // TODO(production): retain per-page entry sets and assert no overlap.
     let _ = (page_a, page_b);
 }
 
-#[then(
-    regex = r#"^the entries on page (\d+) do not overlap with pages (\d+) or (\d+)$"#
-)]
+#[then(regex = r#"^the entries on page (\d+) do not overlap with pages (\d+) or (\d+)$"#)]
 async fn then_page_no_overlap_two(
     world: &mut SubstrateWorld,
     page_a: u32,
     page_b: u32,
     page_c: u32,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let _ = (page_a, page_b, page_c);
 }
 
-#[then(
-    regex = r#"^the entries on page (\d+) do not overlap with pages (\d+), (\d+), or (\d+)$"#
-)]
+#[then(regex = r#"^the entries on page (\d+) do not overlap with pages (\d+), (\d+), or (\d+)$"#)]
 async fn then_page_no_overlap_three(
     world: &mut SubstrateWorld,
     page_a: u32,
@@ -554,24 +574,34 @@ async fn then_page_no_overlap_three(
     page_c: u32,
     page_d: u32,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let _ = (page_a, page_b, page_c, page_d);
 }
 
-#[then(
-    regex = r#"^the union of all four pages equals the full set of (\d+) files$"#
-)]
+#[then(regex = r#"^the union of all four pages equals the full set of (\d+) files$"#)]
 async fn then_union_equals_full_set(world: &mut SubstrateWorld, total: u32) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // TODO(production): verify that the union of all pages equals total entries.
     let _ = total;
 }
 
-#[then(regex = r#"^the structured content has exactly (\d+) entries and does not include a next_cursor$"#)]
+#[then(
+    regex = r#"^the structured content has exactly (\d+) entries and does not include a next_cursor$"#
+)]
 async fn then_count_no_cursor(world: &mut SubstrateWorld, count: usize) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
     let _ = count; // TODO(production): assert entry count
 }
 
@@ -579,7 +609,9 @@ async fn then_count_no_cursor(world: &mut SubstrateWorld, count: usize) {
 
 #[then(regex = r#"^the error object has field "code" equal to "([^"]+)"$"#)]
 async fn then_error_field_code(world: &mut SubstrateWorld, expected: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     let code = resp["error"]["data"]["code"]
         .as_str()
@@ -595,13 +627,13 @@ async fn then_error_field_code(world: &mut SubstrateWorld, expected: String) {
     regex = r#"^the error object has field "recovery_hint" whose length is between (\d+) and (\d+) characters$"#
 )]
 async fn then_recovery_hint_length(world: &mut SubstrateWorld, min: usize, max: usize) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     let hint = resp["error"]["data"]["recovery_hint"]
         .as_str()
-        .or_else(|| {
-            resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str()
-        })
+        .or_else(|| resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str())
         .unwrap_or("");
     let len = hint.len();
     assert!(
@@ -614,13 +646,13 @@ async fn then_recovery_hint_length(world: &mut SubstrateWorld, min: usize, max: 
     regex = r#"^the error object has field "correlation_id" matching the UUIDv7 pattern "([^"]+)"$"#
 )]
 async fn then_correlation_id_pattern(world: &mut SubstrateWorld, pattern: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     let cid = resp["error"]["data"]["correlation_id"]
         .as_str()
-        .or_else(|| {
-            resp["result"]["structuredContent"]["error"]["correlation_id"].as_str()
-        })
+        .or_else(|| resp["result"]["structuredContent"]["error"]["correlation_id"].as_str())
         .unwrap_or("");
     assert!(
         !cid.is_empty(),
@@ -632,7 +664,9 @@ async fn then_correlation_id_pattern(world: &mut SubstrateWorld, pattern: String
     regex = r#"^the error object has field "correlation_id" matching the UUIDv7 Crockford pattern$"#
 )]
 async fn then_correlation_id_crockford(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     let cid = resp["error"]["data"]["correlation_id"]
         .as_str()
@@ -653,7 +687,9 @@ async fn when_fs_find_invalid_max_depth(
     pattern: String,
     max_depth: i64,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -675,11 +711,11 @@ async fn when_fs_find_invalid_max_depth(
 /// Calls fs.stat for patterns like:
 ///   `the client subsequently calls fs.stat with path="/work/repo" (the root directory)`
 /// The parenthetical is informational — stripped by the regex, path used as-is.
-#[when(
-    regex = r#"^the client (?:subsequently )?calls fs\.stat with path="([^"]+)" \([^)]+\)$"#
-)]
+#[when(regex = r#"^the client (?:subsequently )?calls fs\.stat with path="([^"]+)" \([^)]+\)$"#)]
 async fn when_fs_stat_with_comment(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -693,9 +729,7 @@ async fn when_fs_stat_with_comment(world: &mut SubstrateWorld, path: String) {
 
 /// Asserts the response does not contain a "content" field carrying actual file
 /// data.  On error responses no file bytes should be returned.
-#[then(
-    regex = r#"^the response does not contain a "content" field with file data$"#
-)]
+#[then(regex = r#"^the response does not contain a "content" field with file data$"#)]
 async fn then_no_content_field(world: &mut SubstrateWorld) {
     if world.skip_scenario {
         return;
@@ -715,9 +749,7 @@ async fn then_no_content_field(world: &mut SubstrateWorld) {
 
 /// Asserts the error object `recovery_hint` field matches a glob-style pattern.
 /// `.*` is treated as a wildcard; inner literal substrings must appear in the hint.
-#[then(
-    regex = r#"^the error object has field "recovery_hint" matching "([^"]+)"$"#
-)]
+#[then(regex = r#"^the error object has field "recovery_hint" matching "([^"]+)"$"#)]
 async fn then_recovery_hint_matches(world: &mut SubstrateWorld, pattern: String) {
     if world.skip_scenario {
         return;
@@ -743,9 +775,7 @@ async fn then_recovery_hint_matches(world: &mut SubstrateWorld, pattern: String)
     }
     let hint = candidates.as_str();
     // Strip leading/trailing `.*` and check the inner literal substring.
-    let inner = pattern
-        .trim_start_matches(".*")
-        .trim_end_matches(".*");
+    let inner = pattern.trim_start_matches(".*").trim_end_matches(".*");
     let found = if inner.is_empty() {
         !hint.is_empty()
     } else {
@@ -759,9 +789,7 @@ async fn then_recovery_hint_matches(world: &mut SubstrateWorld, pattern: String)
 
 /// Asserts the error details include a field with the given name and value.
 /// Checks `error.data.details.<field>`, error message, and response text.
-#[then(
-    regex = r#"^the error object details include field "([^"]+)" equal to "([^"]+)"$"#
-)]
+#[then(regex = r#"^the error object details include field "([^"]+)" equal to "([^"]+)"$"#)]
 async fn then_error_details_field(world: &mut SubstrateWorld, field: String, value: String) {
     if world.skip_scenario {
         return;
@@ -771,8 +799,9 @@ async fn then_error_details_field(world: &mut SubstrateWorld, field: String, val
         .as_str()
         .is_some_and(|v| v == value);
     let message = resp["error"]["data"]["message"].as_str().unwrap_or("");
-    let sc_message =
-        resp["result"]["structuredContent"]["error"]["message"].as_str().unwrap_or("");
+    let sc_message = resp["result"]["structuredContent"]["error"]["message"]
+        .as_str()
+        .unwrap_or("");
     let reason = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
     let in_message =
         message.contains(&value) || sc_message.contains(&value) || reason.contains(&value);
@@ -825,8 +854,7 @@ async fn then_error_within_n_seconds(world: &mut SubstrateWorld, secs: u32) {
         return;
     }
     let resp = world.last_response.as_ref().expect("no response stored");
-    let has_err = resp["error"].is_object()
-        || resp["result"]["isError"].as_bool().unwrap_or(false);
+    let has_err = resp["error"].is_object() || resp["result"]["isError"].as_bool().unwrap_or(false);
     assert!(
         has_err,
         "expected an error response within {secs}s but got: {resp}"
@@ -834,9 +862,7 @@ async fn then_error_within_n_seconds(world: &mut SubstrateWorld, secs: u32) {
 }
 
 /// Asserts the `recovery_hint` does NOT contain the given string.
-#[then(
-    regex = r#"^the error object field "recovery_hint" does not contain the string "([^"]+)"$"#
-)]
+#[then(regex = r#"^the error object field "recovery_hint" does not contain the string "([^"]+)"$"#)]
 async fn then_recovery_hint_not_contains(world: &mut SubstrateWorld, excluded: String) {
     if world.skip_scenario {
         return;
@@ -844,9 +870,7 @@ async fn then_recovery_hint_not_contains(world: &mut SubstrateWorld, excluded: S
     let resp = world.last_response.as_ref().expect("no response stored");
     let hint = resp["error"]["data"]["recovery_hint"]
         .as_str()
-        .or_else(|| {
-            resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str()
-        })
+        .or_else(|| resp["result"]["structuredContent"]["error"]["recovery_hint"].as_str())
         .unwrap_or("");
     assert!(
         !hint.contains(&excluded),
@@ -862,8 +886,8 @@ async fn then_no_data_outside_allowlist(world: &mut SubstrateWorld) {
         return;
     }
     let resp = world.last_response.as_ref().expect("no response stored");
-    let is_error = resp["error"].is_object()
-        || resp["result"]["isError"].as_bool().unwrap_or(false);
+    let is_error =
+        resp["error"].is_object() || resp["result"]["isError"].as_bool().unwrap_or(false);
     assert!(
         is_error,
         "expected an error response (no external data leaked) but got: {resp}"
@@ -872,17 +896,15 @@ async fn then_no_data_outside_allowlist(world: &mut SubstrateWorld) {
 
 /// Asserts the response body does not contain the content of the named file.
 /// For symlink-escape scenarios the response must be an error, not file bytes.
-#[then(
-    regex = r#"^the response body does not contain the content of "([^"]+)"$"#
-)]
+#[then(regex = r#"^the response body does not contain the content of "([^"]+)"$"#)]
 async fn then_response_no_file_content(world: &mut SubstrateWorld, file: String) {
     let _ = file;
     if world.skip_scenario {
         return;
     }
     let resp = world.last_response.as_ref().expect("no response stored");
-    let is_error = resp["error"].is_object()
-        || resp["result"]["isError"].as_bool().unwrap_or(false);
+    let is_error =
+        resp["error"].is_object() || resp["result"]["isError"].as_bool().unwrap_or(false);
     assert!(
         is_error,
         "expected an error response (no file content leaked) but got: {resp}"
@@ -898,9 +920,7 @@ async fn then_response_no_file_content(world: &mut SubstrateWorld, file: String)
 
 /// Asserts the result set does not contain any path matching a given suffix.
 /// Checks the serialised `matches` array in structuredContent.
-#[then(
-    regex = r#"^the result set does not contain any path matching the suffix "([^"]+)"$"#
-)]
+#[then(regex = r#"^the result set does not contain any path matching the suffix "([^"]+)"$"#)]
 async fn then_result_set_no_suffix(world: &mut SubstrateWorld, suffix: String) {
     if world.skip_scenario {
         return;
@@ -924,29 +944,29 @@ async fn then_result_set_no_suffix(world: &mut SubstrateWorld, suffix: String) {
 
 /// Asserts the in-flight tmp file was excluded at index walk time.
 /// Best-effort: passes structurally since fs-index internals are opaque to E2E.
-#[then(
-    regex = r#"^the in-flight tmp file was excluded at index walk time and never inserted$"#
-)]
+#[then(regex = r#"^the in-flight tmp file was excluded at index walk time and never inserted$"#)]
 async fn then_inflight_tmp_excluded(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // Structural pass — fs-index internals not yet observable via E2E harness.
 }
 
 /// Asserts no orphan index entry exists for the tmp file.
-#[then(
-    regex = r#"^no orphan index entry for the tmp file exists$"#
-)]
+#[then(regex = r#"^no orphan index entry for the tmp file exists$"#)]
 async fn then_no_orphan_index_entry(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // Structural pass — fs-index internals not yet observable via E2E harness.
 }
 
 /// Asserts the entry was added via write-through at commit time.
-#[then(
-    regex = r#"^the entry for "([^"]+)" was added via write-through at commit time$"#
-)]
+#[then(regex = r#"^the entry for "([^"]+)" was added via write-through at commit time$"#)]
 async fn then_entry_added_write_through(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let _ = path;
     // Structural pass — fs-index internals not yet observable via E2E harness.
 }
@@ -957,16 +977,18 @@ async fn then_entry_added_write_through(world: &mut SubstrateWorld, path: String
     regex = r#"^the index entry was added via write-through at commit time without a TTL wait$"#
 )]
 async fn then_index_write_through_no_ttl(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // Structural pass — fs-index internals not yet observable via E2E harness.
 }
 
 /// Asserts the index entry for the given path was evicted at commit time.
-#[then(
-    regex = r#"^the index entry for "([^"]+)" was evicted at commit time$"#
-)]
+#[then(regex = r#"^the index entry for "([^"]+)" was evicted at commit time$"#)]
 async fn then_index_entry_evicted(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let _ = path;
     // Structural pass — fs-index internals not yet observable via E2E harness.
 }
@@ -984,12 +1006,10 @@ async fn then_index_entry_evicted(world: &mut SubstrateWorld, path: String) {
 #[allow(dead_code)]
 fn create_fixture_file(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .expect("create fixture parent directory");
+        std::fs::create_dir_all(parent).expect("create fixture parent directory");
     }
     if !path.exists() {
-        std::fs::write(path, b"// fixture\n")
-            .expect("write fixture file");
+        std::fs::write(path, b"// fixture\n").expect("write fixture file");
     }
 }
 

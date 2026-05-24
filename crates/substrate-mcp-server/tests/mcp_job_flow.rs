@@ -126,8 +126,7 @@ fn recv(reader: &mut BufReader<std::process::ChildStdout>) -> serde_json::Value 
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).expect("read stdout line");
-        let frame: serde_json::Value =
-            serde_json::from_str(line.trim()).expect("parse JSON-RPC");
+        let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("parse JSON-RPC");
         // Skip server-pushed notifications (no "id" field).
         // These include notifications/progress, notifications/cancelled, etc.
         if frame.get("id").is_none() {

@@ -370,11 +370,7 @@ mod tests {
             .collect();
         let tmp_files: Vec<_> = entries
             .iter()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .contains(".tmp.")
-            })
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .collect();
         assert!(
             tmp_files.is_empty(),

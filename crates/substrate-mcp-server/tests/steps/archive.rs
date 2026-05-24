@@ -22,7 +22,6 @@ use cucumber::{given, then, when};
 
 use crate::SubstrateWorld;
 
-
 // ---------------------------------------------------------------------------
 // Bucket-C job polling helper
 // ---------------------------------------------------------------------------
@@ -58,10 +57,7 @@ fn poll_archive_job_to_completion(world: &mut SubstrateWorld) {
         if std::time::Instant::now() >= deadline {
             break;
         }
-        world.call_tool_and_store(
-            "job_status",
-            serde_json::json!({ "job_id": job_id }),
-        );
+        world.call_tool_and_store("job_status", serde_json::json!({ "job_id": job_id }));
         let resp = world.last_response.as_ref().expect("no response");
         let state = resp["result"]["structuredContent"]["state"]
             .as_str()
@@ -70,12 +66,12 @@ fn poll_archive_job_to_completion(world: &mut SubstrateWorld) {
             if state == "failed" {
                 // Call job_result to get the error detail, then synthesize an
                 // error-shaped response compatible with then_tool_returns_error_code.
-                world.call_tool_and_store(
-                    "job_result",
-                    serde_json::json!({ "job_id": job_id }),
-                );
-                let result_resp =
-                    world.last_response.as_ref().expect("no job_result response").clone();
+                world.call_tool_and_store("job_result", serde_json::json!({ "job_id": job_id }));
+                let result_resp = world
+                    .last_response
+                    .as_ref()
+                    .expect("no job_result response")
+                    .clone();
                 let error_msg = result_resp["result"]["structuredContent"]["error"]
                     .as_str()
                     .unwrap_or("");
@@ -148,7 +144,10 @@ fn substrate_error_code_from_message(msg: &str) -> &'static str {
         || msg.contains("SUBSTRATE_SYMLINK_ESCAPE")
     {
         "SUBSTRATE_PATH_TRAVERSAL_BLOCKED"
-    } else if msg.contains("Dry run required") || msg.contains("Explicit user confirmation is required") || msg.contains("SUBSTRATE_CONFIRMATION_REQUIRED") {
+    } else if msg.contains("Dry run required")
+        || msg.contains("Explicit user confirmation is required")
+        || msg.contains("SUBSTRATE_CONFIRMATION_REQUIRED")
+    {
         // The spec uses SUBSTRATE_DRY_RUN_REQUIRED for "write without prior dry-run review".
         // The server emits SUBSTRATE_CONFIRMATION_REQUIRED for the same semantic — both mean
         // "the caller must complete the elicitation flow before a live write is allowed".
@@ -174,24 +173,29 @@ fn substrate_error_code_from_message(msg: &str) -> &'static str {
 /// that Then steps asserting `recovery_hint` length [1, 150] pass correctly.
 fn recovery_hint_for_code(code: &str) -> &'static str {
     match code {
-        "SUBSTRATE_PATH_TRAVERSAL_BLOCKED" =>
-            "Ensure all archive member paths resolve strictly inside the extraction root.",
-        "SUBSTRATE_SYMLINK_ESCAPE" =>
-            "Resolve the symlink target and verify it stays within an allowed root.",
-        "SUBSTRATE_DRY_RUN_REQUIRED" =>
-            "Set dry_run=false and confirmed=true after reviewing the dry-run manifest.",
-        "SUBSTRATE_NOT_FOUND" =>
-            "Verify the path or resource identifier exists before calling.",
-        "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" =>
-            "Use a path within an allowlist root configured in substrate.toml.",
-        "SUBSTRATE_INVALID_ARGUMENT" =>
-            "Consult the tool input_schema and correct the offending argument.",
-        "SUBSTRATE_CONFIRMATION_REQUIRED" =>
-            "Set confirmed=true to authorise this destructive operation.",
-        "SUBSTRATE_RESOURCE_LIMIT" =>
-            "Reduce input size or set allow_large=true if the limit is intentional.",
-        _ =>
-            "Consult the tool documentation and retry with corrected parameters.",
+        "SUBSTRATE_PATH_TRAVERSAL_BLOCKED" => {
+            "Ensure all archive member paths resolve strictly inside the extraction root."
+        },
+        "SUBSTRATE_SYMLINK_ESCAPE" => {
+            "Resolve the symlink target and verify it stays within an allowed root."
+        },
+        "SUBSTRATE_DRY_RUN_REQUIRED" => {
+            "Set dry_run=false and confirmed=true after reviewing the dry-run manifest."
+        },
+        "SUBSTRATE_NOT_FOUND" => "Verify the path or resource identifier exists before calling.",
+        "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" => {
+            "Use a path within an allowlist root configured in substrate.toml."
+        },
+        "SUBSTRATE_INVALID_ARGUMENT" => {
+            "Consult the tool input_schema and correct the offending argument."
+        },
+        "SUBSTRATE_CONFIRMATION_REQUIRED" => {
+            "Set confirmed=true to authorise this destructive operation."
+        },
+        "SUBSTRATE_RESOURCE_LIMIT" => {
+            "Reduce input size or set allow_large=true if the limit is intentional."
+        },
+        _ => "Consult the tool documentation and retry with corrected parameters.",
     }
 }
 
@@ -199,9 +203,7 @@ fn recovery_hint_for_code(code: &str) -> &'static str {
 // Given steps
 // ---------------------------------------------------------------------------
 
-#[given(
-    regex = r#"^the directory "([^"]+)" contains (\d+) Rust source files$"#
-)]
+#[given(regex = r#"^the directory "([^"]+)" contains (\d+) Rust source files$"#)]
 async fn given_dir_rust_files(world: &mut SubstrateWorld, path: String, count: u32) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -222,9 +224,10 @@ async fn given_dir_rust_files(world: &mut SubstrateWorld, path: String, count: u
         std::fs::write(&f, format!("// extra {extra}\n"))
             .expect("write extra archive fixture file");
     }
-    world
-        .context
-        .insert("fixture_src_dir".to_string(), src_dir.to_string_lossy().into_owned());
+    world.context.insert(
+        "fixture_src_dir".to_string(),
+        src_dir.to_string_lossy().into_owned(),
+    );
     world.context.insert("fixture_dir".to_string(), path);
     world
         .context
@@ -264,7 +267,9 @@ async fn given_zip_symlink_escape_first(
     }
     let bytes = make_symlink_zip(&link_name, &target);
     std::fs::write(&full_archive, &bytes).expect("write symlink zip fixture");
-    world.context.insert("archive_path".to_string(), full_archive);
+    world
+        .context
+        .insert("archive_path".to_string(), full_archive);
     world.context.insert("symlink_name".to_string(), link_name);
     world.context.insert("symlink_target".to_string(), target);
 }
@@ -272,11 +277,7 @@ async fn given_zip_symlink_escape_first(
 #[given(
     regex = r#"^a zip archive at "([^"]+)" whose member is a symlink entry pointing to "([^"]+)"$"#
 )]
-async fn given_zip_abs_symlink(
-    world: &mut SubstrateWorld,
-    archive: String,
-    target: String,
-) {
+async fn given_zip_abs_symlink(world: &mut SubstrateWorld, archive: String, target: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -292,7 +293,9 @@ async fn given_zip_abs_symlink(
     // Use "link" as the default link name for the absolute-path symlink scenario.
     let bytes = make_symlink_zip("link", &target);
     std::fs::write(&full_archive, &bytes).expect("write abs symlink zip fixture");
-    world.context.insert("archive_path".to_string(), full_archive);
+    world
+        .context
+        .insert("archive_path".to_string(), full_archive);
     world.context.insert("symlink_target".to_string(), target);
 }
 
@@ -320,14 +323,14 @@ async fn given_zip_safe_symlink(
     if let Some(parent) = std::path::Path::new(&full_archive).parent() {
         std::fs::create_dir_all(parent).expect("create archive parent dir for safe symlink");
     }
-    world.context.insert("archive_path".to_string(), full_archive);
+    world
+        .context
+        .insert("archive_path".to_string(), full_archive);
     world.context.insert("symlink_name".to_string(), link_name);
     world.context.insert("symlink_target".to_string(), target);
 }
 
-#[given(
-    regex = r#"^that archive also contains the regular file "([^"]+)"$"#
-)]
+#[given(regex = r#"^that archive also contains the regular file "([^"]+)"$"#)]
 async fn given_archive_also_contains(world: &mut SubstrateWorld, file: String) {
     // Build a two-entry ZIP: symlink entry first, then the regular file.
     // Context must have archive_path + symlink_name + symlink_target from the
@@ -348,7 +351,8 @@ async fn given_archive_also_contains(world: &mut SubstrateWorld, file: String) {
         .cloned()
         .expect("symlink_target missing from context");
 
-    let bytes = make_two_entry_zip_sym_then_file(&link_name, &link_target, &file, b"target content");
+    let bytes =
+        make_two_entry_zip_sym_then_file(&link_name, &link_target, &file, b"target content");
     std::fs::write(&full_archive, &bytes).expect("write safe symlink zip fixture");
     world.context.insert("additional_file".to_string(), file);
 }
@@ -356,11 +360,7 @@ async fn given_archive_also_contains(world: &mut SubstrateWorld, file: String) {
 #[given(
     regex = r#"^a zip archive at "([^"]+)" containing a benign regular file "([^"]+)" as the first member and a symlink escape entry as the second member$"#
 )]
-async fn given_zip_mixed(
-    world: &mut SubstrateWorld,
-    archive: String,
-    first_file: String,
-) {
+async fn given_zip_mixed(world: &mut SubstrateWorld, archive: String, first_file: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -375,11 +375,15 @@ async fn given_zip_mixed(
     }
     // Build: first entry = regular file "good.txt", second = symlink escape.
     let bytes = make_two_entry_zip_file_then_sym(
-        &first_file, b"benign content",
-        "escape_link", "../../outside",
+        &first_file,
+        b"benign content",
+        "escape_link",
+        "../../outside",
     );
     std::fs::write(&full_archive, &bytes).expect("write mixed zip fixture");
-    world.context.insert("archive_path".to_string(), full_archive);
+    world
+        .context
+        .insert("archive_path".to_string(), full_archive);
     world.context.insert("first_file".to_string(), first_file);
 }
 
@@ -409,13 +413,17 @@ async fn given_zip_symlink_loop(
     // Build a ZIP with two symlink entries pointing at each other.
     let bytes = make_two_entry_zip_sym_then_sym(&link_a, &target_a, &link_b, &target_b);
     std::fs::write(&full_archive, &bytes).expect("write symlink loop zip fixture");
-    world.context.insert("archive_path".to_string(), full_archive);
     world
         .context
-        .insert("symlink_loop_a".to_string(), format!("{link_a}->{target_a}"));
-    world
-        .context
-        .insert("symlink_loop_b".to_string(), format!("{link_b}->{target_b}"));
+        .insert("archive_path".to_string(), full_archive);
+    world.context.insert(
+        "symlink_loop_a".to_string(),
+        format!("{link_a}->{target_a}"),
+    );
+    world.context.insert(
+        "symlink_loop_b".to_string(),
+        format!("{link_b}->{target_b}"),
+    );
 }
 
 #[given(
@@ -424,7 +432,6 @@ async fn given_zip_symlink_loop(
 async fn given_dir_takes_long(world: &mut SubstrateWorld, path: String, secs: u32) {
     world.context.insert("heavy_fixture_dir".to_string(), path);
 }
-
 
 // ---------------------------------------------------------------------------
 // Given steps for zip-slip blocking scenarios
@@ -481,8 +488,10 @@ fn make_two_entry_zip_sym_then_file(
     let file_opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o100_644);
-    zw.start_file(file_name, file_opts).expect("start regular file");
-    zw.write_all(file_content).expect("write regular file content");
+    zw.start_file(file_name, file_opts)
+        .expect("start regular file");
+    zw.write_all(file_content)
+        .expect("write regular file content");
     zw.finish().expect("finish zip").into_inner()
 }
 
@@ -501,8 +510,10 @@ fn make_two_entry_zip_file_then_sym(
     let file_opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o100_644);
-    zw.start_file(file_name, file_opts).expect("start regular file");
-    zw.write_all(file_content).expect("write regular file content");
+    zw.start_file(file_name, file_opts)
+        .expect("start regular file");
+    zw.write_all(file_content)
+        .expect("write regular file content");
     let sym_opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o120_777);
@@ -530,10 +541,7 @@ fn make_two_entry_zip_sym_then_sym(
     zw.finish().expect("finish zip").into_inner()
 }
 
-
-#[given(
-    regex = r#"^a zip archive containing a member with path "([^"]+)"$"#
-)]
+#[given(regex = r#"^a zip archive containing a member with path "([^"]+)"$"#)]
 async fn given_zip_member_path(world: &mut SubstrateWorld, member_path: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -543,7 +551,10 @@ async fn given_zip_member_path(world: &mut SubstrateWorld, member_path: String) 
         .as_ref()
         .expect("allowlist_root not set")
         .clone();
-    let archive_name = if member_path.contains("../") || member_path.starts_with("..") || member_path.starts_with('/') {
+    let archive_name = if member_path.contains("../")
+        || member_path.starts_with("..")
+        || member_path.starts_with('/')
+    {
         "evil.zip"
     } else {
         "nested_slip.zip"
@@ -552,14 +563,18 @@ async fn given_zip_member_path(world: &mut SubstrateWorld, member_path: String) 
     let bytes = make_minimal_zip(&member_path, b"evil content");
     std::fs::write(&archive_path, &bytes).expect("write zip fixture");
     let archive_path_str = archive_path.to_string_lossy().into_owned();
-    world.context.insert("zip_archive_path".to_string(), archive_path_str.clone());
-    world.context.insert("archive_path".to_string(), archive_path_str);
-    world.context.insert("zip_member_path".to_string(), member_path);
+    world
+        .context
+        .insert("zip_archive_path".to_string(), archive_path_str.clone());
+    world
+        .context
+        .insert("archive_path".to_string(), archive_path_str);
+    world
+        .context
+        .insert("zip_member_path".to_string(), member_path);
 }
 
-#[given(
-    regex = r#"^a zip archive where all member paths resolve inside "([^"]+)"$"#
-)]
+#[given(regex = r#"^a zip archive where all member paths resolve inside "([^"]+)"$"#)]
 async fn given_zip_safe_archive(world: &mut SubstrateWorld, extract_dst: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -573,8 +588,12 @@ async fn given_zip_safe_archive(world: &mut SubstrateWorld, extract_dst: String)
     let bytes = make_minimal_zip("safe_file.txt", b"safe content");
     std::fs::write(&archive_path, &bytes).expect("write safe zip fixture");
     let archive_path_str = archive_path.to_string_lossy().into_owned();
-    world.context.insert("zip_archive_path".to_string(), archive_path_str.clone());
-    world.context.insert("archive_path".to_string(), archive_path_str);
+    world
+        .context
+        .insert("zip_archive_path".to_string(), archive_path_str.clone());
+    world
+        .context
+        .insert("archive_path".to_string(), archive_path_str);
 }
 
 // ---------------------------------------------------------------------------
@@ -651,11 +670,7 @@ async fn when_archive_tar_create_confirmed(
 #[when(
     regex = r#"^the client calls archive\.zip_extract with archive="([^"]+)" and dst="([^"]+)"$"#
 )]
-async fn when_archive_zip_extract(
-    world: &mut SubstrateWorld,
-    archive: String,
-    dst: String,
-) {
+async fn when_archive_zip_extract(world: &mut SubstrateWorld, archive: String, dst: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -684,9 +699,7 @@ async fn when_archive_zip_extract(
 // Then steps
 // ---------------------------------------------------------------------------
 
-#[then(
-    regex = r#"^the tool returns a dry-run plan listing the (\d+) files to be archived$"#
-)]
+#[then(regex = r#"^the tool returns a dry-run plan listing the (\d+) files to be archived$"#)]
 async fn then_dry_run_plan_files(world: &mut SubstrateWorld, count: u32) {
     let resp = world.last_response.as_ref().expect("no response");
 
@@ -698,7 +711,8 @@ async fn then_dry_run_plan_files(world: &mut SubstrateWorld, count: u32) {
             && let Some(entry_count) = sc.get("entry_count").and_then(|v| v.as_u64())
         {
             assert_eq!(
-                u32::try_from(entry_count).unwrap_or(u32::MAX), count,
+                u32::try_from(entry_count).unwrap_or(u32::MAX),
+                count,
                 "dry-run plan entry_count mismatch: expected {count}, got {entry_count}"
             );
             // entry_count absent: production shape not yet finalised — pass.
@@ -790,9 +804,7 @@ async fn then_path_not_created_or_modified(world: &mut SubstrateWorld, path: Str
     world.context.insert("guarded_path".to_string(), path);
 }
 
-#[then(
-    regex = r#"^the tool returns a success result$"#
-)]
+#[then(regex = r#"^the tool returns a success result$"#)]
 async fn then_tool_success(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
@@ -801,14 +813,8 @@ async fn then_tool_success(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the symlink "([^"]+)" exists on disk pointing to "([^"]+)"$"#
-)]
-async fn then_symlink_exists(
-    world: &mut SubstrateWorld,
-    symlink_path: String,
-    target: String,
-) {
+#[then(regex = r#"^the symlink "([^"]+)" exists on disk pointing to "([^"]+)"$"#)]
+async fn then_symlink_exists(world: &mut SubstrateWorld, symlink_path: String, target: String) {
     let root = world.root_str();
     let full_symlink = symlink_path.replace("/work/repo", &root);
     let sym = std::path::Path::new(&full_symlink);
@@ -820,9 +826,7 @@ async fn then_symlink_exists(
     );
 }
 
-#[then(
-    regex = r#"^no symlinks are created on disk in "([^"]+)"$"#
-)]
+#[then(regex = r#"^no symlinks are created on disk in "([^"]+)"$"#)]
 async fn then_no_symlinks_in_dir(world: &mut SubstrateWorld, dir: String) {
     let root = world.root_str();
     let full_dir = dir.replace("/work/repo", &root);
@@ -871,8 +875,7 @@ async fn given_tar_with_symlink_member(
 
     // Build a TAR with one regular file member and one symlink member.
     {
-        let fh = std::fs::File::create(&full_archive)
-            .expect("create tar fixture file");
+        let fh = std::fs::File::create(&full_archive).expect("create tar fixture file");
         let mut builder = tar::Builder::new(fh);
 
         // Regular file member.
@@ -898,14 +901,18 @@ async fn given_tar_with_symlink_member(
         builder.finish().expect("finish tar fixture");
     }
 
-    world.context.insert("tar_fixture_archive".to_string(), full_archive);
-    world.context.insert("tar_fixture_link_name".to_string(), link_name);
-    world.context.insert("tar_fixture_link_target".to_string(), link_target);
+    world
+        .context
+        .insert("tar_fixture_archive".to_string(), full_archive);
+    world
+        .context
+        .insert("tar_fixture_link_name".to_string(), link_name);
+    world
+        .context
+        .insert("tar_fixture_link_target".to_string(), link_target);
 }
 
-#[then(
-    regex = r#"^the symlink "([^"]+)" exists on disk under the extraction destination$"#
-)]
+#[then(regex = r#"^the symlink "([^"]+)" exists on disk under the extraction destination$"#)]
 async fn then_symlink_exists_under_dest(world: &mut SubstrateWorld, link_name: String) {
     let dest = world
         .context

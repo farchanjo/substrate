@@ -90,7 +90,6 @@ pub struct SubstrateWorld {
     // -----------------------------------------------------------------------
     // Cancellation tracking (feature: cancellation-on-cancel-request)
     // -----------------------------------------------------------------------
-
     /// JSON-RPC id of the most recently dispatched in-flight request, held so
     /// that a subsequent `$/cancelRequest` notification can reference it.
     pub pending_request_id: Option<u64>,
@@ -98,7 +97,6 @@ pub struct SubstrateWorld {
     // -----------------------------------------------------------------------
     // Interleaved notification buffer (feature: progress-notification-emitted)
     // -----------------------------------------------------------------------
-
     /// All `notifications/progress` frames received since the last reset.
     /// Populated by `drain_until_response` before storing `last_response`.
     pub progress_notifications: Vec<serde_json::Value>,
@@ -110,7 +108,6 @@ pub struct SubstrateWorld {
     // -----------------------------------------------------------------------
     // Stderr capture (feature: audit-log-write-failure, protocol-version-rejection)
     // -----------------------------------------------------------------------
-
     /// All lines received from the server's stderr since spawn.
     ///
     /// A background thread reads the subprocess stderr pipe line-by-line and
@@ -121,7 +118,6 @@ pub struct SubstrateWorld {
     // -----------------------------------------------------------------------
     // Scenario-level skip flag (feature: jail-degraded-refused-startup-aborts)
     // -----------------------------------------------------------------------
-
     /// When `true`, all subsequent steps in this scenario should return early
     /// without asserting.  Set by Background steps whose precondition cannot
     /// be satisfied on the current host (e.g., kernel supports `openat2`/
@@ -131,7 +127,6 @@ pub struct SubstrateWorld {
     // -----------------------------------------------------------------------
     // Spawned test processes (fixture: proc.signal real-process termination)
     // -----------------------------------------------------------------------
-
     /// Child processes spawned by `spawn_test_process` for signal-fixture
     /// scenarios.  All entries are killed and waited on in `Drop` /
     /// `cleanup_test_processes`.
@@ -227,15 +222,13 @@ impl SubstrateWorld {
     /// Bucket C size check.
     pub fn create_large_fixture_tree(parent: &Path) -> PathBuf {
         let data_dir = parent.join("large_data");
-        std::fs::create_dir_all(&data_dir)
-            .expect("create large_data directory");
+        std::fs::create_dir_all(&data_dir).expect("create large_data directory");
         let file = data_dir.join("payload.bin");
         // 11 MiB of zero bytes, written in 64 KiB chunks to avoid stack overflow.
         let chunk = vec![0u8; 65_536];
         let target_bytes: usize = 11 * 1024 * 1024;
         let mut written = 0usize;
-        let mut f = std::fs::File::create(&file)
-            .expect("create payload.bin");
+        let mut f = std::fs::File::create(&file).expect("create payload.bin");
         while written < target_bytes {
             use std::io::Write as _;
             let to_write = (target_bytes - written).min(chunk.len());
@@ -332,9 +325,9 @@ impl SubstrateWorld {
     pub fn recv_rpc(&mut self) -> serde_json::Value {
         match self.recv_rpc_timeout(Duration::from_secs(20)) {
             Ok(Some(v)) => v,
-            Ok(None) => panic!(
-                "recv_rpc: subprocess closed stdout (EOF) — server exited unexpectedly"
-            ),
+            Ok(None) => {
+                panic!("recv_rpc: subprocess closed stdout (EOF) — server exited unexpectedly")
+            },
             Err(()) => panic!(
                 "recv_rpc: timed out waiting for a JSON-RPC line from substrate (20s deadline)"
             ),
@@ -386,7 +379,7 @@ impl SubstrateWorld {
                     // Successfully received a line.
                     Ok(serde_json::from_str(line.trim()).ok())
                 }
-            }
+            },
             Err(_timeout) => {
                 // The helper thread is still blocked on read_line; we cannot
                 // recover the reader without unsafe tricks.  Kill the child so
@@ -394,7 +387,7 @@ impl SubstrateWorld {
                 // stdout_reader stays None — the connection is dead.
                 self.kill_child();
                 Err(())
-            }
+            },
         }
     }
 
@@ -450,7 +443,7 @@ impl SubstrateWorld {
                             "message": "test-harness: server closed stdout (EOF) before response arrived"
                         }
                     });
-                }
+                },
                 Err(()) => {
                     // recv_rpc_timeout timed out and already killed the child.
                     return serde_json::json!({
@@ -461,7 +454,7 @@ impl SubstrateWorld {
                             "message": "test-harness: no JSON-RPC frame received within per-line deadline (15s)"
                         }
                     });
-                }
+                },
             };
             let frame_id = frame.get("id").and_then(|v| v.as_u64());
             match frame_id {
@@ -469,11 +462,11 @@ impl SubstrateWorld {
                 None => {
                     // Notification (no `id` field) — buffer it.
                     self.progress_notifications.push(frame);
-                }
+                },
                 Some(_other_id) => {
                     // Response for a different request (should not happen in
                     // single-flight tests, but drop gracefully).
-                }
+                },
             }
         }
     }
@@ -531,11 +524,11 @@ impl SubstrateWorld {
             match self.recv_rpc_timeout(per_read) {
                 Ok(Some(_frame)) => {
                     // Another frame arrived; server is still open, keep draining.
-                }
+                },
                 Ok(None) | Err(()) => {
                     // EOF or per-read timeout — treat as "connection closed".
                     return true;
-                }
+                },
             }
         }
     }
@@ -601,8 +594,7 @@ impl SubstrateWorld {
         marker: &str,
     ) -> Vec<(std::path::PathBuf, usize)> {
         let texts_dir = root_path.join("texts");
-        std::fs::create_dir_all(&texts_dir)
-            .expect("create texts fixture directory");
+        std::fs::create_dir_all(&texts_dir).expect("create texts fixture directory");
 
         let mut result = Vec::with_capacity(file_count);
         for idx in 0..file_count {
@@ -618,8 +610,7 @@ impl SubstrateWorld {
                     let _ = writeln!(content, "line {line_idx} of file {idx}");
                 }
             }
-            std::fs::write(&file_path, &content)
-                .expect("write text search fixture file");
+            std::fs::write(&file_path, &content).expect("write text search fixture file");
             result.push((file_path, match_count));
         }
         result
@@ -642,12 +633,10 @@ impl SubstrateWorld {
         while remaining > 0 {
             let in_this_batch = remaining.min(BATCH_SIZE);
             let dir = root_path.join(format!("batch_{batch_idx}"));
-            std::fs::create_dir_all(&dir)
-                .expect("create fs_find batch directory");
+            std::fs::create_dir_all(&dir).expect("create fs_find batch directory");
             for i in 0..in_this_batch {
                 let file = dir.join(format!("entry_{i:04}.txt"));
-                std::fs::write(&file, b"fixture\n")
-                    .expect("write fs_find fixture file");
+                std::fs::write(&file, b"fixture\n").expect("write fs_find fixture file");
                 paths.push(file);
             }
             remaining -= in_this_batch;
@@ -675,8 +664,7 @@ impl SubstrateWorld {
     /// directory path — ready as the `src` argument for `archive_tar_create`.
     pub fn create_archive_fixture_10_files(root_path: &std::path::Path) -> std::path::PathBuf {
         let src_dir = root_path.join("src");
-        std::fs::create_dir_all(&src_dir)
-            .expect("create archive fixture src directory");
+        std::fs::create_dir_all(&src_dir).expect("create archive fixture src directory");
         for i in 0..10usize {
             let file = src_dir.join(format!("module_{i:02}.rs"));
             std::fs::write(&file, format!("// module {i}\npub fn f{i}() {{}}\n"))
@@ -742,7 +730,10 @@ impl Drop for SubstrateWorld {
 // ---------------------------------------------------------------------------
 
 /// Wraps a `Child` for the global watchdog timeout (8 seconds per scenario).
-#[expect(dead_code, reason = "Watchdog is kept for future scenario timeout enforcement")]
+#[expect(
+    dead_code,
+    reason = "Watchdog is kept for future scenario timeout enforcement"
+)]
 pub struct Watchdog(Arc<Mutex<Option<std::process::Child>>>);
 
 impl Watchdog {

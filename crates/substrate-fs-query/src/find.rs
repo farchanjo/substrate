@@ -198,8 +198,8 @@ pub async fn handle_fs_find(
             Err(SubstrateError::SymlinkEscape { .. }) => {
                 // Attempt to canonicalize the requested root.  If it resolves
                 // and is confirmed outside the allowlist, emit PathOutsideAllowlist.
-                let canonical = std::fs::canonicalize(&raw_root)
-                    .unwrap_or_else(|_| raw_root.clone());
+                let canonical =
+                    std::fs::canonicalize(&raw_root).unwrap_or_else(|_| raw_root.clone());
                 // The server's PathJail already canonicalized its roots at startup,
                 // so if jail returned SymlinkEscape for the root path itself,
                 // the canonical form is outside all configured roots.

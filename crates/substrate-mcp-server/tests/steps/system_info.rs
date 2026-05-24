@@ -52,9 +52,7 @@ async fn when_sys_info(world: &mut SubstrateWorld) {
 // Then steps
 // ---------------------------------------------------------------------------
 
-#[then(
-    regex = r#"^the structured content contains a hostname field of non-empty string type$"#
-)]
+#[then(regex = r#"^the structured content contains a hostname field of non-empty string type$"#)]
 async fn then_hostname_nonempty(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     let hostname = resp["result"]["structuredContent"]["hostname"].as_str();
@@ -64,9 +62,7 @@ async fn then_hostname_nonempty(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the structured content contains a kernel field of non-empty string type$"#
-)]
+#[then(regex = r#"^the structured content contains a kernel field of non-empty string type$"#)]
 async fn then_kernel_nonempty(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     // `kernel` may be a nested object { machine, release, sysname } or a plain
@@ -124,9 +120,7 @@ async fn then_mem_fields(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the content text representation is at most 80 tokens$"#
-)]
+#[then(regex = r#"^the content text representation is at most 80 tokens$"#)]
 async fn then_content_text_under_80_tokens(world: &mut SubstrateWorld) {
     // Approximate tokenisation: split on whitespace.
     let resp = world.last_response.as_ref().expect("no response");
@@ -139,9 +133,7 @@ async fn then_content_text_under_80_tokens(world: &mut SubstrateWorld) {
     }
 }
 
-#[then(
-    regex = r#"^the uptime_seconds value is greater than or equal to (\d+)$"#
-)]
+#[then(regex = r#"^the uptime_seconds value is greater than or equal to (\d+)$"#)]
 async fn then_uptime_gte(world: &mut SubstrateWorld, min: u64) {
     let resp = world.last_response.as_ref().expect("no response");
     // sys.info embeds host uptime as structuredContent.uptime_seconds.
@@ -149,13 +141,14 @@ async fn then_uptime_gte(world: &mut SubstrateWorld, min: u64) {
     let uptime = resp["result"]["structuredContent"]["uptime_seconds"]
         .as_u64()
         .or_else(|| resp["result"]["structuredContent"]["sys_uptime"]["uptime_seconds"].as_u64())
-        .or_else(|| resp["result"]["content"][0]["text"]
-            .as_str()
-            .and_then(|t| {
+        .or_else(|| {
+            resp["result"]["content"][0]["text"].as_str().and_then(|t| {
                 // Fallback: parse uptime from embedded JSON text if tool wraps it.
-                serde_json::from_str::<serde_json::Value>(t).ok()
+                serde_json::from_str::<serde_json::Value>(t)
+                    .ok()
                     .and_then(|v| v["uptime_seconds"].as_u64())
-            }))
+            })
+        })
         .unwrap_or(0);
     // Assertion relaxed: the Gherkin intent is ">= 60s" but on a freshly-booted
     // CI runner or sandboxed environment the host uptime may legitimately be < 60.
@@ -196,10 +189,7 @@ async fn then_la_15m_nonneg(world: &mut SubstrateWorld) {
     let v = resp["result"]["structuredContent"]["load_average"]["15m"]
         .as_f64()
         .unwrap_or(-1.0);
-    assert!(
-        v >= 0.0,
-        "load_average.15m should be non-negative, got {v}"
-    );
+    assert!(v >= 0.0, "load_average.15m should be non-negative, got {v}");
 }
 
 #[then(

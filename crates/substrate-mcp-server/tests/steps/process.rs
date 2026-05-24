@@ -50,9 +50,7 @@ async fn given_pid_in_allowlist(world: &mut SubstrateWorld, pid: u32) {
         .insert("allowed_pid".to_string(), pid.to_string());
 }
 
-#[given(
-    regex = r#"^PID (\d+) does not refer to any running process on the system$"#
-)]
+#[given(regex = r#"^PID (\d+) does not refer to any running process on the system$"#)]
 async fn given_pid_not_running(world: &mut SubstrateWorld, pid: u32) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -102,9 +100,7 @@ async fn given_proc_first_cursor(world: &mut SubstrateWorld, cursor: String) {
         .insert("prior_proc_cursor".to_string(), cursor);
 }
 
-#[given(
-    regex = r#"^the substrate process signal allowlist excludes PID 1 and kernel threads$"#
-)]
+#[given(regex = r#"^the substrate process signal allowlist excludes PID 1 and kernel threads$"#)]
 async fn given_signal_allowlist_excludes_kernel(world: &mut SubstrateWorld) {
     // The allowlist is defined statically in the server policy.  This step is a
     // precondition acknowledgement — no test-harness action is required.  The
@@ -131,10 +127,7 @@ async fn when_proc_list_cursor(world: &mut SubstrateWorld, cursor: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
-    world.call_tool_and_store(
-        "proc_list",
-        serde_json::json!({ "cursor": cursor }),
-    );
+    world.call_tool_and_store("proc_list", serde_json::json!({ "cursor": cursor }));
 }
 
 #[when(regex = r#"^the client calls proc\.list with page_size=(\d+)$"#)]
@@ -142,21 +135,13 @@ async fn when_proc_list_page_size(world: &mut SubstrateWorld, page_size: u32) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
-    world.call_tool_and_store(
-        "proc_list",
-        serde_json::json!({ "page_size": page_size }),
-    );
+    world.call_tool_and_store("proc_list", serde_json::json!({ "page_size": page_size }));
 }
 
 #[when(
     regex = r#"^the client calls proc\.signal with pid=(\d+) and signal="?([A-Z]+)"? and elicitation_confirmed=(true|false)$"#
 )]
-async fn when_proc_signal(
-    world: &mut SubstrateWorld,
-    pid: u32,
-    signal: String,
-    confirmed: bool,
-) {
+async fn when_proc_signal(world: &mut SubstrateWorld, pid: u32, signal: String, confirmed: bool) {
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -202,16 +187,16 @@ async fn then_proc_count(world: &mut SubstrateWorld, expected: usize) {
     let _ = expected; // suppress unused-variable lint
 }
 
-#[then(
-    regex = r#"^each entry contains fields: pid, name, cpu_percent, mem_percent, parent_pid$"#
-)]
+#[then(regex = r#"^each entry contains fields: pid, name, cpu_percent, mem_percent, parent_pid$"#)]
 async fn then_proc_entry_fields(world: &mut SubstrateWorld) {
     if world.skip_scenario {
         return;
     }
     // Validate that every entry in the proc.list response carries the expected
     // fields.  If last_response is absent (scenario was skipped), return early.
-    let Some(resp) = world.last_response.as_ref() else { return };
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             assert!(entry["pid"].is_number(), "pid field missing: {entry}");
@@ -222,8 +207,12 @@ async fn then_proc_entry_fields(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^every entry has a non-null pid field of integer type$"#)]
 async fn then_proc_pid_nonnull(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             assert!(entry["pid"].is_number(), "expected non-null pid: {entry}");
@@ -233,8 +222,12 @@ async fn then_proc_pid_nonnull(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^every entry has a non-empty name field of string type$"#)]
 async fn then_proc_name_nonempty(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             let name = entry["name"].as_str().unwrap_or("");
@@ -243,43 +236,55 @@ async fn then_proc_name_nonempty(world: &mut SubstrateWorld) {
     }
 }
 
-#[then(
-    regex = r#"^every entry has a cpu_percent field of float type between 0 and 100$"#
-)]
+#[then(regex = r#"^every entry has a cpu_percent field of float type between 0 and 100$"#)]
 async fn then_proc_cpu_range(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             if let Some(cpu) = entry["cpu_percent"].as_f64() {
-                assert!((0.0..=100.0).contains(&cpu), "cpu_percent out of range: {cpu}");
+                assert!(
+                    (0.0..=100.0).contains(&cpu),
+                    "cpu_percent out of range: {cpu}"
+                );
             }
         }
     }
 }
 
-#[then(
-    regex = r#"^every entry has a mem_percent field of float type between 0 and 100$"#
-)]
+#[then(regex = r#"^every entry has a mem_percent field of float type between 0 and 100$"#)]
 async fn then_proc_mem_range(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             if let Some(mem) = entry["mem_percent"].as_f64() {
-                assert!((0.0..=100.0).contains(&mem), "mem_percent out of range: {mem}");
+                assert!(
+                    (0.0..=100.0).contains(&mem),
+                    "mem_percent out of range: {mem}"
+                );
             }
         }
     }
 }
 
-#[then(
-    regex = r#"^every entry has a parent_pid field which is null for root processes$"#
-)]
+#[then(regex = r#"^every entry has a parent_pid field which is null for root processes$"#)]
 async fn then_proc_parent_pid(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // parent_pid may be null for root processes — presence as null IS acceptable.
-    let Some(resp) = world.last_response.as_ref() else { return };
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if let Some(entries) = resp["result"]["structuredContent"]["processes"].as_array() {
         for entry in entries {
             // The field is serialised as `ppid` (not `parent_pid`).
@@ -292,9 +297,7 @@ async fn then_proc_parent_pid(world: &mut SubstrateWorld) {
     }
 }
 
-#[then(
-    regex = r#"^the returned PIDs do not overlap with the first page PIDs$"#
-)]
+#[then(regex = r#"^the returned PIDs do not overlap with the first page PIDs$"#)]
 async fn then_proc_no_pid_overlap(world: &mut SubstrateWorld) {
     // TODO(live-OS): multi-page PID deduplication requires retaining page-1
     // PIDs across the scenario.  Mark as skip — live-OS-dependent fixture.
@@ -353,7 +356,9 @@ async fn then_proc_not_running(world: &mut SubstrateWorld, pid: u32) {
                     "proc-signal SIGKILL for pid {real_pid}: process still alive and error is not acceptable: {resp}"
                 );
                 // Clean up the background process ourselves.
-                unsafe { libc::kill(real_pid.cast_signed(), libc::SIGKILL); }
+                unsafe {
+                    libc::kill(real_pid.cast_signed(), libc::SIGKILL);
+                }
             }
             // ESRCH (no such process) → process gone as expected.
         }
@@ -375,9 +380,7 @@ async fn then_proc_not_running(world: &mut SubstrateWorld, pid: u32) {
     }
 }
 
-#[then(
-    regex = r#"^the tool returns a success result with the signal sent and target pid$"#
-)]
+#[then(regex = r#"^the tool returns a success result with the signal sent and target pid$"#)]
 async fn then_signal_success(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
@@ -415,9 +418,7 @@ async fn then_no_confirmation_required(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the recovery_hint mentions "process does not exist" or "no such process"$"#
-)]
+#[then(regex = r#"^the recovery_hint mentions "process does not exist" or "no such process"$"#)]
 async fn then_hint_mentions_no_process(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     // Tool errors surface in result.structuredContent, not error.data.
@@ -438,9 +439,7 @@ async fn then_hint_mentions_no_process(world: &mut SubstrateWorld) {
 // is handled by the generic then_error_code_not step in filesystem_mutation.rs which
 // uses a ([^"]+) capture.  Defining a duplicate specific step here would be ambiguous.
 
-#[then(
-    regex = r#"^the error object details include field "pid" equal to (\d+)$"#
-)]
+#[then(regex = r#"^the error object details include field "pid" equal to (\d+)$"#)]
 async fn then_error_details_pid(world: &mut SubstrateWorld, pid: u32) {
     let resp = world.last_response.as_ref().expect("no response");
     // The error schema embeds the PID in the message string rather than a
@@ -457,9 +456,7 @@ async fn then_error_details_pid(world: &mut SubstrateWorld, pid: u32) {
     );
 }
 
-#[then(
-    regex = r#"^the response does not contain a SUBSTRATE_NOT_FOUND error$"#
-)]
+#[then(regex = r#"^the response does not contain a SUBSTRATE_NOT_FOUND error$"#)]
 async fn then_no_not_found_error(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     // Tool errors surface in result.structuredContent, not error.data.
@@ -505,4 +502,3 @@ async fn then_pid_still_running(world: &mut SubstrateWorld, pid: u32) {
         "signal must not have been delivered to protected PID {pid}: {resp}"
     );
 }
-

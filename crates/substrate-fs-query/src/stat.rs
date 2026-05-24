@@ -187,8 +187,10 @@ fn symlink_chain_disposition(
         // NotFound / IoError mean the path is absent but the prefix is within
         // the allowlist — fall through.  All other errors (PathOutsideAllowlist,
         // SymlinkEscape, …) mean the hop crosses a security boundary.
-        let absent_ok =
-            matches!(e, SubstrateError::NotFound { .. } | SubstrateError::IoError { .. });
+        let absent_ok = matches!(
+            e,
+            SubstrateError::NotFound { .. } | SubstrateError::IoError { .. }
+        );
         if !absent_ok {
             return SymlinkDisposition::Escape;
         }

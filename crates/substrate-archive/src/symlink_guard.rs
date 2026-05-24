@@ -115,10 +115,10 @@ fn normalise_path(path: &Path) -> std::path::PathBuf {
     let mut out = std::path::PathBuf::new();
     for component in path.components() {
         match component {
-            Component::CurDir => {}
+            Component::CurDir => {},
             Component::ParentDir => {
                 out.pop();
-            }
+            },
             other => out.push(other),
         }
     }
@@ -197,4 +197,3 @@ mod tests {
         assert_eq!(normalise_path(&p), std::path::PathBuf::from("/foo/baz"));
     }
 }
-

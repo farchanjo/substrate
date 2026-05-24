@@ -96,8 +96,8 @@ fn boot_time_unix() -> u64 {
 /// Returns an error string on any parse or I/O failure so the caller can log
 /// it and fall back gracefully.
 fn read_boot_time_unix() -> Result<u64, String> {
-    let content = std::fs::read_to_string("/proc/uptime")
-        .map_err(|e| format!("read /proc/uptime: {e}"))?;
+    let content =
+        std::fs::read_to_string("/proc/uptime").map_err(|e| format!("read /proc/uptime: {e}"))?;
     let uptime_secs_str = content
         .split_whitespace()
         .next()
@@ -418,7 +418,7 @@ impl ProcessScannerPort for LinuxProcessScanner {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{CLK_TCK, BOOT_TIME_UNIX, boot_time_unix, clk_tck, starttime_to_unix};
+    use super::{BOOT_TIME_UNIX, CLK_TCK, boot_time_unix, clk_tck, starttime_to_unix};
     use crate::scanner::ProcessScannerPort;
     use crate::scanner::linux::LinuxProcessScanner;
 
@@ -428,9 +428,15 @@ mod tests {
     fn boot_time_cached_once() {
         let first = boot_time_unix();
         let second = boot_time_unix();
-        assert_eq!(first, second, "boot_time_unix must return a stable cached value");
+        assert_eq!(
+            first, second,
+            "boot_time_unix must return a stable cached value"
+        );
         // Must also be non-zero on a real Linux host with a readable /proc/uptime.
-        assert!(first > 0, "boot_time_unix must be non-zero on a live Linux host");
+        assert!(
+            first > 0,
+            "boot_time_unix must be non-zero on a live Linux host"
+        );
     }
 
     /// `clk_tck()` must return a positive value (the kernel always reports >= 1).
@@ -483,7 +489,10 @@ mod tests {
             .start_time_unix
             .unwrap_or_else(|| panic!("start_time_unix must be Some for PID {our_pid}"));
 
-        assert!(start_time > 0, "start_time_unix must be positive; got {start_time}");
+        assert!(
+            start_time > 0,
+            "start_time_unix must be positive; got {start_time}"
+        );
 
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)

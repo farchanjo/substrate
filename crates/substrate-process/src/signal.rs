@@ -184,7 +184,10 @@ pub async fn handle_proc_signal(
                 correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             },
             Errno::ESRCH => SubstrateError::NotFound {
-                resource: format!("process PID {} does not exist (exited before signal)", req.pid),
+                resource: format!(
+                    "process PID {} does not exist (exited before signal)",
+                    req.pid
+                ),
                 correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
             },
             other => SubstrateError::InternalError {

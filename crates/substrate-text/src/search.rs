@@ -272,17 +272,21 @@ fn scan_dir(
 
     for path in &file_paths {
         if cancel.is_cancelled() {
-            return Err(SubstrateError::Cancelled { correlation_id: None });
+            return Err(SubstrateError::Cancelled {
+                correlation_id: None,
+            });
         }
         match scan_file(path, regex, cancel.child_token()) {
             Ok((file_matches, skipped)) => {
                 all_matches.extend(file_matches);
                 total_skipped += skipped;
-            }
+            },
             // Silently skip files that cannot be read (permissions, transient I/O).
-            Err(SubstrateError::NotFound { .. }
+            Err(
+                SubstrateError::NotFound { .. }
                 | SubstrateError::PermissionDenied { .. }
-                | SubstrateError::IoError { .. }) => {}
+                | SubstrateError::IoError { .. },
+            ) => {},
             Err(e) => return Err(e),
         }
     }
@@ -292,7 +296,9 @@ fn scan_dir(
 
 /// Populate `out` with all regular file paths reachable under `dir` (recursive).
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = rd.flatten().collect();
     // Sort for determinism.
     entries.sort_by_key(std::fs::DirEntry::path);
@@ -426,11 +432,17 @@ mod tests {
         let total = result.structured_content["total_match_count"]
             .as_u64()
             .expect("total_match_count");
-        assert_eq!(total, 0, "pattern that matches nothing must return zero results");
+        assert_eq!(
+            total, 0,
+            "pattern that matches nothing must return zero results"
+        );
         let matches = result.structured_content["matches"]
             .as_array()
             .expect("matches array");
-        assert!(matches.is_empty(), "matches array must be empty for no-match");
+        assert!(
+            matches.is_empty(),
+            "matches array must be empty for no-match"
+        );
     }
 
     #[tokio::test]

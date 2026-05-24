@@ -254,22 +254,21 @@ impl substrate_domain::PathJailPort for Openat2Jail {
         // produces a double-prefix phantom path when allowlist_root is a prefix
         // of raw_path (e.g. root=/data, path=/data/sub/f → /data/data/sub/f).
         let proc_link = format!("/proc/self/fd/{}", fd as libc::c_int);
-        let canonical = std::fs::read_link(&proc_link)
-            .unwrap_or_else(|err| {
-                // readlink failed (unusual but not impossible — e.g. procfs not
-                // mounted or fd type doesn't support it).  Fall back to the
-                // lexical form and emit a warning so the anomaly is auditable.
-                tracing::warn!(
-                    fd = fd as libc::c_int,
-                    path = %raw_path.display(),
-                    error = %err,
-                    "openat2 jail: /proc/self/fd readlink failed; \
-                     falling back to lexical canonical path"
-                );
-                allowlist_root
-                    .as_path()
-                    .join(raw_path.strip_prefix("/").unwrap_or(raw_path))
-            });
+        let canonical = std::fs::read_link(&proc_link).unwrap_or_else(|err| {
+            // readlink failed (unusual but not impossible — e.g. procfs not
+            // mounted or fd type doesn't support it).  Fall back to the
+            // lexical form and emit a warning so the anomaly is auditable.
+            tracing::warn!(
+                fd = fd as libc::c_int,
+                path = %raw_path.display(),
+                error = %err,
+                "openat2 jail: /proc/self/fd readlink failed; \
+                 falling back to lexical canonical path"
+            );
+            allowlist_root
+                .as_path()
+                .join(raw_path.strip_prefix("/").unwrap_or(raw_path))
+        });
 
         // Close the validation fd after we have resolved the canonical path.
         // SAFETY: `fd` is a valid file descriptor returned by the syscall above.

@@ -32,17 +32,11 @@ async fn given_dir_not_exist(world: &mut SubstrateWorld, path: String) {
 
 #[given(regex = r#"^a dry run for "([^"]+)" has been reviewed$"#)]
 async fn given_dry_run_reviewed(world: &mut SubstrateWorld, path: String) {
-    world
-        .context
-        .insert("dry_run_reviewed".to_string(), path);
+    world.context.insert("dry_run_reviewed".to_string(), path);
 }
 
 #[given(regex = r#"^the directory "([^"]+)" contains (\d+) files$"#)]
-async fn given_dir_contains_n_files_simple(
-    world: &mut SubstrateWorld,
-    path: String,
-    count: u32,
-) {
+async fn given_dir_contains_n_files_simple(world: &mut SubstrateWorld, path: String, count: u32) {
     world.context.insert("fixture_dir".to_string(), path);
     world
         .context
@@ -71,11 +65,11 @@ async fn given_fs_has_space(world: &mut SubstrateWorld, mib: u32) {
 // When steps
 // ---------------------------------------------------------------------------
 
-#[when(
-    regex = r#"^the client calls fs\.mkdir with path="([^"]+)" and dry_run=(true|false)$"#
-)]
+#[when(regex = r#"^the client calls fs\.mkdir with path="([^"]+)" and dry_run=(true|false)$"#)]
 async fn when_fs_mkdir_dry(world: &mut SubstrateWorld, path: String, dry_run: bool) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -96,7 +90,9 @@ async fn when_fs_mkdir_confirmed(
     dry_run: bool,
     confirmed: bool,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -122,7 +118,9 @@ async fn when_fs_mkdir_parents(
     dry_run: bool,
     confirmed: bool,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -143,7 +141,9 @@ async fn when_fs_mkdir_parents(
     regex = r#"^the client calls fs\.remove with path="([^"]+)" and elicitation_confirmed=(true|false)$"#
 )]
 async fn when_fs_remove(world: &mut SubstrateWorld, path: String, confirmed: bool) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -159,8 +159,7 @@ async fn when_fs_remove(world: &mut SubstrateWorld, path: String, confirmed: boo
         .get("target_file")
         .cloned()
         .map(|p| p.replace("/work/repo", &root));
-    let path_is_declared_present =
-        context_target.as_deref() == Some(full_path.as_str());
+    let path_is_declared_present = context_target.as_deref() == Some(full_path.as_str());
     if path_is_declared_present && !std::path::Path::new(&full_path).exists() {
         if let Some(parent) = std::path::Path::new(&full_path).parent() {
             std::fs::create_dir_all(parent).ok();
@@ -188,7 +187,9 @@ async fn when_fs_remove_recursive(
     recursive: bool,
     confirmed: bool,
 ) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -200,7 +201,8 @@ async fn when_fs_remove_recursive(
         std::fs::write(
             std::path::Path::new(&full_path).join("fixture.txt"),
             b"// fixture\n",
-        ).ok();
+        )
+        .ok();
     }
     world.call_tool_and_store(
         "fs_remove",
@@ -215,11 +217,11 @@ async fn when_fs_remove_recursive(
     );
 }
 
-#[when(
-    regex = r#"^the client calls fs\.write with path="([^"]+)" and content of size (\d+) MiB$"#
-)]
+#[when(regex = r#"^the client calls fs\.write with path="([^"]+)" and content of size (\d+) MiB$"#)]
 async fn when_fs_write_mib(world: &mut SubstrateWorld, path: String, size_mib: u32) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -238,11 +240,11 @@ async fn when_fs_write_mib(world: &mut SubstrateWorld, path: String, size_mib: u
     );
 }
 
-#[when(
-    regex = r#"^the client calls fs\.write with path="([^"]+)" and content of size (\d+) KiB$"#
-)]
+#[when(regex = r#"^the client calls fs\.write with path="([^"]+)" and content of size (\d+) KiB$"#)]
 async fn when_fs_write_kib(world: &mut SubstrateWorld, path: String, size_kib: u32) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -266,7 +268,9 @@ async fn when_fs_write_kib(world: &mut SubstrateWorld, path: String, size_kib: u
 
 #[then(regex = r#"^the tool returns a dry-run plan describing the directory to be created$"#)]
 async fn then_dry_run_plan_dir(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     // A dry-run plan should appear in either the result text or structuredContent.
     // Accept any non-error response as structurally valid while the plan format
@@ -282,7 +286,9 @@ async fn then_dry_run_plan_dir(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the directory "([^"]+)" does not exist on disk$"#)]
 async fn then_dir_not_on_disk(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
     assert!(
@@ -293,7 +299,9 @@ async fn then_dir_not_on_disk(world: &mut SubstrateWorld, path: String) {
 
 #[then(regex = r#"^no error is returned$"#)]
 async fn then_no_error(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     if let Some(resp) = &world.last_response {
         assert!(
             !resp["error"].is_object(),
@@ -305,7 +313,9 @@ async fn then_no_error(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the directory "([^"]+)" exists on disk$"#)]
 async fn then_dir_exists_on_disk(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
     assert!(
@@ -316,7 +326,9 @@ async fn then_dir_exists_on_disk(world: &mut SubstrateWorld, path: String) {
 
 #[then(regex = r#"^the tool returns a success result with the created path$"#)]
 async fn then_success_created_path(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"].is_object() && !resp["error"].is_object(),
@@ -326,7 +338,9 @@ async fn then_success_created_path(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the file "([^"]+)" still exists on disk$"#)]
 async fn then_file_still_on_disk(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
     assert!(
@@ -337,7 +351,9 @@ async fn then_file_still_on_disk(world: &mut SubstrateWorld, path: String) {
 
 #[then(regex = r#"^the file "([^"]+)" does not exist on disk$"#)]
 async fn then_file_not_on_disk(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
     assert!(
@@ -348,7 +364,9 @@ async fn then_file_not_on_disk(world: &mut SubstrateWorld, path: String) {
 
 #[then(regex = r#"^the tool returns a success result confirming deletion$"#)]
 async fn then_success_deletion(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"].is_object() && !resp["error"].is_object(),
@@ -356,16 +374,11 @@ async fn then_success_deletion(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the directories "([^"]+)", "([^"]+)", and "([^"]+)" exist on disk$"#
-)]
-async fn then_three_dirs_exist(
-    world: &mut SubstrateWorld,
-    p1: String,
-    p2: String,
-    p3: String,
-) {
-    if world.skip_scenario { return; }
+#[then(regex = r#"^the directories "([^"]+)", "([^"]+)", and "([^"]+)" exist on disk$"#)]
+async fn then_three_dirs_exist(world: &mut SubstrateWorld, p1: String, p2: String, p3: String) {
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     for p in &[&p1, &p2, &p3] {
         let full = p.replace("/work/repo", &root);
@@ -378,7 +391,9 @@ async fn then_three_dirs_exist(
 
 #[then(regex = r#"^the directory "([^"]+)" still exists on disk$"#)]
 async fn then_dir_still_on_disk(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
     assert!(
@@ -389,7 +404,9 @@ async fn then_dir_still_on_disk(world: &mut SubstrateWorld, path: String) {
 
 #[then(regex = r#"^no file named "([^"]+)" exists under "([^"]+)"$"#)]
 async fn then_no_file_under(world: &mut SubstrateWorld, filename: String, dir: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_dir = dir.replace("/work/repo", &root);
     let full_path = std::path::Path::new(&full_dir).join(&filename);
@@ -401,7 +418,9 @@ async fn then_no_file_under(world: &mut SubstrateWorld, filename: String, dir: S
 
 #[then(regex = r#"^no "\.tmp" file created during the write attempt remains under "([^"]+)"$"#)]
 async fn then_no_tmp_file(world: &mut SubstrateWorld, dir: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_dir = dir.replace("/work/repo", &root);
     if let Ok(rd) = std::fs::read_dir(&full_dir) {
@@ -419,11 +438,15 @@ async fn then_no_tmp_file(world: &mut SubstrateWorld, dir: String) {
     regex = r#"^the error object details include field "observed_bytes" with a positive integer value$"#
 )]
 async fn then_observed_bytes_positive(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     // PRODUCTION GAP: requires a near-full filesystem fixture (< 1 MiB free).
     // Cannot be set up from a sandboxed test without root access.  Accept
     // the absence of the field gracefully to avoid false CI failures.
-    let Some(resp) = world.last_response.as_ref() else { return };
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     let v = resp["error"]["data"]["details"]["observed_bytes"].as_u64();
     if let Some(bytes) = v {
         assert!(bytes > 0, "observed_bytes must be positive but got 0");
@@ -435,31 +458,42 @@ async fn then_observed_bytes_positive(world: &mut SubstrateWorld) {
     regex = r#"^the error object details include field "limit_bytes" with a positive integer value$"#
 )]
 async fn then_limit_bytes_positive(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     let v = resp["error"]["data"]["details"]["limit_bytes"].as_u64();
     if let Some(bytes) = v {
         assert!(bytes > 0, "limit_bytes must be positive but got 0");
     }
 }
 
-#[then(
-    regex = r#"^the value of "observed_bytes" is greater than the value of "limit_bytes"$"#
-)]
+#[then(regex = r#"^the value of "observed_bytes" is greater than the value of "limit_bytes"$"#)]
 async fn then_observed_gt_limit(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
-    let Some(resp) = world.last_response.as_ref() else { return };
+    if world.skip_scenario {
+        return;
+    }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     let observed = resp["error"]["data"]["details"]["observed_bytes"].as_u64();
     let limit = resp["error"]["data"]["details"]["limit_bytes"].as_u64();
     if let (Some(obs), Some(lim)) = (observed, limit) {
-        assert!(obs > lim, "expected observed_bytes ({obs}) > limit_bytes ({lim})");
+        assert!(
+            obs > lim,
+            "expected observed_bytes ({obs}) > limit_bytes ({lim})"
+        );
     }
     // Fields absent: PRODUCTION GAP — pass unconditionally.
 }
 
 #[then(regex = r#"^the response does not contain an error object$"#)]
 async fn then_response_no_error(world: &mut SubstrateWorld) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         !resp["error"].is_object(),
@@ -470,7 +504,9 @@ async fn then_response_no_error(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the file "([^"]+)" exists on disk with the expected content$"#)]
 async fn then_file_exists_with_content(world: &mut SubstrateWorld, path: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let root = world.root_str();
     let full_path = path.replace("/work/repo", &root);
     assert!(
@@ -479,11 +515,11 @@ async fn then_file_exists_with_content(world: &mut SubstrateWorld, path: String)
     );
 }
 
-#[then(
-    regex = r#"^the error object does not have field "code" equal to "([^"]+)"$"#
-)]
+#[then(regex = r#"^the error object does not have field "code" equal to "([^"]+)"$"#)]
 async fn then_error_code_not(world: &mut SubstrateWorld, not_code: String) {
-    if world.skip_scenario { return; }
+    if world.skip_scenario {
+        return;
+    }
     let resp = world.last_response.as_ref().expect("no response");
     let code = resp["error"]["data"]["code"].as_str().unwrap_or("");
     assert_ne!(

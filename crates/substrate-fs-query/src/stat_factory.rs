@@ -31,8 +31,7 @@ use substrate_domain::{
 /// Out-of-range timestamps fall back to the Unix epoch rather than panicking.
 #[inline]
 fn secs_to_datetime(secs: i64) -> time::OffsetDateTime {
-    time::OffsetDateTime::from_unix_timestamp(secs)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+    time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
 }
 
 // ---- Portable statter -------------------------------------------------------
@@ -160,18 +159,22 @@ fn linux_stat_impl(path: &JailedPath) -> SubstrateResult<FileStat> {
     use std::mem::MaybeUninit;
 
     // Build the NUL-terminated path for the C ABI.
-    let c_path = CString::new(path.as_path().as_os_str().as_encoded_bytes())
-        .map_err(|_| SubstrateError::EncodingError {
+    let c_path = CString::new(path.as_path().as_os_str().as_encoded_bytes()).map_err(|_| {
+        SubstrateError::EncodingError {
             detail: "path contains an interior NUL byte".to_owned(),
             correlation_id: None,
-        })?;
+        }
+    })?;
 
     let mut sx = MaybeUninit::<libc::statx>::uninit();
 
     // Attribute mask: request the fields we map into `FileStat`. Using
     // `STATX_BASIC_STATS` is equivalent but this documents intent.
-    let mask: u32 = libc::STATX_TYPE | libc::STATX_MODE | libc::STATX_SIZE
-        | libc::STATX_MTIME | libc::STATX_ATIME;
+    let mask: u32 = libc::STATX_TYPE
+        | libc::STATX_MODE
+        | libc::STATX_SIZE
+        | libc::STATX_MTIME
+        | libc::STATX_ATIME;
 
     // SAFETY:
     // - `libc::AT_FDCWD` (-100) is the correct sentinel for "relative to cwd".
@@ -325,11 +328,12 @@ fn macos_stat_impl(path: &JailedPath) -> SubstrateResult<FileStat> {
     // A future optimisation can add ATTR_FILE_DATALENGTH in fileattr.
 
     // Build the NUL-terminated path for the C call.
-    let c_path = CString::new(path.as_path().as_os_str().as_encoded_bytes())
-        .map_err(|_| SubstrateError::EncodingError {
+    let c_path = CString::new(path.as_path().as_os_str().as_encoded_bytes()).map_err(|_| {
+        SubstrateError::EncodingError {
             detail: "path contains an interior NUL byte".to_owned(),
             correlation_id: None,
-        })?;
+        }
+    })?;
 
     // The attrlist descriptor (mirrors `struct attrlist` in <sys/attr.h>).
     // libc defines this struct for macOS — same layout, no home-grown repr needed.
@@ -429,8 +433,7 @@ fn macos_stat_impl(path: &JailedPath) -> SubstrateResult<FileStat> {
     // For size we use `std::fs::symlink_metadata` — ATTR_FILE_DATALENGTH would
     // require adding a `fileattr` field to the request. This is a one-extra-
     // syscall cost that a future Wave can eliminate by expanding the attrlist.
-    let size_bytes = std::fs::symlink_metadata(path.as_path())
-        .map_or(0, |m| m.len());
+    let size_bytes = std::fs::symlink_metadata(path.as_path()).map_or(0, |m| m.len());
 
     Ok(FileStat {
         size_bytes,
@@ -627,8 +630,14 @@ mod tests {
         let statter = PortableStatter::new();
         let path = symlink_jailed();
         let result = statter.stat(&path)?;
-        assert!(result.is_symlink, "/tmp (macOS) must be reported as a symlink");
-        assert!(!result.is_dir, "/tmp (macOS) must not be reported as a directory");
+        assert!(
+            result.is_symlink,
+            "/tmp (macOS) must be reported as a symlink"
+        );
+        assert!(
+            !result.is_dir,
+            "/tmp (macOS) must not be reported as a directory"
+        );
         Ok(())
     }
 
@@ -656,7 +665,10 @@ mod tests {
         let result = statter.stat(&path)?;
         assert!(result.is_dir, "getattrlist: /usr must be a directory");
         assert!(!result.is_file, "getattrlist: /usr must not be a file");
-        assert!(!result.is_symlink, "getattrlist: /usr must not be a symlink");
+        assert!(
+            !result.is_symlink,
+            "getattrlist: /usr must not be a symlink"
+        );
         Ok(())
     }
 
@@ -667,8 +679,14 @@ mod tests {
         let statter = MacosStatter::new();
         let path = symlink_jailed();
         let result = statter.stat(&path)?;
-        assert!(result.is_symlink, "getattrlist: /tmp (macOS) must be a symlink");
-        assert!(!result.is_dir, "getattrlist: /tmp (macOS) must not be a dir");
+        assert!(
+            result.is_symlink,
+            "getattrlist: /tmp (macOS) must be a symlink"
+        );
+        assert!(
+            !result.is_dir,
+            "getattrlist: /tmp (macOS) must not be a dir"
+        );
         Ok(())
     }
 

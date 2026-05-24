@@ -105,9 +105,7 @@ async fn given_text_prior_consumed(world: &mut SubstrateWorld, count: u32, curso
         .insert("prior_consumed".to_string(), count.to_string());
 }
 
-#[given(
-    regex = r#"^the file "([^"]+)" contains "([^"]+)" on line (\d+)$"#
-)]
+#[given(regex = r#"^the file "([^"]+)" contains "([^"]+)" on line (\d+)$"#)]
 async fn given_file_contains_line(
     world: &mut SubstrateWorld,
     path: String,
@@ -132,8 +130,7 @@ async fn given_file_contains_line(
         .trim_start_matches("/work/repo");
     let real_path = root.join(relative);
     if let Some(parent) = real_path.parent() {
-        std::fs::create_dir_all(parent)
-            .expect("create parent directories for fixture file");
+        std::fs::create_dir_all(parent).expect("create parent directories for fixture file");
     }
 
     // Write `line` filler lines followed by the requested content on line
@@ -149,8 +146,7 @@ async fn given_file_contains_line(
         }
         file_content.push('\n');
     }
-    std::fs::write(&real_path, &file_content)
-        .expect("write given_file_contains_line fixture");
+    std::fs::write(&real_path, &file_content).expect("write given_file_contains_line fixture");
 
     world.context.insert("fixture_file".to_string(), path);
     world
@@ -165,9 +161,7 @@ async fn given_file_contains_line(
 // Additional given steps for text-processing features
 // ---------------------------------------------------------------------------
 
-#[given(
-    regex = r#"^the file "([^"]+)" is a binary PNG file$"#
-)]
+#[given(regex = r#"^the file "([^"]+)" is a binary PNG file$"#)]
 async fn given_file_is_binary_png(world: &mut SubstrateWorld, path: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -192,9 +186,7 @@ async fn given_file_is_binary_png(world: &mut SubstrateWorld, path: String) {
     world.context.insert("binary_file".to_string(), path);
 }
 
-#[given(
-    regex = r#"^the file "([^"]+)" is a binary ELF executable$"#
-)]
+#[given(regex = r#"^the file "([^"]+)" is a binary ELF executable$"#)]
 async fn given_file_is_binary_elf(world: &mut SubstrateWorld, path: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -218,9 +210,7 @@ async fn given_file_is_binary_elf(world: &mut SubstrateWorld, path: String) {
     world.context.insert("binary_elf_file".to_string(), path);
 }
 
-#[given(
-    regex = r#"^the file "([^"]+)" is a UTF-8 text file containing "([^"]+)"$"#
-)]
+#[given(regex = r#"^the file "([^"]+)" is a UTF-8 text file containing "([^"]+)"$"#)]
 async fn given_file_is_utf8_text(world: &mut SubstrateWorld, path: String, content: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -293,9 +283,7 @@ async fn given_file_contains_n_a_then_b(world: &mut SubstrateWorld, path: String
 // When steps
 // ---------------------------------------------------------------------------
 
-#[when(
-    regex = r#"^the client calls text\.search with root="([^"]+)" and pattern="([^"]+)"$"#
-)]
+#[when(regex = r#"^the client calls text\.search with root="([^"]+)" and pattern="([^"]+)"$"#)]
 async fn when_text_search(world: &mut SubstrateWorld, root: String, pattern: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -305,17 +293,20 @@ async fn when_text_search(world: &mut SubstrateWorld, root: String, pattern: Str
     // treat a non-canonicalised symlink path (/var/...) as a SUBSTRATE_SYMLINK_ESCAPE.
     // Preserve any sub-path after /work/repo so directory-specific searches
     // (e.g. /work/repo/bin_only) scan the correct subdirectory.
-    let root_path = world.allowlist_root.as_ref().map_or_else(|| root.clone(), |canonical| {
-        let canonical_str = canonical.to_string_lossy();
-        if root.starts_with("/work/repo/") {
-            // Preserve the sub-path: /work/repo/foo → <canonical>/foo
-            let rel = root.trim_start_matches("/work/repo/");
-            format!("{canonical_str}/{rel}")
-        } else {
-            // Top-level /work/repo → use canonical root directly.
-            canonical_str.into_owned()
-        }
-    });
+    let root_path = world.allowlist_root.as_ref().map_or_else(
+        || root.clone(),
+        |canonical| {
+            let canonical_str = canonical.to_string_lossy();
+            if root.starts_with("/work/repo/") {
+                // Preserve the sub-path: /work/repo/foo → <canonical>/foo
+                let rel = root.trim_start_matches("/work/repo/");
+                format!("{canonical_str}/{rel}")
+            } else {
+                // Top-level /work/repo → use canonical root directly.
+                canonical_str.into_owned()
+            }
+        },
+    );
     world.call_tool_and_store(
         "text_search",
         serde_json::json!({ "path": root_path, "pattern": pattern }),
@@ -378,7 +369,9 @@ async fn when_text_search_case_insensitive(
 
 #[then(regex = r#"^the structured content has exactly (\d+) match entries$"#)]
 async fn then_match_entries_count(world: &mut SubstrateWorld, expected: usize) {
-    let Some(resp) = world.last_response.as_ref() else { return };
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     if resp["error"].is_object() {
         // Server returned an error (e.g. the fixture tree was absent or the
         // tool is not yet fully implemented).  Accept gracefully so that
@@ -398,54 +391,57 @@ async fn then_match_entries_count(world: &mut SubstrateWorld, expected: usize) {
     // Empty matches array: production gap — pass without panic.
 }
 
-#[then(
-    regex = r#"^each entry contains fields: file_path, line_number, line_text$"#
-)]
+#[then(regex = r#"^each entry contains fields: file_path, line_number, line_text$"#)]
 async fn then_match_entry_fields(world: &mut SubstrateWorld) {
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
     if let Some(matches) = resp["result"]["structuredContent"]["matches"].as_array() {
         for entry in matches {
             assert!(entry["file_path"].is_string(), "file_path missing: {entry}");
-            assert!(entry["line_number"].is_number(), "line_number missing: {entry}");
+            assert!(
+                entry["line_number"].is_number(),
+                "line_number missing: {entry}"
+            );
             assert!(entry["line_text"].is_string(), "line_text missing: {entry}");
         }
     }
 }
 
-#[then(
-    regex = r#"^the \(file_path, line_number\) pairs do not overlap with the first page$"#
-)]
+#[then(regex = r#"^the \(file_path, line_number\) pairs do not overlap with the first page$"#)]
 async fn then_text_no_overlap_first(world: &mut SubstrateWorld) {
     // TODO(production): retain page-1 (file_path, line_number) pairs in world.context
     // across the scenario and assert no overlap here.  Fixture not yet wired.
     // Structural pass — production gap documented.
 }
 
-#[then(
-    regex = r#"^at least one match entry has file_path="([^"]+)" and line_number=(\d+)$"#
-)]
-async fn then_match_at_path_line(
-    world: &mut SubstrateWorld,
-    file_path: String,
-    line_number: u32,
-) {
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+#[then(regex = r#"^at least one match entry has file_path="([^"]+)" and line_number=(\d+)$"#)]
+async fn then_match_at_path_line(world: &mut SubstrateWorld, file_path: String, line_number: u32) {
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
     // File path is replaced at the sandbox root level; accept any non-error response.
     let _ = (file_path, line_number); // fixture not yet built
 }
 
-#[then(
-    regex = r#"^a match entry with file_path="([^"]+)" and line_number=(\d+) is returned$"#
-)]
+#[then(regex = r#"^a match entry with file_path="([^"]+)" and line_number=(\d+) is returned$"#)]
 async fn then_match_entry_specific(
     world: &mut SubstrateWorld,
     file_path: String,
     line_number: u32,
 ) {
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
     let _ = (file_path, line_number); // fixture not yet built
 }
 
@@ -453,12 +449,14 @@ async fn then_match_entry_specific(
 // Then steps for binary-file-skipped and catastrophic-regex features
 // ---------------------------------------------------------------------------
 
-#[then(
-    regex = r#"^the match entries do not include file_path="([^"]+)"$"#
-)]
+#[then(regex = r#"^the match entries do not include file_path="([^"]+)"$"#)]
 async fn then_no_match_for_path(world: &mut SubstrateWorld, path: String) {
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
     if let Some(matches) = resp["result"]["structuredContent"]["matches"].as_array() {
         for entry in matches {
             let fp = entry["file_path"].as_str().unwrap_or("");
@@ -475,8 +473,12 @@ async fn then_no_match_for_path(world: &mut SubstrateWorld, path: String) {
     regex = r#"^the structured content metadata includes a skipped_binary_count field with value >= (\d+)$"#
 )]
 async fn then_skipped_binary_count_gte(world: &mut SubstrateWorld, min: u64) {
-    let Some(resp) = world.last_response.as_ref() else { return };
-    if resp["error"].is_object() { return; }
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
+    if resp["error"].is_object() {
+        return;
+    }
     let count = resp["result"]["structuredContent"]["skipped_binary_count"]
         .as_u64()
         .unwrap_or(0);
@@ -494,13 +496,13 @@ async fn then_skipped_binary_count_gte(world: &mut SubstrateWorld, min: u64) {
 )]
 async fn then_skipped_binary_count_equals_dir(world: &mut SubstrateWorld, dir: String) {
     // Production gap — accept structurally.
-    let Some(resp) = world.last_response.as_ref() else { return };
+    let Some(resp) = world.last_response.as_ref() else {
+        return;
+    };
     let _ = resp; // avoid unused warning
 }
 
-#[then(
-    regex = r#"^the server returns a response within (\d+) seconds$"#
-)]
+#[then(regex = r#"^the server returns a response within (\d+) seconds$"#)]
 async fn then_response_within_seconds(world: &mut SubstrateWorld, secs: u64) {
     // The harness reads synchronously; if we reach this step the response
     // was received within the test timeout.  Assert structural validity only.
@@ -511,9 +513,7 @@ async fn then_response_within_seconds(world: &mut SubstrateWorld, secs: u64) {
     );
 }
 
-#[then(
-    regex = r#"^the response is either a SUBSTRATE_TIMEOUT error or a normal result$"#
-)]
+#[then(regex = r#"^the response is either a SUBSTRATE_TIMEOUT error or a normal result$"#)]
 async fn then_timeout_or_normal(world: &mut SubstrateWorld) {
     let resp = world.last_response.as_ref().expect("no response");
     let is_result = resp["result"].is_object();
@@ -524,9 +524,7 @@ async fn then_timeout_or_normal(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^no resource exhaustion is observed during the (\d+)-second window$"#
-)]
+#[then(regex = r#"^no resource exhaustion is observed during the (\d+)-second window$"#)]
 async fn then_no_resource_exhaustion(world: &mut SubstrateWorld, window: u64) {
     // Black-box: if the server is still responding we infer no exhaustion.
     // Structural pass — no external resource monitor available.
@@ -550,20 +548,19 @@ async fn when_text_search_subsequent(world: &mut SubstrateWorld, root: String, p
     );
 }
 
-#[then(
-    regex = r#"^the server returns a response for the second call within (\d+) seconds$"#
-)]
+#[then(regex = r#"^the server returns a response for the second call within (\d+) seconds$"#)]
 async fn then_second_call_response_within(world: &mut SubstrateWorld, secs: u64) {
-    let resp = world.last_response.as_ref().expect("no response for second call");
+    let resp = world
+        .last_response
+        .as_ref()
+        .expect("no response for second call");
     assert!(
         resp["result"].is_object() || resp["error"].is_object(),
         "expected a response for the second call within {secs}s but got nothing"
     );
 }
 
-#[then(
-    regex = r#"^the response does not contain an error object with code "([^"]+)"$"#
-)]
+#[then(regex = r#"^the response does not contain an error object with code "([^"]+)"$"#)]
 async fn then_no_error_with_code(world: &mut SubstrateWorld, code: String) {
     let resp = world.last_response.as_ref().expect("no response");
     let actual = resp["error"]["data"]["code"].as_str().unwrap_or("");
@@ -573,9 +570,7 @@ async fn then_no_error_with_code(world: &mut SubstrateWorld, code: String) {
     );
 }
 
-#[then(
-    regex = r#"^the server returns a result within (\d+) seconds$"#
-)]
+#[then(regex = r#"^the server returns a result within (\d+) seconds$"#)]
 async fn then_result_within_seconds(world: &mut SubstrateWorld, secs: u64) {
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
@@ -595,9 +590,7 @@ async fn given_server_regex_timeout(world: &mut SubstrateWorld) {
     }
 }
 
-#[when(
-    regex = r#"^the response is a SUBSTRATE_TIMEOUT error$"#
-)]
+#[when(regex = r#"^the response is a SUBSTRATE_TIMEOUT error$"#)]
 async fn when_response_is_timeout(world: &mut SubstrateWorld) {
     // This is a conditional step in the scenario; it acts as an assertion
     // gate.  If the response is NOT a timeout the subsequent Then steps that
@@ -610,8 +603,8 @@ async fn when_response_is_timeout(world: &mut SubstrateWorld) {
     // we synthesise a minimal SUBSTRATE_TIMEOUT error envelope in last_response
     // so those downstream assertions have a structurally valid target.
     let resp = world.last_response.as_ref();
-    let is_timeout = resp
-        .is_some_and(|r| r["error"]["data"]["code"].as_str() == Some("SUBSTRATE_TIMEOUT"));
+    let is_timeout =
+        resp.is_some_and(|r| r["error"]["data"]["code"].as_str() == Some("SUBSTRATE_TIMEOUT"));
     world
         .context
         .insert("is_timeout".to_string(), is_timeout.to_string());
@@ -637,14 +630,9 @@ async fn when_response_is_timeout(world: &mut SubstrateWorld) {
     }
 }
 
-#[then(
-    regex = r#"^the error object includes the field "([^"]+)" with value "([^"]+)"$"#
-)]
+#[then(regex = r#"^the error object includes the field "([^"]+)" with value "([^"]+)"$"#)]
 async fn then_error_field_value(world: &mut SubstrateWorld, field: String, value: String) {
-    let is_timeout = world
-        .context
-        .get("is_timeout")
-        .is_some_and(|s| s == "true");
+    let is_timeout = world.context.get("is_timeout").is_some_and(|s| s == "true");
     if !is_timeout {
         return; // Not a timeout scenario; skip.
     }
@@ -656,9 +644,7 @@ async fn then_error_field_value(world: &mut SubstrateWorld, field: String, value
     );
 }
 
-#[given(
-    regex = r#"^the directory "([^"]+)" contains only binary files$"#
-)]
+#[given(regex = r#"^the directory "([^"]+)" contains only binary files$"#)]
 async fn given_dir_only_binary_files(world: &mut SubstrateWorld, path: String) {
     if world.child.is_none() {
         world.spawn_and_initialize();
@@ -687,9 +673,7 @@ async fn given_dir_only_binary_files(world: &mut SubstrateWorld, path: String) {
 // Then step: at least one match entry has file_path (without line_number)
 // ---------------------------------------------------------------------------
 
-#[then(
-    regex = r#"^at least one match entry has file_path="([^"]+)"$"#
-)]
+#[then(regex = r#"^at least one match entry has file_path="([^"]+)"$"#)]
 async fn then_match_has_file_path(world: &mut SubstrateWorld, expected_path: String) {
     let resp = world.last_response.as_ref().expect("no response");
     let empty = vec![];

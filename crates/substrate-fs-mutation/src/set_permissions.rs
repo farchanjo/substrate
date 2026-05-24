@@ -68,7 +68,10 @@ where
         }
 
         fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<u32, E> {
-            let stripped = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")).unwrap_or(s);
+            let stripped = s
+                .strip_prefix("0o")
+                .or_else(|| s.strip_prefix("0O"))
+                .unwrap_or(s);
             // Detect plain leading-zero octal strings like "0755".
             let (base, digits) = if stripped.len() > 1 && stripped.starts_with('0') {
                 (8u32, &stripped[1..])
@@ -298,7 +301,7 @@ mod tests {
 
         let (dir, root, deps) = make_test_env();
         let target = dir.path().join("real.txt");
-        let link   = dir.path().join("link.txt");
+        let link = dir.path().join("link.txt");
         std::fs::write(&target, b"data").expect("seed target");
         std::os::unix::fs::symlink(&target, &link).expect("create symlink");
 
@@ -316,11 +319,17 @@ mod tests {
         // Stat the TARGET (not the link) — fchmodat(FollowSymlink) follows links.
         let target_meta = std::fs::metadata(&target).expect("stat target");
         let mode = target_meta.permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "target file mode must be 0o600 after chmod via symlink");
+        assert_eq!(
+            mode, 0o600,
+            "target file mode must be 0o600 after chmod via symlink"
+        );
 
         // lstat the LINK itself — symlink mode is fixed at 0o777 on macOS/Linux.
         let link_lstat = std::fs::symlink_metadata(&link).expect("lstat link");
-        assert!(link_lstat.file_type().is_symlink(), "link must still be a symlink");
+        assert!(
+            link_lstat.file_type().is_symlink(),
+            "link must still be a symlink"
+        );
     }
 
     #[tokio::test]

@@ -176,10 +176,12 @@ fn produce_dry_run(
         if kind == EntryKind::Symlink {
             use std::io::Read as _;
             let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
-                path: format!("zip symlink content: {e}"),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })?;
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| SubstrateError::IoError {
+                    path: format!("zip symlink content: {e}"),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                })?;
             let target_str =
                 std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
                     detail: format!("zip symlink target utf8: {e}"),
@@ -250,10 +252,12 @@ fn extract_zip_blocking(
             })?;
         } else if entry.is_symlink() {
             let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
-                path: format!("zip symlink content: {e}"),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })?;
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| SubstrateError::IoError {
+                    path: format!("zip symlink content: {e}"),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                })?;
             let target_str =
                 std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
                     detail: format!("zip symlink target utf8: {e}"),
@@ -303,10 +307,12 @@ fn zip_prevalidate_members(
         };
         if kind == EntryKind::Symlink {
             let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
-                path: format!("zip symlink content: {e}"),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })?;
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| SubstrateError::IoError {
+                    path: format!("zip symlink content: {e}"),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                })?;
             let target_str =
                 std::str::from_utf8(&buf).map_err(|e| SubstrateError::EncodingError {
                     detail: format!("zip symlink target utf8: {e}"),
@@ -395,10 +401,12 @@ fn zip_write_file(
                 correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
         let mut buf = Vec::new();
-        entry.read_to_end(&mut buf).map_err(|e| SubstrateError::IoError {
-            path: format!("zip read entry: {e}"),
-            correlation_id: Some(uuid::Uuid::now_v7()),
-        })?;
+        entry
+            .read_to_end(&mut buf)
+            .map_err(|e| SubstrateError::IoError {
+                path: format!("zip read entry: {e}"),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
         out.write_all(&buf).map_err(|e| SubstrateError::IoError {
             path: format!("{}: {e}", resolved.display()),
             correlation_id: Some(uuid::Uuid::now_v7()),

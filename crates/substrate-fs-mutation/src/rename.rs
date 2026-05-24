@@ -284,8 +284,7 @@ mod tests {
         };
         let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
         assert!(
-            err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
-                || err.code() == "SUBSTRATE_NOT_FOUND",
+            err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || err.code() == "SUBSTRATE_NOT_FOUND",
             "unexpected code: {}",
             err.code()
         );
@@ -307,7 +306,9 @@ mod tests {
             confirmed: true,
             elicitation_confirmed: false,
         };
-        handle_fs_rename(req, &deps, &root).await.expect("rename with overwrite");
+        handle_fs_rename(req, &deps, &root)
+            .await
+            .expect("rename with overwrite");
         assert!(!src.exists());
         let content = std::fs::read_to_string(&dst).expect("read dst");
         assert_eq!(content, "new content");
