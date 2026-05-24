@@ -74,6 +74,15 @@ pub struct RuntimeConfig {
     /// SIMD tier opt-in configuration per ADR-0043.
     #[serde(default)]
     pub simd: Option<SimdConfig>,
+
+    /// Subprocess bounded context configuration per ADR-0052.
+    ///
+    /// Optional at the TOML layer: when the `[subprocess]` section is absent the
+    /// composition root applies `SubprocessConfig::default()`. The field is always
+    /// `Some` after loading (the `Option` wrapper is only present so that TOML
+    /// consumers can detect whether the operator explicitly set the section).
+    #[serde(default)]
+    pub subprocess: Option<SubprocessConfig>,
 }
 
 impl Default for RuntimeConfig {
@@ -90,6 +99,7 @@ impl Default for RuntimeConfig {
             index: None,
             capabilities: None,
             simd: None,
+            subprocess: None,
         }
     }
 }
@@ -468,6 +478,83 @@ pub struct SimdConfig {
     /// Set `true` only after confirming no frequency throttling on target hardware.
     #[serde(default = "default_false")]
     pub allow_avx512: bool,
+}
+
+// ---- SubprocessConfig --------------------------------------------------------
+
+/// Subprocess bounded context configuration per ADR-0052.
+///
+/// Embedded under the `[subprocess]` TOML section.
+///
+/// `tmp_root` drives the `TmpFile` capture mode defined in ADR-0033 §"Amendment 2026-05-24"
+/// and ADR-0054 §"`TmpFile` Branch". When unset the composition root falls back to the
+/// first entry of `policy.roots`. If neither resolves, startup aborts with
+/// `SUBSTRATE_CONFIG_INVALID`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SubprocessConfig {
+    /// Root directory used by `CaptureKind::TmpFile` for transit and final capture files.
+    ///
+    /// Transit files follow the naming convention:
+    ///   `<tmp_root>/.substrate-subprocess-stream-<job_id>.<stream>.tmp.<uuid7>`
+    ///
+    /// Final files (after atomic rename on `Succeeded`):
+    ///   `<tmp_root>/.substrate-subprocess-stream-<job_id>.<stream>`
+    ///
+    /// When `None`, the composition root resolves the value to `policy.roots[0]` at
+    /// startup. The consumer (composition root) is responsible for the fallback;
+    /// this type does not pre-resolve it so that config reload semantics are preserved.
+    ///
+    /// Must be within one of the `policy.roots` entries (`PathJail` invariant per ADR-0004).
+    ///
+    /// References: ADR-0033 §"Amendment 2026-05-24", ADR-0054 §"`TmpFile` Branch".
+    #[serde(default)]
+    pub tmp_root: Option<PathBuf>,
+
+    /// Maximum active subprocesses per MCP client. Default: 4 per ADR-0052.
+    #[serde(default = "default_4_u32")]
+    pub max_per_client: u32,
+
+    /// Global maximum active subprocesses. Default: 8 per ADR-0052.
+    #[serde(default = "default_8_u32")]
+    pub max_concurrent: u32,
+
+    /// Per-job stdout/stderr ring-buffer size in bytes per ADR-0054. Default: 65536 (64 KiB).
+    #[serde(default = "default_65536_usize")]
+    pub aggregate_buffer_bytes: usize,
+
+    /// Server-enforced hard cap on `aggregate_buffer_bytes` in `subprocess.spawn`.
+    ///
+    /// Default: 1 MiB.
+    #[serde(default = "default_1_mib_usize")]
+    pub aggregate_buffer_bytes_max: usize,
+
+    /// SIGTERM → SIGKILL drain window in seconds per ADR-0053. Default: 5.
+    #[serde(default = "default_5_u64")]
+    pub shutdown_drain_secs: u64,
+
+    /// Time-based flush interval for stream captures in milliseconds. Default: 100.
+    #[serde(default = "default_100_u64")]
+    pub stream_flush_interval_ms: u64,
+}
+
+const fn default_4_u32() -> u32 {
+    4
+}
+const fn default_8_u32() -> u32 {
+    8
+}
+const fn default_65536_usize() -> usize {
+    65_536
+}
+const fn default_1_mib_usize() -> usize {
+    1_024 * 1_024
+}
+const fn default_5_u64() -> u64 {
+    5
+}
+const fn default_100_u64() -> u64 {
+    100
 }
 
 // ---- Default value functions -------------------------------------------------

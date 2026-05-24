@@ -215,6 +215,42 @@ fn validate(cfg: &RuntimeConfig) -> Result<(), ConfigError> {
         }
     }
 
+    // subprocess.tmp_root, when set, must be under one of policy.roots.
+    // This is a structural check only; PathJail enforcement happens at composition.
+    // We do not pre-resolve the fallback (policy.roots[0]) here because that
+    // resolution requires canonicalization which may block in async context.
+    if let Some(ref subprocess_cfg) = cfg.subprocess
+        && let Some(ref tmp_root) = subprocess_cfg.tmp_root
+    {
+        if !tmp_root.is_absolute() {
+            return Err(ConfigError::Validation {
+                message: format!(
+                    "subprocess.tmp_root must be an absolute path, got \"{}\"",
+                    tmp_root.display()
+                ),
+            });
+        }
+        let under_any_root = cfg
+            .policy
+            .roots
+            .iter()
+            .any(|root| tmp_root.starts_with(root));
+        if !under_any_root && !cfg.policy.roots.is_empty() {
+            return Err(ConfigError::Validation {
+                message: format!(
+                    "subprocess.tmp_root \"{}\" must be under one of policy.roots: [{}]",
+                    tmp_root.display(),
+                    cfg.policy
+                        .roots
+                        .iter()
+                        .map(|r| r.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+    }
+
     Ok(())
 }
 
