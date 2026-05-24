@@ -704,6 +704,143 @@ mod tests {
         );
     }
 
+    /// Companion to `status_reflects_terminal_state_after_worker_completion`:
+    /// asserts that `list()` also surfaces the terminal state once the worker
+    /// has completed. Live probes via the MCP STDIO boundary returned
+    /// `state="pending"` in `job_list` after `job_result` had already
+    /// retrieved a successful payload — this test pins the contract at the
+    /// registry layer so any future regression here surfaces immediately.
+    #[tokio::test]
+    async fn list_reflects_terminal_state_after_worker_completion() {
+        use std::time::Duration;
+
+        let registry = make_registry();
+        let client = ClientId::parse("list-freshness-client").expect("client_id");
+        let req = make_request("list-freshness-client");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
+
+        let _ = registry
+            .result(&job_id, Some(Duration::from_secs(1)))
+            .await
+            .expect("worker must publish a terminal result");
+
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+
+        let page = registry.list(&client, None).await.expect("list must succeed");
+        let listed = page
+            .jobs
+            .into_iter()
+            .find(|e| e.id == job_id)
+            .expect("submitted job must appear in client list");
+        assert_eq!(
+            listed.state,
+            JobState::Succeeded,
+            "list() entry must reflect terminal state — not stale Pending captured at submit"
+        );
+        assert!(
+            listed.terminal_at.is_some(),
+            "terminal_at must be populated for a finished job in the list snapshot"
+        );
+    }
+
+    /// Reproducer for the post-completion snapshot freshness gap observed in
+    /// live MCP probes: after the worker publishes a terminal result on the
+    /// watch channel, `status()` must report the terminal state — not the
+    /// initial `Pending` snapshot captured at submit time.
+    ///
+    /// Per [ADR-0040](../../../docs/arch/adr/0040-async-job-control-plane.md)
+    /// `job.status` returns the live snapshot; the regression keeps the entry
+    /// stuck at `Pending` even though the result channel was set.
+    #[tokio::test]
+    async fn status_reflects_terminal_state_after_worker_completion() {
+        use std::time::Duration;
+
+        let registry = make_registry();
+        let req = make_request("snapshot-freshness-client");
+        let job_id = registry.submit(req).await.expect("submit must succeed");
+
+        let _ = registry
+            .result(&job_id, Some(Duration::from_secs(1)))
+            .await
+            .expect("worker must publish a terminal result");
+
+        // Give the worker spawn task a few ticks so the post-`send` writes
+        // (decrement, etc.) settle before we read the snapshot.
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+
+        let entry = registry
+            .status(&job_id)
+            .await
+            .expect("status must succeed");
+        assert_eq!(
+            entry.state,
+            JobState::Succeeded,
+            "JobEntry.state must reflect the worker's terminal transition (not stale Pending)"
+        );
+        assert!(
+            entry.terminal_at.is_some(),
+            "terminal_at must be populated once the worker reaches a terminal state"
+        );
+    }
+
+    /// Regression for the cancel-before-pickup state transition: cancelling a
+    /// job whose worker is blocked on a never-resolving future MUST drive the
+    /// job to terminal state `Cancelled`. Prior to the ADR-0040-aligned state
+    /// machine fix, the worker's cancel arm tried `can_transition_to(Cancelled)`
+    /// on a `Pending` state and silently no-op'd, leaving the job stuck.
+    #[tokio::test]
+    async fn cancel_drives_blocked_job_to_terminal_cancelled() {
+        use std::time::Duration;
+
+        let registry = make_registry();
+
+        // Build a request whose execute future never resolves so the worker is
+        // forced into the cancellation arm of `tokio::select!`.
+        let req = JobSubmitRequest {
+            client_id: ClientId::parse("cancel-terminal-client").expect("client_id"),
+            tool: "archive_tar_create".to_owned(),
+            bucket: JobBucket::CAlwaysAsync,
+            idempotency_key: None,
+            args_json: serde_json::json!({"src": "/tmp/test"}),
+            execute: Box::pin(std::future::pending()),
+        };
+        let job_id = registry.submit(req).await.expect("submit must succeed");
+
+        // Issue the cancel.  `cancel()` returns the state at the moment it
+        // read the entry; we then wait for the worker to actually drive the
+        // transition via the watch channel.
+        let _ = registry.cancel(&job_id).await.expect("cancel must succeed");
+
+        let result = registry
+            .result(&job_id, Some(Duration::from_secs(1)))
+            .await
+            .expect("worker must publish a terminal result after cancel");
+        assert!(
+            matches!(result, JobResult::Cancelled),
+            "result channel must carry JobResult::Cancelled"
+        );
+
+        // Allow the worker spawn task a few ticks to land the entry write
+        // before we read the status snapshot.
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+
+        let entry = registry
+            .status(&job_id)
+            .await
+            .expect("status must succeed");
+        assert_eq!(
+            entry.state,
+            JobState::Cancelled,
+            "JobEntry.state must transition to Cancelled (ADR-0040 Pending→Cancelled edge)"
+        );
+    }
+
     /// Regression for the quota-leak bug: the per-client inflight counter MUST
     /// be released once a job reaches a terminal state. Before the fix, the
     /// counter incremented on submit but never decremented, so submitting

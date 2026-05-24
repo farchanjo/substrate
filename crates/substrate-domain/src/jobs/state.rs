@@ -41,6 +41,7 @@ impl JobState {
     ///
     /// Valid edges per ADR-0040:
     /// - `Pending` → `Running`
+    /// - `Pending` → `Cancelled` (cancel received before worker pickup)
     /// - `Running` → `Succeeded | Failed | Cancelled | TimedOut`
     /// - Terminal → (nothing; all transitions return `false`)
     ///
@@ -50,7 +51,7 @@ impl JobState {
     pub const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Pending, Self::Running)
+            (Self::Pending, Self::Running | Self::Cancelled)
                 | (
                     Self::Running,
                     Self::Succeeded | Self::Failed | Self::Cancelled | Self::TimedOut
@@ -109,8 +110,18 @@ mod tests {
     }
 
     #[test]
-    fn pending_to_terminal_without_running_rejected() {
+    fn pending_succeeded_without_running_rejected() {
+        // A Pending job can only succeed via the Running state.
         assert!(!JobState::Pending.can_transition_to(JobState::Succeeded));
-        assert!(!JobState::Pending.can_transition_to(JobState::Cancelled));
+        assert!(!JobState::Pending.can_transition_to(JobState::Failed));
+        assert!(!JobState::Pending.can_transition_to(JobState::TimedOut));
+    }
+
+    #[test]
+    fn pending_to_cancelled_allowed() {
+        // ADR-0040: `cancel()` received before worker pickup transitions
+        // directly Pending -> Cancelled. The state diagram in ADR-0040 codifies
+        // this edge explicitly.
+        assert!(JobState::Pending.can_transition_to(JobState::Cancelled));
     }
 }
