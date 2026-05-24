@@ -10,7 +10,48 @@ Commit messages follow the Angular convention defined in
 
 ## [Unreleased]
 
-_No changes yet._
+### Added
+
+- subprocess bounded context (ADR-0052 supersedes ADR-0044) with tools
+  `subprocess.spawn`, `subprocess.list`, `subprocess.cancel`,
+  `subprocess.result`, and `subprocess.signal` behind Cargo feature
+  `subprocess` (default-OFF); includes CUE schema, Rego invariants,
+  12 Gherkin features, domain README, and Structurizr DSL container entry.
+- ADR-0050: system resource monitoring (`sys.mem`, `sys.cpu`).
+- ADR-0051: per-process resource stats (`proc.stats`, `proc.top`).
+- ADR-0053: process lifecycle cascade contract (`setsid` + `PR_SET_PDEATHSIG`
+  on Linux + macOS watchdog pipe for orphan prevention).
+- ADR-0054: subprocess stdout/stderr stream multiplex via
+  `notifications/progress` chunked payload (`StreamChunk` value object).
+- ADR-0055: orphan reaper on startup removes stale `.tmp.<uuid7>` files
+  older than `startup.orphan_reap_age_secs`.
+
+### Changed
+
+- ADR-0044 status superseded by ADR-0052; the no-subprocess invariant is
+  narrowed rather than removed.
+- `no_subprocess.rego` policy scope narrowed: `crates/substrate-subprocess/`
+  is whitelisted for `tokio::process::Command`; all other crates retain the
+  unconditional prohibition; the forbidden high-level crate list
+  (`subprocess`, `duct`, `xshell`, `cmd_lib`, `shell-words`) remains global.
+- tokio workspace dependency gains the `process` feature when the
+  `subprocess` Cargo feature is enabled.
+- `substrate-mcp-server` gains the optional `subprocess` Cargo feature that
+  activates the substrate-subprocess adapter registration.
+
+### Security
+
+- Layer 5 (subprocess sandbox) added to the security model (ADR-0004
+  amendment): `setsid` process group isolation, unconditional stripping of
+  `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES`/`LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`,
+  `PR_SET_PDEATHSIG(SIGTERM)` on Linux, and macOS watchdog pipe.
+- STRIDE expansion for subprocess BC (ADR-0029 amendment) covering new
+  threat identifiers: S-NEW-3 (binary allowlist bypass), T-NEW-6 (env
+  injection via LD_PRELOAD), R-NEW-1 (deny audit trail for spawned binaries),
+  I-NEW-2 (stdout/stderr capture integrity), D-NEW-3/D-NEW-4/D-NEW-5
+  (subprocess resource exhaustion, quota, and cascade-kill denial paths),
+  E-NEW-1 (privilege escalation via binary allowlist misconfiguration),
+  E-NEW-2 (container escape via unconstrained subprocess).
 
 ## [0.1.0] — 2026-05-23
 

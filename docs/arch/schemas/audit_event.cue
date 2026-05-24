@@ -38,7 +38,8 @@ package schemas
 
 	// tool_name is the fully-qualified tool identifier (namespace_name).
 	// "job" prefix added per ADR-0040 (async job BC).
-	tool_name: string & =~"^(fs|proc|sys|text|archive|job)_[a-z][a-z0-9_]*$"
+	// "subprocess" prefix added per ADR-0052 (subprocess execution BC).
+	tool_name: string & =~"^(fs|proc|sys|text|archive|job|subprocess)_[a-z][a-z0-9_]*$"
 
 	// args_summary is a redacted, human-readable rendering of the invocation arguments.
 	// Sensitive values (tokens, passwords, PII) MUST be replaced with [REDACTED]

@@ -42,6 +42,16 @@ mindmap
       PortFactory
       capability probe
       degraded jail
+    Subprocess
+      BinaryAllowlist
+      EnvAllowlist
+      SubprocessRequest
+      SubprocessHandle
+      StreamChunk
+      ProcessGroup
+      CascadeKill
+      WatchdogPipe
+      OrphanReaper
     Security
       elicitation
       audit event
@@ -129,6 +139,17 @@ bounded contexts: filesystem-query, filesystem-mutation, process, system-info,
 text-processing, archive, and job. No aggregate crosses a context boundary. See
 [ADR-0002](adr/0002-bounded-contexts.md).
 
+## BinaryAllowlist
+
+The explicit set of absolute binary paths declared in the `[security]` TOML
+section under the key `subprocess_binary_allowlist`. The substrate-subprocess
+adapter checks this set at Layer 1 before any further validation: if
+`binary_path` is absent from the list the call is rejected immediately with
+`SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED` and no child process is created. An
+empty allowlist means zero subprocess capability. See
+[ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[ADR-0004](adr/0004-security-model.md).
+
 ## Bucket A / B / C / D
 
 Static dispatch classification assigned to every MCP tool per
@@ -159,6 +180,18 @@ server-side execution. See [ADR-0009](adr/0009-observability.md),
 
 Synonym for CorrelationId; see that entry.
 
+## CascadeKill
+
+The two-phase termination sequence applied to a child process group when a
+`SubprocessHandle` enters a terminal state through cancellation, timeout, or
+server shutdown. Phase 1: `killpg(pgid, SIGTERM)` is delivered to the entire
+process group so that the child and any grandchildren receive the signal. Phase
+2: after `shutdown_drain_secs` (default 5 s) any surviving members of the group
+receive `killpg(pgid, SIGKILL)`. The sequence ensures no orphaned processes
+remain even when the child ignores SIGTERM. See
+[ADR-0053](adr/0053-process-lifecycle-cascade-contract.md) and
+[ADR-0052](adr/0052-subprocess-bounded-context.md).
+
 ## degraded jail
 
 The userspace fallback tier of `PathJail` activated when the kernel does not
@@ -185,6 +218,18 @@ host requesting explicit human confirmation before executing a high-impact
 operation. Substrate uses elicitation as the final security gate for all
 destructive mutations, signals, and archive writes. See
 [ADR-0004](adr/0004-security-model.md).
+
+## EnvAllowlist
+
+The set of environment variable names (not their values) that a
+`SubprocessRequest` permits the child process to inherit from substrate's own
+process environment. Names in `env_allowlist` pass through as-is; names absent
+from the list are stripped before `exec`. The library-injection variables
+`LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `LD_LIBRARY_PATH`, and
+`DYLD_LIBRARY_PATH` are unconditionally stripped regardless of what the
+`env_allowlist` contains. Values may additionally be overridden via
+`env_override`. See [ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[schemas/subprocess.cue](schemas/subprocess.cue).
 
 ## FsIndexPort
 
@@ -336,12 +381,33 @@ Substrate attaches an output schema to every tool registration so that MCP
 clients can validate responses programmatically without relying on free-text
 parsing. See [ADR-0007](adr/0007-tool-card-narrative-arc.md).
 
+## OrphanReaper
+
+A startup task that runs once, before the MCP server begins accepting
+connections, to remove `.tmp.<uuid7>` files left behind by a previous substrate
+crash. The reaper scans every directory listed in `security.allowlist`, matches
+the `*.tmp.<uuid7>` naming pattern, checks that the file `mtime` predates
+`startup.orphan_reap_age_secs` (default 600 s), and removes any match. A
+`SUBSTRATE_ORPHAN_TMP_REAPED` audit event is emitted for each removed file. See
+[ADR-0055](adr/0055-orphan-reaper-on-startup.md) and
+[ADR-0033](adr/0033-transactional-writes.md).
+
 ## page cursor
 
 An opaque pagination token returned in list responses when the result set
 exceeds the configured page size. The caller passes the cursor back as an
 argument on the next call to retrieve the subsequent page. `PageCursor` is a
 value object in the shared kernel. See [ADR-0025](adr/0025-bounded-context-interactions.md).
+
+## ProcessGroup
+
+The OS process group whose ID (`pgid`) is assigned to a spawned child via
+`setsid()` immediately after `fork()` and before `exec()`. Using `setsid()`
+makes the child a session leader so that subsequent children it spawns remain
+in the same group. The `pgid` is stored in `SubprocessHandle` and used as the
+unit of cascade kill: `killpg(pgid, signal)` delivers the signal to the entire
+group, not just the direct child. See
+[ADR-0053](adr/0053-process-lifecycle-cascade-contract.md).
 
 ## PollingWatcher
 
@@ -434,6 +500,17 @@ requests on stdin and writes responses to stdout. Stdout is the exclusive MCP
 wire channel; all diagnostic output goes to stderr. No TCP listener is opened in
 default builds. See [ADR-0005](adr/0005-stdio-transport.md).
 
+## StreamChunk
+
+A value object carrying a single captured fragment of a child process output
+stream. Fields: `job_id` (correlation), `stream` (`stdout` or `stderr`), `seq`
+(zero-based monotonic integer per stream), `chunk_base64` (RFC 4648 §4
+base64-encoded raw bytes), `byte_offset` (cumulative byte offset from stream
+start), and `timestamp` (RFC 3339). Delivered to the MCP client as the payload
+of a `notifications/progress` event. Gaps in `seq` indicate dropped chunks.
+See [ADR-0054](adr/0054-subprocess-stdout-stderr-stream-multiplex.md) and
+[schemas/subprocess.cue](schemas/subprocess.cue).
+
 ## structured content
 
 The `structuredContent` field in an MCP tool response that carries
@@ -458,6 +535,38 @@ The MCP server defined by this architecture specification. Substrate exposes
 baseutils-equivalent OS management capabilities (filesystem inspection and
 mutation, process control, system metadata, text processing, archiving) to LLM
 agents via the Model Context Protocol over STDIO.
+
+## Subprocess
+
+A child operating system process spawned by the substrate-subprocess adapter on
+behalf of an MCP client. Each subprocess is assigned its own process group via
+`setsid()`, is subject to the BinaryAllowlist, PathJail, EnvAllowlist, and
+elicitation security gates, and is tracked as a `SubprocessHandle` registered
+in the `JobRegistry`. The entire subprocess feature is guarded by the optional
+Cargo feature `subprocess` (default-OFF). See
+[ADR-0052](adr/0052-subprocess-bounded-context.md).
+
+## SubprocessHandle
+
+The aggregate root of the subprocess bounded context. Each `SubprocessHandle`
+record stores: `job_id` (UUIDv7, equal to the `JobEntry` id and MCP
+`progressToken`), `pid`, `pgid`, `SubprocessState`, `started_at`, optional
+`exit_code`, `stream_chunks_dropped`, and the list of `tmp_files` registered
+during the invocation. State transitions are serialized through a
+`parking_lot::Mutex<SubprocessState>` and terminal states never regress. See
+[ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[schemas/subprocess.cue](schemas/subprocess.cue).
+
+## SubprocessRequest
+
+The immutable value object submitted by an MCP client to launch a child
+process. Fields: `binary_path`, `args`, `env_allowlist`, `env_override`, `cwd`,
+`stdin_kind` (`none`/`piped`/`file_path`), optional `stdin_file_path`,
+`capture_kind` (`stream`/`in_memory`/`tmp_file`), optional `timeout_secs`
+(1-86400), and optional `idempotency_key`. Every field is validated by
+`subprocess_invariants.rego` before any OS call. See
+[ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[schemas/subprocess.cue](schemas/subprocess.cue).
 
 ## substrate-signal-sys
 
@@ -499,6 +608,18 @@ A domain object defined entirely by its attributes, with no mutable identity.
 Value objects are immutable, comparable by value, and freely copyable across
 context boundaries. Examples in substrate: `JailedPath`, `PageCursor`,
 `ProgressToken`, `AuditEvent`.
+
+## WatchdogPipe
+
+A read/write pipe pair used on macOS as an alternative to Linux's
+`PR_SET_PDEATHSIG` for orphan prevention. Substrate holds the write end open
+for the lifetime of the child process; the child reads its end (passed via
+`SUBSTRATE_WATCHDOG_FD`) in a dedicated watchdog thread. When the substrate
+process is killed (even with `SIGKILL`), the kernel closes all its file
+descriptors including the write end of the pipe; the child's watchdog thread
+observes EOF on `read()` and calls `_exit(0)`, preventing the child from
+becoming an init-orphan. See
+[ADR-0053](adr/0053-process-lifecycle-cascade-contract.md).
 
 ## write-through (index)
 

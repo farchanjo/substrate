@@ -41,11 +41,22 @@ package schemas
 	"SUBSTRATE_RESULT_WAIT_EXCEEDED" |
 	// Capability-startup errors per ADR-0042 + ADR-0043 (-32032 through -32033)
 	"SUBSTRATE_TIER_OVERRIDE_INVALID" |
-	"SUBSTRATE_JAIL_DEGRADED_REFUSED"
+	"SUBSTRATE_JAIL_DEGRADED_REFUSED" |
+	// Subprocess BC security and lifecycle errors per ADR-0052 + ADR-0053 + ADR-0054 + ADR-0055 (-32034 through -32042)
+	"SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED" |
+	"SUBSTRATE_SUBPROCESS_ENV_BANNED" |
+	"SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST" |
+	"SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED" |
+	"SUBSTRATE_SUBPROCESS_SPAWN_FAILED" |
+	"SUBSTRATE_SUBPROCESS_TIMEOUT" |
+	"SUBSTRATE_SUBPROCESS_KILLED" |
+	"SUBSTRATE_ELICITATION_REQUIRED" |
+	"SUBSTRATE_STREAM_CHUNK_DROPPED"
 
 // #ErrorCategory classifies codes by operational concern.
 // "job" added per ADR-0010 amendment for async-job BC per ADR-0040.
-#ErrorCategory: "security" | "not_found" | "lifecycle" | "resource" | "input" | "protocol" | "internal" | "startup" | "kernel" | "job"
+// "security_violation", "resource_limit", "io_error", "timeout", "cancellation", "user_consent", "backpressure" added per ADR-0052 subprocess BC.
+#ErrorCategory: "security" | "not_found" | "lifecycle" | "resource" | "input" | "protocol" | "internal" | "startup" | "kernel" | "job" | "security_violation" | "resource_limit" | "io_error" | "timeout" | "cancellation" | "user_consent" | "backpressure"
 
 // #ErrorEntry documents a single error code with its wire mapping and remediation hint.
 #ErrorEntry: {
@@ -69,6 +80,7 @@ package schemas
 
 // #ErrorCatalog is a closed map of all error codes to their entries.
 // 7 codes added per ADR-0010 amendment (job BC + capability startup codes).
+// 9 codes added per ADR-0052/0053/0054/0055 (subprocess BC).
 // This read model is generated; do not edit entries; open a spec ADR to evolve codes.
 #ErrorCatalog: {
 	SUBSTRATE_PATH_OUTSIDE_ALLOWLIST: #ErrorEntry & {
@@ -272,5 +284,60 @@ package schemas
 		http_jsonrpc_code: -32033
 		recovery_hint:     "Upgrade kernel to >= 5.6 (Linux) or macOS >= 11, or set security.refuse_degraded_jail = false."
 		category:          "startup"
+	}
+	// Subprocess BC errors per ADR-0052 + ADR-0053 + ADR-0054 + ADR-0055
+	SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED"
+		http_jsonrpc_code: -32034
+		recovery_hint:     "Add the binary path to security.subprocess_binary_allowlist in substrate.toml and restart."
+		category:          "security_violation"
+	}
+	SUBSTRATE_SUBPROCESS_ENV_BANNED: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_ENV_BANNED"
+		http_jsonrpc_code: -32035
+		recovery_hint:     "Remove the banned env var from env_override and env_allowlist; substrate enforces this independent of allowlist."
+		category:          "security_violation"
+	}
+	SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST"
+		http_jsonrpc_code: -32036
+		recovery_hint:     "Set cwd to a path inside security.allowed_paths."
+		category:          "security_violation"
+	}
+	SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED"
+		http_jsonrpc_code: -32037
+		recovery_hint:     "Wait for an active subprocess to terminate or cancel an existing job via subprocess.cancel."
+		category:          "resource_limit"
+	}
+	SUBSTRATE_SUBPROCESS_SPAWN_FAILED: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_SPAWN_FAILED"
+		http_jsonrpc_code: -32038
+		recovery_hint:     "Verify binary exists at the configured path and has execute permission; inspect substrate stderr audit log."
+		category:          "io_error"
+	}
+	SUBSTRATE_SUBPROCESS_TIMEOUT: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_TIMEOUT"
+		http_jsonrpc_code: -32039
+		recovery_hint:     "Increase timeout_secs on the SubprocessRequest, or split the workload into smaller invocations."
+		category:          "timeout"
+	}
+	SUBSTRATE_SUBPROCESS_KILLED: #ErrorEntry & {
+		code:              "SUBSTRATE_SUBPROCESS_KILLED"
+		http_jsonrpc_code: -32040
+		recovery_hint:     "Inspect audit events for the kill cascade; if triggered by substrate shutdown, restart and resubmit."
+		category:          "cancellation"
+	}
+	SUBSTRATE_ELICITATION_REQUIRED: #ErrorEntry & {
+		code:              "SUBSTRATE_ELICITATION_REQUIRED"
+		http_jsonrpc_code: -32041
+		recovery_hint:     "Re-invoke the tool with elicitation_confirmed: true after operator approves the form."
+		category:          "user_consent"
+	}
+	SUBSTRATE_STREAM_CHUNK_DROPPED: #ErrorEntry & {
+		code:              "SUBSTRATE_STREAM_CHUNK_DROPPED"
+		http_jsonrpc_code: -32042
+		recovery_hint:     "Client should drain notifications/progress faster; or use subprocess.result aggregate after job completion."
+		category:          "backpressure"
 	}
 }

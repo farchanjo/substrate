@@ -76,6 +76,12 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             signalSys = container "substrate-signal-sys" "Platform shim implementing SIGPIPE disposition (SIG_IGN at startup) and other signal-safety concerns required by ADR-0032. Linked only by substrate-mcp-server." "Rust / libc" {
                 tags "Platform"
             }
+
+            // ADR-0052: subprocess bounded context — optional Cargo feature 'subprocess' (default-OFF).
+            // Hosts tokio::process::Command as the single permitted site per no_subprocess.rego amendment.
+            subprocessAdapter = container "substrate-subprocess" "Adapter for child process spawning: validates binary allowlist, env filtering, cascading kill, stdout/stderr stream multiplex (ADR-0054), and orphan prevention (PR_SET_PDEATHSIG / watchdog pipe, ADR-0053)." "Rust crate, opt-in (feature subprocess)" {
+                tags "Adapter" "OptionalFeature"
+            }
         }
 
         # External relationships
@@ -127,6 +133,13 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
         # Platform shim relationships
         fsIndex -> fsIndexMacosSys "Uses macOS FSEvents/kqueue backend on Apple platforms"
         mcpServer -> signalSys "Calls signal-safety setup at startup"
+
+        # Subprocess adapter relationships (ADR-0052, optional feature 'subprocess')
+        mcpServer -> subprocessAdapter "Uses (when subprocess feature enabled)"
+        subprocessAdapter -> jobs "Registers SubprocessHandle as JobEntry"
+        subprocessAdapter -> policy "Validates binary path and env allowlist"
+        subprocessAdapter -> domain "Implements SubprocessPort"
+        subprocessAdapter -> localOs "Spawns and signals child process groups on"
     }
 
     views {

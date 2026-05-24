@@ -73,8 +73,8 @@ package schemas
 	client_id: #ClientId
 
 	// tool is the fully-qualified MCP tool name including the job_ namespace for
-	// control-plane tools.
-	tool: string & =~"^(fs|proc|sys|text|archive|job)_[a-z][a-z0-9_]*$"
+	// control-plane tools and the subprocess_ namespace per ADR-0052.
+	tool: string & =~"^(fs|proc|sys|text|archive|job|subprocess)_[a-z][a-z0-9_]*$"
 
 	// bucket is the static dispatch bucket assigned to this tool per ADR-0040.
 	bucket: #JobBucket
