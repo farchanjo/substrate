@@ -15,10 +15,11 @@ members = [
     "crates/substrate-archive",
     "crates/substrate-mcp-server",
     "crates/substrate-signal-sys",
+    "crates/substrate-subprocess",
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -48,6 +49,7 @@ tokio = { version = "1.4", default-features = false, features = [
     "sync",
     "signal",
     "fs",
+    "process",
 ] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = "0.1"

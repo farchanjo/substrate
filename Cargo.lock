@@ -2250,7 +2250,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "substrate-archive"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-config"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "figment",
  "insta",
@@ -2298,7 +2298,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-domain"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-fs-index"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2338,14 +2338,14 @@ dependencies = [
 
 [[package]]
 name = "substrate-fs-index-macos-sys"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "substrate-fs-mutation"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64-simd",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-fs-query"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2406,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-jobs"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-mcp-server"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2459,6 +2459,7 @@ dependencies = [
  "substrate-policy",
  "substrate-process",
  "substrate-signal-sys",
+ "substrate-subprocess",
  "substrate-system-info",
  "substrate-text",
  "tar",
@@ -2475,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-policy"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -2492,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-process"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -2515,14 +2516,40 @@ dependencies = [
 
 [[package]]
 name = "substrate-signal-sys"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "nix",
 ]
 
 [[package]]
+name = "substrate-subprocess"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "base64-simd",
+ "dashmap",
+ "futures",
+ "libc",
+ "nix",
+ "proptest",
+ "rstest",
+ "serde",
+ "substrate-domain",
+ "substrate-jobs",
+ "substrate-policy",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "substrate-system-info"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -2542,7 +2569,7 @@ dependencies = [
 
 [[package]]
 name = "substrate-text"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aho-corasick",
  "bytecount",
