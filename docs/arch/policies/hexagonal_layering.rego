@@ -90,6 +90,7 @@ _adapter_crates := {
     "substrate-text",
     "substrate-archive",
     "substrate-jobs",
+    "substrate-subprocess",
 }
 
 _is_adapter(name) if _adapter_crates[name]

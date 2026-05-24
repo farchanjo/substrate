@@ -97,3 +97,46 @@ test_build_rs_command_with_justification_allowed if {
         "cargo_toml_deps": [],
     }
 }
+
+# ---------------------------------------------------------------------------
+# Tests for ADR-0052 amendment: substrate-subprocess crate whitelist
+# ---------------------------------------------------------------------------
+
+# PASS — tokio::process::Command in substrate-subprocess shipped source is allowed.
+# This is the single permitted exception to Rule 3 per ADR-0052.
+test_substrate_subprocess_crate_whitelisted_for_tokio_process if {
+    count(deny) == 0 with input as {
+        "files": {
+            "crates/substrate-subprocess/src/spawn.rs": {
+                "content": "tokio::process::Command::new(\"echo\")",
+            },
+        },
+        "cargo_toml_deps": [],
+    }
+}
+
+# FAIL — std::process::Command in substrate-subprocess is still denied.
+# The ADR-0052 exception is scoped to tokio::process::Command only.
+test_substrate_subprocess_std_command_still_denied if {
+    deny["forbidden std::process::Command in crates/substrate-subprocess/src/spawn.rs — per ADR-0044"] with input as {
+        "files": {
+            "crates/substrate-subprocess/src/spawn.rs": {
+                "content": "std::process::Command::new(\"echo\")",
+            },
+        },
+        "cargo_toml_deps": [],
+    }
+}
+
+# FAIL — tokio::process::Command in a non-subprocess crate remains denied.
+# The whitelist is strictly bounded to crates/substrate-subprocess/.
+test_tokio_command_in_other_crate_still_denied if {
+    deny["forbidden tokio::process::Command in crates/substrate-process/src/spawn.rs — per ADR-0044"] with input as {
+        "files": {
+            "crates/substrate-process/src/spawn.rs": {
+                "content": "tokio::process::Command::new(\"ls\")",
+            },
+        },
+        "cargo_toml_deps": [],
+    }
+}

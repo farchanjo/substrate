@@ -5,6 +5,15 @@
 # binaries, spawn shells, or reference std::process::Command /
 # tokio::process::Command outside of test or build-script scope.
 #
+# ADR-0052 amendment: the single permitted exception to this policy is
+# crates/substrate-subprocess/, which is the designated host of
+# tokio::process::Command behind the optional Cargo feature `subprocess`
+# (default-OFF). All other crates remain unconditionally prohibited from
+# using any Command variant. The deny-list of forbidden high-level crates
+# (subprocess, duct, xshell, cmd_lib, shell-words) continues to apply
+# globally — substrate-subprocess uses only tokio::process, which is
+# already a workspace dependency; it does not depend on any of those crates.
+#
 # Input shape (provided by the CI conftest adapter):
 #   {
 #     "files": {
@@ -52,6 +61,9 @@
 #
 #   PASS — build.rs with proper justification comment
 #   input = {"files":{"crates/substrate-config/build.rs":{"content":"// no-subprocess-justification: queries platform header version; no pure-Rust alternative exists\nstd::process::Command::new(\"pkg-config\")"}},"cargo_toml_deps":[]}
+#
+#   PASS — tokio::process::Command inside substrate-subprocess crate is whitelisted (ADR-0052)
+#   input = {"files":{"crates/substrate-subprocess/src/spawn.rs":{"content":"tokio::process::Command::new(\"echo\")"}},"cargo_toml_deps":[]}
 
 package substrate.no_subprocess
 
@@ -76,6 +88,12 @@ _is_test_file(path) if contains(path, "/examples/")
 _is_build_script(path) if endswith(path, "/build.rs")
 
 _is_build_script(path) if path == "build.rs"
+
+# True when the file belongs to the substrate-subprocess crate, which is the
+# single whitelisted host for tokio::process::Command per ADR-0052. Files in
+# this crate may use tokio::process::Command in shipped source; std::process::Command
+# and the forbidden high-level crate list still apply globally.
+_is_subprocess_crate(path) if startswith(path, "crates/substrate-subprocess/")
 
 # True when the file is a shipped source file (not test, not build script).
 _is_shipped_source(path) if {
@@ -123,12 +141,16 @@ deny contains msg if {
 # ---------------------------------------------------------------------------
 # Rule 3: tokio::process::Command forbidden in shipped source
 # Per ADR-0044: the async variant is equally prohibited in shipped code.
+# Exception per ADR-0052: crates/substrate-subprocess/ is the single
+# permitted host for tokio::process::Command; files in that crate are
+# excluded from this rule.
 # ---------------------------------------------------------------------------
 
 deny contains msg if {
     some path
     input.files[path].content
     _is_shipped_source(path)
+    not _is_subprocess_crate(path)
     contains(input.files[path].content, "tokio::process::Command")
     msg := sprintf(
         "forbidden tokio::process::Command in %s — per ADR-0044",

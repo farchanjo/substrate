@@ -35,9 +35,9 @@ test_policy_depending_on_domain_only_allowed if {
 }
 
 test_policy_importing_adapter_denied if {
-    deny["substrate-policy (policy layer) MUST NOT depend on adapter crate substrate-fs"] with input as {
+    deny["substrate-policy (policy layer) MUST NOT depend on adapter crate substrate-fs-query"] with input as {
         "crate_name": "substrate-policy",
-        "dependencies": ["substrate-domain", "substrate-fs"],
+        "dependencies": ["substrate-domain", "substrate-fs-query"],
         "allowed_external": [],
     }
 }
@@ -48,16 +48,16 @@ test_policy_importing_adapter_denied if {
 
 test_adapter_depending_on_domain_and_policy_allowed if {
     count(deny) == 0 with input as {
-        "crate_name": "substrate-fs",
+        "crate_name": "substrate-fs-query",
         "dependencies": ["substrate-domain", "substrate-policy", "tokio", "serde"],
         "allowed_external": ["tokio", "serde"],
     }
 }
 
 test_adapter_depending_on_another_adapter_denied if {
-    deny["substrate-fs (adapter) MUST NOT depend on another adapter crate substrate-proc"] with input as {
-        "crate_name": "substrate-fs",
-        "dependencies": ["substrate-domain", "substrate-proc"],
+    deny["substrate-fs-query (adapter) MUST NOT depend on another adapter crate substrate-process"] with input as {
+        "crate_name": "substrate-fs-query",
+        "dependencies": ["substrate-domain", "substrate-process"],
         "allowed_external": [],
     }
 }
@@ -69,14 +69,14 @@ test_adapter_depending_on_another_adapter_denied if {
 test_server_depending_on_rmcp_allowed if {
     count(deny) == 0 with input as {
         "crate_name": "substrate-mcp-server",
-        "dependencies": ["substrate-domain", "substrate-fs", "rmcp", "tokio"],
+        "dependencies": ["substrate-domain", "substrate-fs-query", "rmcp", "tokio"],
         "allowed_external": ["rmcp", "tokio"],
     }
 }
 
 test_adapter_depending_on_rmcp_denied if {
-    deny["substrate-fs: only substrate-mcp-server may depend on rmcp (MCP wire layer)"] with input as {
-        "crate_name": "substrate-fs",
+    deny["substrate-fs-query: only substrate-mcp-server may depend on rmcp (MCP wire layer)"] with input as {
+        "crate_name": "substrate-fs-query",
         "dependencies": ["substrate-domain", "rmcp"],
         "allowed_external": ["rmcp"],
     }
@@ -87,8 +87,8 @@ test_adapter_depending_on_rmcp_denied if {
 # ---------------------------------------------------------------------------
 
 test_adapter_activating_tokio_net_denied if {
-    deny["substrate-fs: only substrate-mcp-server may activate tokio net feature"] with input as {
-        "crate_name": "substrate-fs",
+    deny["substrate-fs-query: only substrate-mcp-server may activate tokio net feature"] with input as {
+        "crate_name": "substrate-fs-query",
         "dependencies": ["substrate-domain", "tokio/net"],
         "allowed_external": ["tokio/net"],
     }
