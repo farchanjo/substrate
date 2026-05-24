@@ -129,6 +129,20 @@ pub async fn handle_fs_set_permissions(
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
 ) -> SubstrateResult<ToolResponse> {
+    // Pre-jail traversal guard — reject any `..` segment before the kernel-level
+    // path-jail resolves the path, so the operator receives a precise
+    // PATH_TRAVERSAL_BLOCKED diagnostic rather than the generic NOT_FOUND that
+    // surfaces when `..` happens to resolve outside the allowlist root.
+    if Path::new(&req.path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(SubstrateError::PathTraversalBlocked {
+            path: req.path.clone(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        });
+    }
+
     // Layer 1+2: allowlist + path jail.
     let jailed = deps.jail.jail(allowlist_root, Path::new(&req.path))?;
 

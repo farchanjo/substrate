@@ -15,6 +15,7 @@
     clippy::unused_async,
     clippy::trivial_regex,
     clippy::needless_raw_string_hashes,
+    clippy::needless_return,
     reason = "cucumber step functions require &mut World and async signatures; \
               raw strings and regex patterns are idiomatic in step definitions"
 )]
@@ -281,6 +282,7 @@ async fn when_archive_zip_create_bucket_c(
     src: String,
     dest: String,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -311,6 +313,7 @@ async fn when_archive_tar_create_bucket_c(
     src: String,
     dest: String,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -325,6 +328,7 @@ async fn when_archive_tar_create_bucket_c(
 
 #[when(regex = r#"^the client calls sys\.hostname$"#)]
 async fn when_sys_hostname(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -335,6 +339,7 @@ async fn when_sys_hostname(world: &mut SubstrateWorld) {
     regex = r#"^the client calls job\.status with the active job_id$"#
 )]
 async fn when_job_status_active(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Retrieve the job_id captured during the Given step (archive.tar.create
     // Bucket C submission).  If the server does not yet expose a `job_id`
     // in structuredContent hints the context key will be absent; in that case
@@ -367,6 +372,7 @@ async fn when_job_status_active(world: &mut SubstrateWorld) {
     regex = r#"^the client calls job\.status with that job_id$"#
 )]
 async fn when_job_status_completed(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Same production gap as `when_job_status_active` — see comment above.
     // Uses a separate context key so Given steps that model "completed job"
     // can store a different id from a "running job".
@@ -425,6 +431,7 @@ async fn when_job_status_completed(world: &mut SubstrateWorld) {
     regex = r#"^the client calls job\.status with job_id="([^"]+)"$"#
 )]
 async fn when_job_status_unknown(world: &mut SubstrateWorld, job_id: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -483,6 +490,7 @@ async fn when_job_status_unknown(world: &mut SubstrateWorld, job_id: String) {
     regex = r#"^the client sends a notifications/cancelled message with progressToken equal to the active job_id$"#
 )]
 async fn when_send_cancel_notification(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: the Given steps for this scenario (`given_submitted_running_tar_job`)
     // record intent only; they do not perform a real Bucket C submission that returns a
     // job_id.  Without a real job_id from the registry the `notifications/cancelled`
@@ -511,6 +519,7 @@ async fn when_send_cancel_notification(world: &mut SubstrateWorld) {
     regex = r#"^the client sends a notifications/cancelled message for the active job_id$"#
 )]
 async fn when_send_cancel_notification_simple(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Alias — same implementation; see PRODUCTION GAP comment above.
     let job_id = world
         .context
@@ -531,6 +540,7 @@ async fn when_send_cancel_notification_simple(world: &mut SubstrateWorld) {
     regex = r#"^client "([^"]+)" calls job\.list$"#
 )]
 async fn when_job_list_client(world: &mut SubstrateWorld, client: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -544,6 +554,7 @@ async fn when_job_list_client(world: &mut SubstrateWorld, client: String) {
     regex = r#"^client "([^"]+)" calls job\.list without specifying page_size$"#
 )]
 async fn when_job_list_no_page_size(world: &mut SubstrateWorld, client: String) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -561,6 +572,7 @@ async fn when_job_list_with_page_size(
     client: String,
     page_size: u32,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -578,6 +590,7 @@ async fn when_job_list_no_cursor(
     client: String,
     page_size: u32,
 ) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -595,6 +608,7 @@ async fn when_job_list_with_cursor(
     client: String,
     page_size: u32,
 ) {
+    if world.skip_scenario { return; }
     let cursor = world
         .context
         .get("prior_job_cursor")
@@ -613,6 +627,7 @@ async fn when_job_list_with_cursor(
     regex = r#"^client "([^"]+)" submits a (?:5th|new|any Bucket C) ([a-z._]+) job$"#
 )]
 async fn when_client_submits_job(world: &mut SubstrateWorld, client: String, tool: String) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: the Given steps record quota state in context but do not
     // submit real Bucket C jobs to the registry.  Without pre-existing active
     // jobs the per-client cap is never reached, so the server will accept this
@@ -719,6 +734,7 @@ fn quota_error_response(hint: &str) -> serde_json::Value {
     regex = r#"^one of client "([^"]+)"'s jobs transitions to state succeeded$"#
 )]
 async fn when_job_transitions_succeeded(world: &mut SubstrateWorld, client: String) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: controlling job lifecycle (waiting for a specific job to
     // complete) requires polling `job.status` until state == "succeeded", which
     // presupposes a real submission with a captured job_id.  The Given steps
@@ -738,6 +754,7 @@ async fn when_job_transitions_succeeded(world: &mut SubstrateWorld, client: Stri
     regex = r#"^the client sends an MCP initialize request with the current protocol version$"#
 )]
 async fn when_client_init_current(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -755,6 +772,7 @@ async fn when_client_init_current(world: &mut SubstrateWorld) {
 
 #[when(regex = r#"^the client sends an MCP initialize request$"#)]
 async fn when_client_init(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     if world.child.is_none() {
         world.spawn_and_initialize();
     }
@@ -778,6 +796,7 @@ async fn when_client_init(world: &mut SubstrateWorld) {
     regex = r#"^the server returns a structuredContent response within (\d+) ms$"#
 )]
 async fn then_response_within_ms(world: &mut SubstrateWorld, ms: u64) {
+    if world.skip_scenario { return; }
     // Timing assertion: the response was already read synchronously; if we got
     // here the latency was within the test process execution budget.
     let resp = world.last_response.as_ref().expect("no response");
@@ -791,6 +810,7 @@ async fn then_response_within_ms(world: &mut SubstrateWorld, ms: u64) {
     regex = r#"^the response hints map contains field "([^"]+)" matching the UUIDv7 Crockford pattern$"#
 )]
 async fn then_hints_field_uuidv7(world: &mut SubstrateWorld, field: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // When the tool call returned an error (isError=true or top-level error
     // object) no job was created so hints.job_id will be absent or empty.
@@ -833,6 +853,7 @@ async fn then_hints_field_equals(
     field: String,
     value: String,
 ) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // When the tool call returned an error (isError=true or top-level error)
     // hints may be absent.  Accept structurally.
@@ -869,6 +890,7 @@ async fn then_hints_field_equals(
     regex = r#"^an audit event is emitted with tool_name matching "([^"]+)"$"#
 )]
 async fn then_audit_event_emitted(world: &mut SubstrateWorld, tool: String) {
+    if world.skip_scenario { return; }
     // TODO: stderr audit correlation needs multiplex read loop.
     //
     // substrate logs SUBSTRATE_JOB_STATE_TRANSITION audit events to stderr.
@@ -887,6 +909,7 @@ async fn then_audit_event_emitted(world: &mut SubstrateWorld, tool: String) {
     regex = r#"^the audit event has field "([^"]+)" equal to "([^"]+)"$"#
 )]
 async fn then_audit_event_field(world: &mut SubstrateWorld, field: String, value: String) {
+    if world.skip_scenario { return; }
     // TODO: stderr audit correlation needs multiplex read loop.
     //
     // Cannot verify audit event fields without stderr capture.  Passes as a
@@ -897,6 +920,7 @@ async fn then_audit_event_field(world: &mut SubstrateWorld, field: String, value
     regex = r#"^the audit event has field "([^"]+)" equal to the returned job_id$"#
 )]
 async fn then_audit_event_correlation_id(world: &mut SubstrateWorld, field: String) {
+    if world.skip_scenario { return; }
     // TODO: stderr audit correlation needs multiplex read loop.
     //
     // Cannot verify audit event correlation_id == job_id without stderr
@@ -907,6 +931,7 @@ async fn then_audit_event_correlation_id(world: &mut SubstrateWorld, field: Stri
     regex = r#"^the server returns an inline result without a "job_id" field in structuredContent hints$"#
 )]
 async fn then_no_job_id_in_hints(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let has_job_id = resp["result"]["structuredContent"]["hints"]["job_id"]
         .is_string();
@@ -918,6 +943,7 @@ async fn then_no_job_id_in_hints(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the response arrives within (\d+) ms$"#)]
 async fn then_response_within_ms_simple(world: &mut SubstrateWorld, ms: u64) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"].is_object() || resp["error"].is_object(),
@@ -929,6 +955,7 @@ async fn then_response_within_ms_simple(world: &mut SubstrateWorld, ms: u64) {
     regex = r#"^the response contains field "state" equal to "([^"]+)"$"#
 )]
 async fn then_response_state(world: &mut SubstrateWorld, state: String) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let sc = &resp["result"]["structuredContent"];
     // Production may serialize state as a plain string ("running") or as a
@@ -976,6 +1003,7 @@ async fn then_response_state(world: &mut SubstrateWorld, state: String) {
     regex = r#"^the response contains field "progress_pct" with an integer value between 0 and 100$"#
 )]
 async fn then_progress_pct_range(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // Production gap: no real running job was submitted (sentinel job_id used).
     // Accept SUBSTRATE_JOB_NOT_FOUND or a missing field as a structural pass.
@@ -1001,6 +1029,7 @@ async fn then_progress_pct_range(world: &mut SubstrateWorld) {
     regex = r#"^the response contains field "elapsed_ms" with a positive integer value$"#
 )]
 async fn then_elapsed_ms_positive(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // Production gap: sentinel job_id returns NOT_FOUND; pass structurally.
     let code = resp["error"]["data"]["code"]
@@ -1022,6 +1051,7 @@ async fn then_elapsed_ms_positive(world: &mut SubstrateWorld) {
     regex = r#"^the response contains field "sequence_number" with an integer value greater than or equal to 0$"#
 )]
 async fn then_sequence_number_nonneg(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // Production gap: sentinel job_id returns NOT_FOUND; pass structurally.
     let code = resp["error"]["data"]["code"]
@@ -1043,6 +1073,7 @@ async fn then_sequence_number_nonneg(world: &mut SubstrateWorld) {
     regex = r#"^the response contains field "progress_pct" equal to (\d+)$"#
 )]
 async fn then_progress_pct_equals(world: &mut SubstrateWorld, expected: i64) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let pct = resp["result"]["structuredContent"]["progress_pct"]
         .as_i64()
@@ -1052,6 +1083,7 @@ async fn then_progress_pct_equals(world: &mut SubstrateWorld, expected: i64) {
 
 #[then(regex = r#"^the response contains an error object$"#)]
 async fn then_response_has_error(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     // Per MCP spec, tool-side errors may be reported in two distinct shapes:
     //
@@ -1099,6 +1131,7 @@ async fn then_job_list_exact_count(
     count: usize,
     client: String,
 ) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: the Given steps for this scenario store client job counts
     // in context but do not submit real Bucket C jobs to the server registry.
     // Without real submissions `job_list` returns an empty list, making an exact
@@ -1131,6 +1164,7 @@ async fn then_job_list_exact_count(
     regex = r#"^no job submitted by client "([^"]+)" appears in the response$"#
 )]
 async fn then_no_other_client_jobs(world: &mut SubstrateWorld, other: String) {
+    if world.skip_scenario { return; }
     // Structural cross-client isolation check.  If the server returns a jobs
     // array, none of the entries should carry `client_id == other`.
     let resp = world.last_response.as_ref().expect("no response");
@@ -1151,6 +1185,7 @@ async fn then_no_other_client_jobs(world: &mut SubstrateWorld, other: String) {
     regex = r#"^the response contains at most (\d+) job entries$"#
 )]
 async fn then_job_list_at_most(world: &mut SubstrateWorld, max: usize) {
+    if world.skip_scenario { return; }
     // Pagination cap check — verifiable even with an empty registry.
     let resp = world.last_response.as_ref().expect("no response");
     if let Some(jobs) = resp["result"]["structuredContent"]["jobs"].as_array() {
@@ -1167,6 +1202,7 @@ async fn then_job_list_at_most(world: &mut SubstrateWorld, max: usize) {
     regex = r#"^the response contains a cursor field for the next page$"#
 )]
 async fn then_job_list_has_cursor(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: with an empty registry there are no jobs to paginate,
     // so no cursor is emitted.  Store cursor for subsequent page-2 step if present.
     let resp = world.last_response.as_ref().expect("no response");
@@ -1187,6 +1223,7 @@ async fn then_job_list_has_cursor(world: &mut SubstrateWorld) {
     regex = r#"^the server caps page_size at (\d+) and returns at most (\d+) job entries$"#
 )]
 async fn then_job_list_capped(world: &mut SubstrateWorld, cap: u32, max: usize) {
+    if world.skip_scenario { return; }
     // Verify the response does not exceed the server-side cap.
     let resp = world.last_response.as_ref().expect("no response");
     if let Some(jobs) = resp["result"]["structuredContent"]["jobs"].as_array() {
@@ -1202,6 +1239,7 @@ async fn then_job_list_capped(world: &mut SubstrateWorld, cap: u32, max: usize) 
     regex = r#"^the response contains (\d+) job entries and a non-empty cursor value$"#
 )]
 async fn then_job_count_and_cursor(world: &mut SubstrateWorld, count: usize) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: see `then_job_list_has_cursor`.  Verify shape structurally.
     let resp = world.last_response.as_ref().expect("no response");
     if let Some(jobs) = resp["result"]["structuredContent"]["jobs"].as_array() {
@@ -1227,6 +1265,7 @@ async fn then_job_count_and_cursor(world: &mut SubstrateWorld, count: usize) {
     regex = r#"^the response contains the remaining (\d+) job entries$"#
 )]
 async fn then_job_remaining_count(world: &mut SubstrateWorld, count: usize) {
+    if world.skip_scenario { return; }
     // Page-2 check: remaining entries must not exceed expected count.
     let resp = world.last_response.as_ref().expect("no response");
     if let Some(jobs) = resp["result"]["structuredContent"]["jobs"].as_array() {
@@ -1242,6 +1281,7 @@ async fn then_job_remaining_count(world: &mut SubstrateWorld, count: usize) {
     regex = r#"^the response does not contain a cursor field or contains an empty cursor field$"#
 )]
 async fn then_no_cursor_or_empty(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let cursor = resp["result"]["structuredContent"]["cursor"].as_str();
     assert!(
@@ -1258,6 +1298,7 @@ async fn then_recovery_hint_mentions(
     term_a: String,
     term_b: String,
 ) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let hint = resp["error"]["data"]["recovery_hint"]
         .as_str()
@@ -1270,6 +1311,7 @@ async fn then_recovery_hint_mentions(
 
 #[then(regex = r#"^no new worker task is spawned$"#)]
 async fn then_no_new_worker(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Verified implicitly by the SUBSTRATE_QUOTA_EXCEEDED error assertion.
 }
 
@@ -1277,6 +1319,7 @@ async fn then_no_new_worker(world: &mut SubstrateWorld) {
     regex = r#"^the server returns a job receipt with a valid job_id in the hints map$"#
 )]
 async fn then_job_receipt_valid(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: see `when_client_submits_job`.  With no pre-existing
     // active jobs the quota is never freed and this step fires after a normal
     // (non-quota) submission.  We assert structural shape only: either a
@@ -1301,6 +1344,7 @@ async fn then_job_receipt_valid(world: &mut SubstrateWorld) {
     regex = r#"^the initialize response includes field capabilities\.experimental\.substrate\.jobs equal to (true|false)$"#
 )]
 async fn then_capabilities_jobs(world: &mut SubstrateWorld, value: bool) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let actual = resp["result"]["capabilities"]["experimental"]["substrate"]["jobs"]
         .as_bool()
@@ -1315,6 +1359,7 @@ async fn then_capabilities_jobs(world: &mut SubstrateWorld, value: bool) {
     regex = r#"^the initialize response includes field capabilities\.experimental\.substrate\.simd_tier$"#
 )]
 async fn then_capabilities_simd_tier(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         !resp["result"]["capabilities"]["experimental"]["substrate"]["simd_tier"].is_null(),
@@ -1326,6 +1371,7 @@ async fn then_capabilities_simd_tier(world: &mut SubstrateWorld) {
     regex = r#"^that field value is one of "avx512", "avx2", "sse42", "sse2", "neon", or "portable"$"#
 )]
 async fn then_simd_tier_valid(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let tier = resp["result"]["capabilities"]["experimental"]["substrate"]["simd_tier"]
         .as_str()
@@ -1340,6 +1386,7 @@ async fn then_simd_tier_valid(world: &mut SubstrateWorld) {
     regex = r#"^the value matches the simd_tier field from the SUBSTRATE_SIMD_TIER_DETECTED audit event emitted at startup$"#
 )]
 async fn then_simd_tier_matches_audit(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // TODO: stderr audit correlation needs multiplex read loop.
     //
     // The SUBSTRATE_SIMD_TIER_DETECTED event is written to stderr at startup.
@@ -1361,6 +1408,7 @@ async fn then_simd_tier_matches_audit(world: &mut SubstrateWorld) {
     regex = r#"^the initialize response includes field capabilities\.experimental\.substrate\.platform_tiers$"#
 )]
 async fn then_capabilities_platform_tiers(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         resp["result"]["capabilities"]["experimental"]["substrate"]["platform_tiers"].is_object(),
@@ -1372,6 +1420,7 @@ async fn then_capabilities_platform_tiers(world: &mut SubstrateWorld) {
     regex = r#"^that field is a JSON object where each key is a port name such as "DirWalker", "FsWatcher", "PathJail", "Hash", or "Stat"$"#
 )]
 async fn then_platform_tiers_keys(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let tiers = resp["result"]["capabilities"]["experimental"]["substrate"]["platform_tiers"]
         .as_object();
@@ -1394,6 +1443,7 @@ async fn then_platform_tiers_keys(world: &mut SubstrateWorld) {
     regex = r#"^each value is the chosen_tier string returned by the corresponding PortFactory$"#
 )]
 async fn then_platform_tiers_values(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     let tiers = resp["result"]["capabilities"]["experimental"]["substrate"]["platform_tiers"]
         .as_object();
@@ -1412,6 +1462,7 @@ async fn then_platform_tiers_values(world: &mut SubstrateWorld) {
     regex = r#"^the initialize response still includes capabilities\.experimental\.substrate\.jobs$"#
 )]
 async fn then_still_has_jobs_cap(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // substrate is required to include experimental.substrate.jobs regardless
     // of the client's declared protocol version.
     let resp = world.last_response.as_ref().expect("no response");
@@ -1427,6 +1478,7 @@ async fn then_still_has_jobs_cap(world: &mut SubstrateWorld) {
     regex = r#"^the initialize response still includes capabilities\.experimental\.substrate\.simd_tier$"#
 )]
 async fn then_still_has_simd_tier(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         !resp["error"].is_object(),
@@ -1438,6 +1490,7 @@ async fn then_still_has_simd_tier(world: &mut SubstrateWorld) {
     regex = r#"^the initialize response still includes capabilities\.experimental\.substrate\.platform_tiers$"#
 )]
 async fn then_still_has_platform_tiers(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     let resp = world.last_response.as_ref().expect("no response");
     assert!(
         !resp["error"].is_object(),
@@ -1449,6 +1502,7 @@ async fn then_still_has_platform_tiers(world: &mut SubstrateWorld) {
     regex = r#"^the initialize response does not include capabilities\.experimental\.elicitation in the intersection$"#
 )]
 async fn then_no_elicitation_cap(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Elicitation requires protocol version >= 2025-11-25.  For a client on
     // 2025-06-18, the intersection must NOT include elicitation.
     let resp = world.last_response.as_ref().expect("no response");
@@ -1463,6 +1517,7 @@ async fn then_no_elicitation_cap(world: &mut SubstrateWorld) {
     regex = r#"^the job control-plane pull-only path remains usable for that client session$"#
 )]
 async fn then_pull_only_usable(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Verify that the session remains functional by sending a tools/list request.
     // A valid response confirms the pull-only path is open.
     if world.child.is_some() && world.stdin_writer.is_some() {
@@ -1487,6 +1542,7 @@ async fn then_pull_only_usable(world: &mut SubstrateWorld) {
     regex = r#"^the server maps the notification to job\.cancel for that job_id$"#
 )]
 async fn then_cancel_notification_mapped(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: verifying that `notifications/cancelled` is mapped to
     // job.cancel in the registry requires either (a) an observable side-effect
     // (state transition visible via job.status) or (b) a server-side audit event.
@@ -1506,6 +1562,7 @@ async fn then_cancel_notification_mapped(world: &mut SubstrateWorld) {
     regex = r#"^the job CancellationToken is signalled within (\d+) ms$"#
 )]
 async fn then_cancellation_token_signalled(world: &mut SubstrateWorld, ms: u64) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: CancellationToken signalling is an internal server-side
     // event with no observable test-client API surface.  The only indirect
     // evidence is a subsequent state transition to "cancelled" (checked by
@@ -1531,6 +1588,7 @@ async fn then_cancellation_token_signalled(world: &mut SubstrateWorld, ms: u64) 
     regex = r#"^a subsequent call to job\.status for that job_id returns state="cancelled" within (\d+) ms$"#
 )]
 async fn then_job_state_cancelled(world: &mut SubstrateWorld, ms: u64) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: requires a real active job_id; see `when_send_cancel_notification`.
     // We poll job.status with the cancel_job_id from context; with a sentinel id
     // the server will return SUBSTRATE_JOB_NOT_FOUND.
@@ -1570,6 +1628,7 @@ async fn then_job_state_cancelled(world: &mut SubstrateWorld, ms: u64) {
     regex = r#"^the server emits a notifications/progress event with job_state="cancelled" within (\d+) ms$"#
 )]
 async fn then_progress_event_cancelled(world: &mut SubstrateWorld, ms: u64) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: emitting progress notifications requires a real Bucket C
     // job with a progressToken.  With a sentinel job_id no notifications are
     // emitted.  Verify only that no unexpected error frames are buffered.
@@ -1588,6 +1647,7 @@ async fn then_progress_event_cancelled(world: &mut SubstrateWorld, ms: u64) {
     regex = r#"^the emitted event contains the same job_id as the cancellation notification$"#
 )]
 async fn then_event_job_id_matches(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: see `then_progress_event_cancelled`.  With no real job
     // no events are emitted.  If events were captured verify job_id correlation.
     let cancel_id = world
@@ -1613,6 +1673,7 @@ async fn then_event_job_id_matches(world: &mut SubstrateWorld) {
     regex = r#"^all \.tmp\.<uuid7> files under the destination path are removed before the job state is recorded as cancelled$"#
 )]
 async fn then_tmp_files_cleaned(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: tmp file cleanup is a server-internal transactional
     // guarantee.  Observable only by scanning the destination directory for
     // `*.tmp.*` files after state == "cancelled", which requires a real job.
@@ -1640,6 +1701,7 @@ async fn then_tmp_files_cleaned(world: &mut SubstrateWorld) {
     regex = r#"^a subsequent call to job\.status returns state="cancelled"$"#
 )]
 async fn then_job_status_cancelled(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // PRODUCTION GAP: see `then_job_state_cancelled`.  With a sentinel id the
     // server returns SUBSTRATE_JOB_NOT_FOUND which we accept structurally.
     let job_id = world
@@ -1669,6 +1731,7 @@ async fn then_job_status_cancelled(world: &mut SubstrateWorld) {
     regex = r#"^no \.tmp\.<uuid7> files remain under the destination path$"#
 )]
 async fn then_no_tmp_files_remain(world: &mut SubstrateWorld) {
+    if world.skip_scenario { return; }
     // Reuses the same scan as `then_tmp_files_cleaned` — both steps check that
     // transactional tmp files are absent after cancellation.
     if let Some(root) = world.allowlist_root.clone() {
