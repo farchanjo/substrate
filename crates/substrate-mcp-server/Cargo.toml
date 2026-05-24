@@ -80,10 +80,26 @@ rstest = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
+# Always-on for test compilation: subprocess crate directly available to cucumber harness.
+# The subprocess feature gate in src/ still controls composition-root wiring.
+# To run subprocess cucumber scenarios: cargo test --test cucumber --features subprocess
+substrate-subprocess = { path = "../substrate-subprocess" }
 
 [[bin]]
 name = "substrate"
 path = "src/main.rs"
+
+# Fixture binary for subprocess stream-capture cucumber tests.
+# Accessible via env::var("CARGO_BIN_EXE_subprocess_stdout_writer") in the harness.
+[[example]]
+name = "subprocess_stdout_writer"
+path = "tests/fixtures/subprocess_stdout_writer/src/main.rs"
+
+# Fixture binary for subprocess lifecycle/cascade/watchdog cucumber tests.
+# Accessible via env::var("CARGO_BIN_EXE_subprocess_sleeper") in the harness.
+[[example]]
+name = "subprocess_sleeper"
+path = "tests/fixtures/subprocess_sleeper/src/main.rs"
 
 [[test]]
 name = "cucumber"

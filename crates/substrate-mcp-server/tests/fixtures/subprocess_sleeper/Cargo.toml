@@ -1,0 +1,15 @@
+[package]
+name = "subprocess-sleeper"
+version = "0.0.1"
+edition = "2024"
+# Minimal fixture binary — no workspace lints, no external deps beyond libc
+# for signal handling on Unix.
+# Published as an [[example]] entry in substrate-mcp-server so it appears
+# under CARGO_BIN_EXE_subprocess_sleeper at test time.
+
+[[bin]]
+name = "subprocess_sleeper"
+path = "src/main.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

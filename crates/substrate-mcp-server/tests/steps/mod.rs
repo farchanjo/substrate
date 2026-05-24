@@ -10,5 +10,6 @@ pub mod filesystem_mutation;
 pub mod filesystem_query;
 pub mod job;
 pub mod process;
+pub mod subprocess;
 pub mod system_info;
 pub mod text_processing;
