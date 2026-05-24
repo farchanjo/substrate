@@ -22,6 +22,7 @@ fast-deflate = []
 fs-index = ["substrate-fs-index/fs-index", "substrate-fs-mutation/fs-index"]
 fs-index-watch = ["fs-index", "substrate-fs-index/fs-index-watch"]
 outbound-net = ["tokio/net"]
+subprocess = ["dep:substrate-subprocess"]
 
 [dependencies]
 substrate-domain = { path = "../substrate-domain" }
@@ -36,6 +37,7 @@ substrate-process = { path = "../substrate-process" }
 substrate-system-info = { path = "../substrate-system-info" }
 substrate-text = { path = "../substrate-text" }
 substrate-archive = { path = "../substrate-archive" }
+substrate-subprocess = { path = "../substrate-subprocess", optional = true }
 
 rmcp = { workspace = true }
 schemars = { workspace = true }

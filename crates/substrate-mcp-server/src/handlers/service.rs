@@ -27,8 +27,8 @@ use rmcp::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, Content,
         CreateTaskResult, ErrorData as McpErrorData, GetTaskInfoParams, GetTaskPayloadResult,
         GetTaskResult, GetTaskResultParams, Implementation, InitializeRequestParams,
-        InitializeResult, ListTasksResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-        ServerCapabilities, ServerInfo, Task, TaskStatus, TasksCapability, Tool,
+        InitializeResult, ListTasksResult, ListToolsResult, PaginatedRequestParams,
+        ProtocolVersion, ServerCapabilities, ServerInfo, Task, TaskStatus, TasksCapability, Tool,
     },
     service::{NotificationContext, RequestContext, RoleServer},
 };
@@ -37,10 +37,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{
-    Capabilities, ClientId, JobState, SubstrateError,
-    jobs::entry::JobEntry,
-    ports::job_registry::JobResult,
-    value_objects::JobId,
+    Capabilities, ClientId, JobState, SubstrateError, jobs::entry::JobEntry,
+    ports::job_registry::JobResult, value_objects::JobId,
 };
 
 use super::{
@@ -504,21 +502,21 @@ impl SubstrateService {
         // Always emit a non-empty correlation_id so Gherkin steps that assert
         // the UUIDv7 pattern pass even when the domain error was constructed
         // without one (e.g. adapters that set correlation_id: None).
-        let correlation_id_str = err
-            .correlation_id()
-            .map_or_else(
-                || uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string(),
-                |u| u.to_string(),
-            );
+        let correlation_id_str = err.correlation_id().map_or_else(
+            || uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string(),
+            |u| u.to_string(),
+        );
 
         // `offending_field` is present only for `SUBSTRATE_INVALID_ARGUMENT` so
         // tool-unknown-argument feature steps can assert `error.offending_field`.
-        let offending_field_val =
-            if let SubstrateError::InvalidArgument { offending_field, .. } = err {
-                serde_json::Value::String(offending_field.clone())
-            } else {
-                serde_json::Value::Null
-            };
+        let offending_field_val = if let SubstrateError::InvalidArgument {
+            offending_field, ..
+        } = err
+        {
+            serde_json::Value::String(offending_field.clone())
+        } else {
+            serde_json::Value::Null
+        };
 
         let structured = serde_json::json!({
             // Flat root fields (backward-compat with root-level assertions)
@@ -647,7 +645,11 @@ impl SubstrateService {
                 let sanitised: String = raw
                     .chars()
                     .map(|c| {
-                        if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }
+                        if c.is_alphanumeric() || c == '-' || c == '_' {
+                            c
+                        } else {
+                            '_'
+                        }
                     })
                     .take(64)
                     .collect();
@@ -915,8 +917,8 @@ impl ServerHandler for SubstrateService {
         async move {
             use substrate_domain::jobs::bucket::JobBucket;
             use substrate_domain::ports::job_registry::JobSubmitRequest;
-            use time::format_description::well_known::Rfc3339;
             use time::OffsetDateTime;
+            use time::format_description::well_known::Rfc3339;
 
             let client_id = Self::client_id_from_context(&context);
             let per_request_cancel = context.ct.child_token();
@@ -927,10 +929,10 @@ impl ServerHandler for SubstrateService {
                 cancel_fwd.cancel();
             });
 
-            let args = request
-                .arguments
-                .clone()
-                .map_or_else(|| serde_json::Value::Object(Map::new()), serde_json::Value::Object);
+            let args = request.arguments.clone().map_or_else(
+                || serde_json::Value::Object(Map::new()),
+                serde_json::Value::Object,
+            );
 
             let tool_name = request.name.clone();
             let dispatcher = self.dispatcher.clone();
@@ -952,9 +954,10 @@ impl ServerHandler for SubstrateService {
                 // `enqueue_task` is always async; use C_always_async bucket.
                 bucket: JobBucket::CAlwaysAsync,
                 idempotency_key: None,
-                args_json: request
-                    .arguments
-                    .map_or_else(|| serde_json::Value::Object(Map::new()), serde_json::Value::Object),
+                args_json: request.arguments.map_or_else(
+                    || serde_json::Value::Object(Map::new()),
+                    serde_json::Value::Object,
+                ),
                 execute,
             };
 
@@ -970,12 +973,8 @@ impl ServerHandler for SubstrateService {
                     let now = OffsetDateTime::now_utc()
                         .format(&Rfc3339)
                         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
-                    let task = Task::new(
-                        job_id.to_crockford(),
-                        TaskStatus::Working,
-                        now.clone(),
-                        now,
-                    );
+                    let task =
+                        Task::new(job_id.to_crockford(), TaskStatus::Working, now.clone(), now);
                     Ok(CreateTaskResult::new(task))
                 },
                 Err(err) => {
@@ -1036,10 +1035,7 @@ impl ServerHandler for SubstrateService {
     ) -> impl std::future::Future<Output = Result<GetTaskResult, McpErrorData>> + Send + '_ {
         async move {
             let job_id = JobId::parse_crockford(&request.task_id).map_err(|_| {
-                McpErrorData::invalid_params(
-                    format!("invalid task_id: {}", request.task_id),
-                    None,
-                )
+                McpErrorData::invalid_params(format!("invalid task_id: {}", request.task_id), None)
             })?;
             match self.dispatcher.jobs.status(&job_id).await {
                 Ok(entry) => Ok(GetTaskResult {
@@ -1060,13 +1056,11 @@ impl ServerHandler for SubstrateService {
         &self,
         request: GetTaskResultParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<GetTaskPayloadResult, McpErrorData>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<GetTaskPayloadResult, McpErrorData>> + Send + '_
+    {
         async move {
             let job_id = JobId::parse_crockford(&request.task_id).map_err(|_| {
-                McpErrorData::invalid_params(
-                    format!("invalid task_id: {}", request.task_id),
-                    None,
-                )
+                McpErrorData::invalid_params(format!("invalid task_id: {}", request.task_id), None)
             })?;
             // Long-poll with no timeout override; server-side cap applies.
             match self.dispatcher.jobs.result(&job_id, None).await {
@@ -1100,10 +1094,7 @@ impl ServerHandler for SubstrateService {
     ) -> impl std::future::Future<Output = Result<CancelTaskResult, McpErrorData>> + Send + '_ {
         async move {
             let job_id = JobId::parse_crockford(&request.task_id).map_err(|_| {
-                McpErrorData::invalid_params(
-                    format!("invalid task_id: {}", request.task_id),
-                    None,
-                )
+                McpErrorData::invalid_params(format!("invalid task_id: {}", request.task_id), None)
             })?;
             match self.dispatcher.jobs.status(&job_id).await {
                 Ok(entry) => {
@@ -1111,8 +1102,10 @@ impl ServerHandler for SubstrateService {
                     let _ = self.dispatcher.jobs.cancel(&job_id).await;
                     // Re-fetch updated state for the response; fall back to the
                     // pre-cancel snapshot on error (idempotent cancel already fired).
-                    let task = self.dispatcher.jobs.status(&job_id).await
-                        .map_or_else(|_| Self::job_entry_to_task(&entry), |updated| Self::job_entry_to_task(&updated));
+                    let task = self.dispatcher.jobs.status(&job_id).await.map_or_else(
+                        |_| Self::job_entry_to_task(&entry),
+                        |updated| Self::job_entry_to_task(&updated),
+                    );
                     Ok(CancelTaskResult { meta: None, task })
                 },
                 Err(err) => Err(McpErrorData::internal_error(

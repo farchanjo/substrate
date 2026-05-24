@@ -44,8 +44,12 @@ use substrate_domain::{
 use substrate_archive::{ArchiveDeps, ToolResponse as ArchiveToolResponse};
 use substrate_fs_mutation::{FsMutationDeps, ToolResponse as FsMutationToolResponse};
 use substrate_fs_query::{FsQueryDeps, ToolResponse as FsQueryToolResponse};
-use substrate_process::{ProcessDeps, ProcessScannerPort, ToolResponse as ProcessToolResponse};
-use substrate_system_info::{SystemInfoDeps, ToolResponse as SystemInfoToolResponse};
+use substrate_process::{
+    ProcessDeps, ProcessScannerPort, SharedPidCpuCache, ToolResponse as ProcessToolResponse,
+};
+use substrate_system_info::{
+    SharedCpuState, SystemInfoDeps, ToolResponse as SystemInfoToolResponse,
+};
 use substrate_text::{TextDeps, ToolResponse as TextToolResponse};
 
 // ---- Unified response type --------------------------------------------------
@@ -194,6 +198,23 @@ pub(crate) struct ToolDispatcher {
     /// for kernel-level path confinement. The dispatcher picks the first root
     /// that successfully jails the caller-supplied path (see `jail_for`).
     pub(crate) allowlist_roots: Vec<JailedPath>,
+
+    /// Shared CPU snapshot for `sys.cpu` delta computation per ADR-0050.
+    ///
+    /// Initialized once at composition time; shared across all `sys.cpu` calls.
+    pub(crate) cpu_state: SharedCpuState,
+
+    /// Shared per-PID CPU delta cache for `proc.stats` and `proc.top` per ADR-0051.
+    ///
+    /// Initialized once at composition time; shared across all `proc.stats`/`proc.top` calls.
+    pub(crate) pid_cpu_cache: SharedPidCpuCache,
+
+    /// Optional subprocess port — wired when the `subprocess` Cargo feature is active.
+    ///
+    /// `None` when feature is disabled; the dispatcher returns `SUBSTRATE_UNKNOWN_TOOL`
+    /// for all `subprocess.*` tool names when disabled.
+    #[cfg(feature = "subprocess")]
+    pub(crate) subprocess: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
 }
 
 impl std::fmt::Debug for ToolDispatcher {
@@ -209,7 +230,9 @@ impl std::fmt::Debug for ToolDispatcher {
             .field("jobs", &"<dyn JobRegistryPort>")
             .field("config", &self.config)
             .field("allowlist_roots_count", &self.allowlist_roots.len())
-            .finish()
+            .field("cpu_state", &"<SharedCpuState>")
+            .field("pid_cpu_cache", &"<SharedPidCpuCache>")
+            .finish_non_exhaustive()
     }
 }
 
@@ -340,6 +363,24 @@ impl ToolDispatcher {
                     .await
                     .map(from_process)
             },
+            // ---- Bucket B: proc.stats ----------------------------------------
+            "proc_stats" => {
+                let req = parse::<substrate_process::stats::ProcStatsRequest>(&args)?;
+                let deps = Arc::new(self.process.clone());
+                let cache = Arc::clone(&self.pid_cpu_cache);
+                substrate_process::handle_proc_stats(req, deps, cache)
+                    .await
+                    .map(from_process)
+            },
+            // ---- Bucket B: proc.top ------------------------------------------
+            "proc_top" => {
+                let req: substrate_process::ProcTopRequest = parse(&args)?;
+                let deps = Arc::new(self.process.clone());
+                let cache = Arc::clone(&self.pid_cpu_cache);
+                substrate_process::handle_proc_top(req, deps, Arc::clone(&self.scanner), cache)
+                    .await
+                    .map(from_process)
+            },
             // ---- Bucket A: system-info --------------------------------------
             // All sys_* handlers take Arc<SystemInfoDeps> only (no request param).
             // The args value is intentionally dropped — sys_* tools have no
@@ -377,6 +418,20 @@ impl ToolDispatcher {
             "sys_info" => {
                 let deps = Arc::new(self.system_info.clone());
                 substrate_system_info::handle_sys_info(deps)
+                    .await
+                    .map(from_system_info)
+            },
+            // ---- Bucket B: sys.mem + sys.cpu --------------------------------
+            "sys_mem" => {
+                let deps = Arc::new(self.system_info.clone());
+                substrate_system_info::handle_sys_mem(deps)
+                    .await
+                    .map(from_system_info)
+            },
+            "sys_cpu" => {
+                let deps = Arc::new(self.system_info.clone());
+                let state = Arc::clone(&self.cpu_state);
+                substrate_system_info::handle_sys_cpu(deps, state)
                     .await
                     .map(from_system_info)
             },
@@ -541,6 +596,33 @@ impl ToolDispatcher {
             "job_result" => self.handle_job_result(args).await,
             "job_cancel" => self.handle_job_cancel(args).await,
             "job_list" => self.handle_job_list(args, client_id).await,
+            // ---- subprocess.* tools (feature-gated) -------------------------
+            #[cfg(feature = "subprocess")]
+            "subprocess_spawn" => {
+                let port = Arc::clone(&self.subprocess);
+                crate::handlers::subprocess_tools::handle_subprocess_spawn(args, port).await
+            },
+            #[cfg(feature = "subprocess")]
+            "subprocess_list" => {
+                let port = Arc::clone(&self.subprocess);
+                crate::handlers::subprocess_tools::handle_subprocess_list(args, port, client_id)
+                    .await
+            },
+            #[cfg(feature = "subprocess")]
+            "subprocess_cancel" => {
+                let port = Arc::clone(&self.subprocess);
+                crate::handlers::subprocess_tools::handle_subprocess_cancel(args, port).await
+            },
+            #[cfg(feature = "subprocess")]
+            "subprocess_result" => {
+                let port = Arc::clone(&self.subprocess);
+                crate::handlers::subprocess_tools::handle_subprocess_result(args, port).await
+            },
+            #[cfg(feature = "subprocess")]
+            "subprocess_signal" => {
+                let port = Arc::clone(&self.subprocess);
+                crate::handlers::subprocess_tools::handle_subprocess_signal(args, port).await
+            },
             // ---- Unknown tool -----------------------------------------------
             unknown => Err(SubstrateError::InvalidArgument {
                 offending_field: "tool_name".to_owned(),
@@ -997,8 +1079,7 @@ impl ToolDispatcher {
         let size = Self::file_size_bytes(&source_path).await.unwrap_or(0);
 
         if size >= threshold {
-            let req: substrate_archive::gzip_decompress::GzipDecompressRequest =
-                parse(&args)?;
+            let req: substrate_archive::gzip_decompress::GzipDecompressRequest = parse(&args)?;
             let archive = self.archive.clone();
             // Job-scoped cancel: standalone token so request-level cancel (fires
             // when MCP response is sent) does not interrupt the background worker.

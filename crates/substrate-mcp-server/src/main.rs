@@ -52,15 +52,9 @@ use substrate_domain::JailTier;
 /// Must be called before every non-zero exit so that MCP hosts and CI pipelines
 /// can parse the machine-readable `$schema = "substrate-startup-error/v1"` line.
 /// Per ADR-0036 §"Emit Sequence": emit → flush → exit; no MCP frames on stdout.
-fn emit_startup_error(
-    code: &str,
-    message: &str,
-    recovery_hint: &str,
-    details: &serde_json::Value,
-) {
+fn emit_startup_error(code: &str, message: &str, recovery_hint: &str, details: &serde_json::Value) {
     // ADR-0036 requires a UUIDv7 correlation_id in the startup-error envelope.
-    let correlation_id =
-        uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string();
+    let correlation_id = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string();
 
     // ISO 8601 UTC timestamp (seconds precision — milliseconds not needed here).
     let now = std::time::SystemTime::now()
@@ -156,6 +150,11 @@ fn main() -> ExitCode {
     runtime.block_on(async_main())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "startup sequence: each step is a distinct initialization stage per ADR-0036; \
+              extracting sub-functions would obscure the sequential error-code contract"
+)]
 async fn async_main() -> ExitCode {
     // Step 4a: Load configuration (figment + TOML + env) (ADR-0006, ADR-0011).
     let config = match config_loader::load() {
@@ -238,7 +237,7 @@ async fn async_main() -> ExitCode {
                         e.code(),
                         serde_json::json!({ "path": path, "error_code": e.code() }),
                     )
-                }
+                },
                 _ => (
                     73u8,
                     "SUBSTRATE_RUNTIME_INIT_FAILED",
@@ -257,8 +256,21 @@ async fn async_main() -> ExitCode {
 
     // Step 4e: Install SIGTERM/SIGINT cooperative shutdown handler (ADR-0032).
     // Spawned as a separate task; it cancels the shutdown_token on signal receipt.
+    // When the `subprocess` feature is active, the signal handler also performs
+    // cascade termination of all live subprocesses before cancelling the token
+    // per ADR-0032 amendment (2026-05-24) and ADR-0053.
     let drain_token = runtime_components.shutdown_token.clone();
-    tokio::spawn(signal_handlers::wait_for_shutdown(drain_token));
+    #[cfg(feature = "subprocess")]
+    let subprocess_shutdown_port = runtime_components.subprocess_for_shutdown.clone();
+    #[cfg(feature = "subprocess")]
+    let cascade_drain_secs = u64::from(runtime_components.config.shutdown_drain_secs);
+    tokio::spawn(signal_handlers::wait_for_shutdown(
+        drain_token,
+        #[cfg(feature = "subprocess")]
+        subprocess_shutdown_port,
+        #[cfg(feature = "subprocess")]
+        cascade_drain_secs,
+    ));
 
     // Step 4f: Run the MCP STDIO server (ADR-0005).
     match handlers::run_stdio_server(runtime_components).await {

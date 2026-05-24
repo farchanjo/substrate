@@ -19,6 +19,8 @@ pub(crate) mod initialize;
 pub(crate) mod job_tools;
 pub(crate) mod rmcp_progress_notifier;
 pub(crate) mod service;
+#[cfg(feature = "subprocess")]
+pub(crate) mod subprocess_tools;
 
 use std::sync::Arc;
 

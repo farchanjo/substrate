@@ -43,8 +43,8 @@ use substrate_jobs::InMemoryJobRegistry;
 
 use crate::handlers::rmcp_progress_notifier::RmcpPeerNotifier;
 use substrate_policy::{Allowlist, PathJailFactory};
-use substrate_process::{ProcessDeps, default_scanner};
-use substrate_system_info::SystemInfoDeps;
+use substrate_process::{ProcessDeps, default_scanner, new_pid_cpu_cache};
+use substrate_system_info::{SystemInfoDeps, new_cpu_state};
 use substrate_text::TextDeps;
 
 use crate::audit;
@@ -79,6 +79,15 @@ pub(crate) struct RuntimeComponents {
     /// Shared between the `SubstrateService` (which calls `set_peer`) and the
     /// `InMemoryJobRegistry` (which calls `notify_progress`/`notify_complete`).
     pub(crate) notifier: Arc<RmcpPeerNotifier>,
+
+    /// Optional subprocess port for signal-handler cascade termination.
+    ///
+    /// Populated when the `subprocess` Cargo feature is active; `None` otherwise.
+    /// The signal handler uses this to send SIGTERM/SIGKILL to live subprocess
+    /// process groups during graceful shutdown (ADR-0032 amendment 2026-05-24).
+    #[cfg(feature = "subprocess")]
+    pub(crate) subprocess_for_shutdown:
+        Option<Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>>,
 }
 
 // ---- Wiring ------------------------------------------------------------------
@@ -91,6 +100,11 @@ pub(crate) struct RuntimeComponents {
 /// # Errors
 ///
 /// Returns `SUBSTRATE_RUNTIME_INIT_FAILED` when an adapter fails to construct.
+#[expect(
+    clippy::too_many_lines,
+    reason = "composition root wiring: each line is a one-step factory call or assignment; \
+              extracting sub-functions would create false cohesion without reducing real complexity"
+)]
 pub(crate) async fn wire(
     config: &RuntimeConfig,
     caps: &Capabilities,
@@ -204,6 +218,47 @@ pub(crate) async fn wire(
     // inside `substrate_process::default_scanner()`.
     let scanner = default_scanner();
 
+    // ---- Shared CPU snapshot for sys.cpu delta (ADR-0050) -------------------
+    let cpu_state = new_cpu_state();
+
+    // ---- Shared per-PID CPU delta cache for proc.stats/proc.top (ADR-0051) --
+    let pid_cpu_cache = new_pid_cpu_cache();
+
+    // ---- SubprocessRegistry (ADR-0052) — feature-gated ---------------------
+    //
+    // The subprocess port is wired only when the `subprocess` Cargo feature is
+    // active. A deny-all `SubprocessRegistry` is constructed with the server's
+    // root `CancellationToken` and the path allowlist so that the registry can
+    // validate `cwd` containment per ADR-0052 Layer 1.
+    //
+    // The binary allowlist is empty by default (deny-all) matching the ADR-0052
+    // default-deny stance. Operators opt in via the `[subprocess]` TOML section.
+    //
+    // Two `Arc` clones are derived: one goes into `ToolDispatcher.subprocess` for
+    // tool dispatch; one is stored in `RuntimeComponents.subprocess_for_shutdown`
+    // for the signal-handler cascade termination per ADR-0032 amendment 2026-05-24.
+    #[cfg(feature = "subprocess")]
+    let (subprocess_port, subprocess_port_for_shutdown): (
+        std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+        Option<std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>>,
+    ) = {
+        let path_allowlist_clone = Allowlist::new(config.policy.roots.clone())?;
+        let registry = substrate_subprocess::registry::deny_all_registry(
+            path_allowlist_clone,
+            shutdown_token.child_token(),
+        );
+        let port_a: std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort> =
+            Arc::clone(&registry)
+                as std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>;
+        let port_b: Option<
+            std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+        > = Some(Arc::clone(&registry)
+            as std::sync::Arc<
+                dyn substrate_domain::ports::subprocess::SubprocessPort,
+            >);
+        (port_a, port_b)
+    };
+
     // ---- ToolDispatcher (ADR-0022) ------------------------------------------
     let dispatcher = ToolDispatcher {
         fs_query: fs_query_deps,
@@ -216,6 +271,10 @@ pub(crate) async fn wire(
         jobs: Arc::clone(&job_registry),
         config: Arc::clone(&config_arc),
         allowlist_roots,
+        cpu_state,
+        pid_cpu_cache,
+        #[cfg(feature = "subprocess")]
+        subprocess: subprocess_port,
     };
 
     Ok(RuntimeComponents {
@@ -225,6 +284,8 @@ pub(crate) async fn wire(
         config: config_arc,
         caps: caps_arc,
         notifier,
+        #[cfg(feature = "subprocess")]
+        subprocess_for_shutdown: subprocess_port_for_shutdown,
     })
 }
 

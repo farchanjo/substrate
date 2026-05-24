@@ -1,0 +1,415 @@
+//! MCP tool handlers for subprocess.* tools per ADR-0052.
+//!
+//! All five handlers are compiled only when the `subprocess` Cargo feature is
+//! active. They delegate to `Arc<dyn SubprocessPort>` wired by the composition
+//! root and convert domain results to `DispatchedResponse` envelopes.
+//!
+//! Tool descriptions are thin one-liners per the ADR-0007 2026-05-22 amendment;
+//! full narrative arc lives in the companion `subprocess.md` tool-card document.
+
+#![cfg(feature = "subprocess")]
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "binary crate: pub(crate) is conventional for cross-module access in binary crates"
+)]
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tracing::instrument;
+
+use substrate_domain::{
+    SubstrateError, SubstrateResult,
+    ports::subprocess::{CancelSignal, SignalTarget, SubprocessSignalName},
+    subprocess::errors::SubprocessError,
+    subprocess::request::SubprocessRequest,
+    subprocess::state::SubprocessState,
+    value_objects::JobId,
+};
+
+use crate::handlers::dispatcher::DispatchedResponse;
+
+// ---- CancelSignal shim for the composition layer ----------------------------
+
+/// A trivial always-not-cancelled `CancelSignal` implementation used at the
+/// MCP handler layer. Callers that need real cancellation should pass a
+/// `tokio_util::sync::CancellationToken`-backed implementation; this shim is
+/// adequate for the composition root which drives cooperative cancellation via
+/// `SubprocessRegistry`'s own `root_cancel` token.
+struct NoCancel;
+
+#[async_trait]
+impl CancelSignal for NoCancel {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    async fn cancelled(&self) {
+        // Never resolves — NoCancel is never cancelled.
+        std::future::pending::<()>().await;
+    }
+}
+
+// ---- Error helpers ----------------------------------------------------------
+
+/// Maps a [`SubprocessError`] to a [`SubstrateError`] carrying the
+/// `SUBSTRATE_INTERNAL_ERROR` code and a recovery hint per ADR-0010.
+fn subprocess_err(e: &SubprocessError) -> SubstrateError {
+    SubstrateError::InternalError {
+        reason: e.to_string(),
+        correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+    }
+}
+
+// ---- subprocess_spawn -------------------------------------------------------
+
+/// Dispatches `subprocess.spawn` — spawn a supervised child process.
+///
+/// Delegates to the wired `SubprocessPort::spawn`. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_subprocess_spawn(
+    args: Value,
+    port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: SubprocessRequest =
+        serde_json::from_value(args.clone()).map_err(|e| SubstrateError::InvalidArgument {
+            offending_field: "arguments".to_owned(),
+            reason: e.to_string(),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        })?;
+
+    let handle = port
+        .spawn(req, &NoCancel)
+        .await
+        .map_err(|e| subprocess_err(&e))?;
+
+    let content = format!(
+        "subprocess.spawn: job_id={} pgid={} state={:?}.",
+        handle.job_id,
+        handle.process_group.pgid(),
+        handle.state,
+    );
+    let structured = json!({
+        "job_id": handle.job_id,
+        "process_group": {
+            "pid": handle.process_group.pid(),
+            "pgid": handle.process_group.pgid(),
+        },
+        "state": handle.state,
+        "started_at": handle.started_at,
+    });
+    let hints = substrate_domain::Hints {
+        next_action_suggested: Some("subprocess.result".to_owned()),
+        ..substrate_domain::Hints::default()
+    };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
+// ---- subprocess_list --------------------------------------------------------
+
+/// Request type for `subprocess.list`.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub(crate) struct SubprocessListRequest {
+    /// Restrict results to these states; `None` returns all states.
+    pub(crate) state_filter: Option<Vec<SubprocessState>>,
+    /// Opaque pagination cursor from a previous response.
+    pub(crate) page_cursor: Option<String>,
+    /// Maximum entries to return (default 50).
+    #[serde(default = "default_page_size")]
+    pub(crate) page_size: u32,
+    /// Caller client identifier for cross-client scoping.
+    pub(crate) client_id: Option<String>,
+}
+
+const fn default_page_size() -> u32 {
+    50
+}
+
+/// Dispatches `subprocess.list` — list live subprocess handles. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_subprocess_list(
+    args: Value,
+    port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+    client_id: substrate_domain::value_objects::ClientId,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: SubprocessListRequest =
+        if args.is_null() || args == Value::Object(serde_json::Map::default()) {
+            SubprocessListRequest::default()
+        } else {
+            serde_json::from_value(args).map_err(|e| SubstrateError::InvalidArgument {
+                offending_field: "arguments".to_owned(),
+                reason: e.to_string(),
+                correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+            })?
+        };
+
+    let state_filter_ref: Option<Vec<SubprocessState>> = req.state_filter;
+    let state_slice: Option<&[SubprocessState]> = state_filter_ref.as_deref();
+    let (handles, next_cursor) = port
+        .list(
+            &client_id,
+            state_slice,
+            req.page_cursor.as_deref(),
+            req.page_size,
+        )
+        .await?;
+
+    let content = format!("subprocess.list: {} handle(s).", handles.len());
+    let structured = json!({
+        "handles": handles.iter().map(|h| json!({
+            "job_id": h.job_id,
+            "state": h.state,
+            "process_group": {
+                "pid": h.process_group.pid(),
+                "pgid": h.process_group.pgid(),
+            },
+            "started_at": h.started_at,
+            "exit_code": h.exit_code,
+        })).collect::<Vec<_>>(),
+        "next_cursor": next_cursor,
+    });
+    let hints = substrate_domain::Hints {
+        next_action_suggested: Some("subprocess.result".to_owned()),
+        ..substrate_domain::Hints::default()
+    };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
+// ---- subprocess_cancel ------------------------------------------------------
+
+/// Request type for `subprocess.cancel`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubprocessCancelRequest {
+    /// Job identifier of the subprocess to cancel.
+    pub(crate) job_id: JobId,
+    /// When `true`, skip SIGTERM drain and send SIGKILL immediately.
+    #[serde(default)]
+    pub(crate) force: bool,
+}
+
+/// Dispatches `subprocess.cancel` — cancel a running subprocess. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_subprocess_cancel(
+    args: Value,
+    port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: SubprocessCancelRequest =
+        serde_json::from_value(args).map_err(|e| SubstrateError::InvalidArgument {
+            offending_field: "arguments".to_owned(),
+            reason: e.to_string(),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        })?;
+
+    let state = port.cancel(&req.job_id, req.force).await?;
+
+    let content = format!(
+        "subprocess.cancel: job_id={} terminal_state={state:?}.",
+        req.job_id
+    );
+    let structured = json!({
+        "job_id": req.job_id,
+        "terminal_state": state,
+    });
+    let hints = substrate_domain::Hints {
+        next_action_suggested: Some("subprocess.list".to_owned()),
+        ..substrate_domain::Hints::default()
+    };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
+// ---- subprocess_result ------------------------------------------------------
+
+/// Request type for `subprocess.result`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubprocessResultRequest {
+    /// Job identifier of the subprocess.
+    pub(crate) job_id: JobId,
+    /// Long-poll timeout in milliseconds (0 = no wait).
+    #[serde(default)]
+    pub(crate) wait_ms: u32,
+    /// Include aggregated stdout/stderr in the response.
+    #[serde(default = "default_true")]
+    pub(crate) include_aggregates: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+/// Dispatches `subprocess.result` — retrieve terminal result and output. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_subprocess_result(
+    args: Value,
+    port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: SubprocessResultRequest =
+        serde_json::from_value(args).map_err(|e| SubstrateError::InvalidArgument {
+            offending_field: "arguments".to_owned(),
+            reason: e.to_string(),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        })?;
+
+    let result = port
+        .result(&req.job_id, req.wait_ms, req.include_aggregates)
+        .await?;
+
+    // Base64-encode binary stdout/stderr aggregates for safe JSON transport.
+    let stdout_b64 = base64_encode(&result.stdout_aggregate);
+    let stderr_b64 = base64_encode(&result.stderr_aggregate);
+
+    let content = format!(
+        "subprocess.result: job_id={} state={:?} exit_code={:?} stdout={}B stderr={}B.",
+        req.job_id,
+        result.terminal_state,
+        result.exit_code,
+        result.stdout_bytes_total,
+        result.stderr_bytes_total,
+    );
+    let structured = json!({
+        "job_id": req.job_id,
+        "terminal_state": result.terminal_state,
+        "exit_code": result.exit_code,
+        "stdout_aggregate_b64": stdout_b64,
+        "stderr_aggregate_b64": stderr_b64,
+        "stdout_aggregate_truncated": result.stdout_aggregate_truncated,
+        "stderr_aggregate_truncated": result.stderr_aggregate_truncated,
+        "stream_chunks_dropped": result.stream_chunks_dropped,
+        "duration_ms": result.duration_ms,
+        "stdout_bytes_total": result.stdout_bytes_total,
+        "stderr_bytes_total": result.stderr_bytes_total,
+        "terminal_at": result.terminal_at,
+    });
+    let hints = substrate_domain::Hints {
+        next_action_suggested: Some("subprocess.list".to_owned()),
+        ..substrate_domain::Hints::default()
+    };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
+// ---- subprocess_signal ------------------------------------------------------
+
+/// Request type for `subprocess.signal`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubprocessSignalRequest {
+    /// Job identifier of the subprocess.
+    pub(crate) job_id: JobId,
+    /// POSIX signal to send.
+    pub(crate) signal: SubprocessSignalName,
+    /// Whether to target the process or the entire process group.
+    #[serde(default = "default_signal_target")]
+    pub(crate) target: SignalTarget,
+    /// Confirmation token required for destructive signals (SIGKILL, SIGTERM, SIGSTOP).
+    #[serde(default)]
+    pub(crate) elicitation_confirmed: bool,
+}
+
+const fn default_signal_target() -> SignalTarget {
+    SignalTarget::ProcessGroup
+}
+
+/// Dispatches `subprocess.signal` — send a POSIX signal to a subprocess. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_subprocess_signal(
+    args: Value,
+    port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: SubprocessSignalRequest =
+        serde_json::from_value(args).map_err(|e| SubstrateError::InvalidArgument {
+            offending_field: "arguments".to_owned(),
+            reason: e.to_string(),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        })?;
+
+    // Destructive signals require elicitation confirmation per ADR-0052.
+    if matches!(
+        req.signal,
+        SubprocessSignalName::Sigkill
+            | SubprocessSignalName::Sigterm
+            | SubprocessSignalName::Sigstop
+    ) && !req.elicitation_confirmed
+    {
+        return Err(SubstrateError::InvalidArgument {
+            offending_field: "elicitation_confirmed".to_owned(),
+            reason: format!(
+                "destructive signal {} requires elicitation_confirmed=true per ADR-0052",
+                req.signal
+            ),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        });
+    }
+
+    port.signal(&req.job_id, req.signal, req.target).await?;
+
+    let content = format!(
+        "subprocess.signal: job_id={} signal={} target={:?} delivered.",
+        req.job_id, req.signal, req.target,
+    );
+    let structured = json!({
+        "job_id": req.job_id,
+        "signal": req.signal,
+        "target": req.target,
+        "delivered": true,
+    });
+    let hints = substrate_domain::Hints {
+        next_action_suggested: Some("subprocess.result".to_owned()),
+        ..substrate_domain::Hints::default()
+    };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
+// ---- Base64 helper ----------------------------------------------------------
+
+/// Minimal RFC 4648 base64 encoder (standard alphabet, no padding stripping).
+///
+/// Avoids pulling a runtime dep into the handler layer; output is valid
+/// standard base64 readable by any JSON consumer.
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let combined = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHA[((combined >> 18) & 0x3F) as usize]);
+        out.push(ALPHA[((combined >> 12) & 0x3F) as usize]);
+        out.push(if chunk.len() >= 2 {
+            ALPHA[((combined >> 6) & 0x3F) as usize]
+        } else {
+            b'='
+        });
+        out.push(if chunk.len() == 3 {
+            ALPHA[(combined & 0x3F) as usize]
+        } else {
+            b'='
+        });
+    }
+    // SAFETY: every byte pushed is ASCII from ALPHA or '='.
+    String::from_utf8(out).unwrap_or_default()
+}

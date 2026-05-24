@@ -150,7 +150,7 @@ impl AsyncRead for NullIdStdin {
                         }
                         return Poll::Ready(Ok(()));
                     }
-                }
+                },
             }
         }
     }
@@ -249,7 +249,7 @@ impl AsyncWrite for NullIdStdout {
                             // Buffer the remainder; we've consumed `consumed` bytes.
                             this.pending.extend_from_slice(&transformed[off..]);
                             return Poll::Ready(Ok(consumed));
-                        }
+                        },
                         Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                         Poll::Ready(Ok(n)) => off += n,
                     }
@@ -308,13 +308,11 @@ mod tests {
     #[test]
     fn inbound_null_id_rewrites_to_sentinel() {
         let active = make_active(false);
-        let line =
-            b"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":null,\"params\":{}}\n";
+        let line = b"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":null,\"params\":{}}\n";
         let result = rewrite_null_id_inbound(line, &active);
-        let v: serde_json::Value = serde_json::from_slice(
-            result.strip_suffix(b"\n").expect("trailing newline"),
-        )
-        .expect("valid JSON");
+        let v: serde_json::Value =
+            serde_json::from_slice(result.strip_suffix(b"\n").expect("trailing newline"))
+                .expect("valid JSON");
         assert_eq!(
             v["id"].as_i64(),
             Some(NULL_ID_SENTINEL),
@@ -326,8 +324,7 @@ mod tests {
     #[test]
     fn inbound_normal_id_not_rewritten() {
         let active = make_active(false);
-        let line =
-            b"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":42,\"params\":{}}\n";
+        let line = b"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":42,\"params\":{}}\n";
         let result = rewrite_null_id_inbound(line, &active);
         assert_eq!(result, line, "normal id must not be altered");
         assert!(
@@ -351,10 +348,9 @@ mod tests {
             "{{\"jsonrpc\":\"2.0\",\"id\":{NULL_ID_SENTINEL},\"result\":{{\"tools\":[]}}}}\n"
         );
         let result = rewrite_null_id_outbound(line.as_bytes(), &active);
-        let v: serde_json::Value = serde_json::from_slice(
-            result.strip_suffix(b"\n").expect("trailing newline"),
-        )
-        .expect("valid JSON");
+        let v: serde_json::Value =
+            serde_json::from_slice(result.strip_suffix(b"\n").expect("trailing newline"))
+                .expect("valid JSON");
         assert!(v["id"].is_null(), "id must be restored to null");
         assert!(
             !active.load(Ordering::Relaxed),
