@@ -1,0 +1,38 @@
+[package]
+name = "substrate-subprocess"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Subprocess BC adapter: spawns child processes with stdout/stderr capture, cascade cleanup, watchdog. ADR-0052 supersedes ADR-0044."
+
+[lints]
+workspace = true
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-policy = { path = "../substrate-policy" }
+substrate-jobs = { path = "../substrate-jobs" }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+nix = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+async-trait = { workspace = true }
+base64-simd = { workspace = true }
+dashmap = { workspace = true }
+# libc required for watchdog pipe fd manipulation (fcntl F_GETFD/F_SETFD) per ADR-0053.
+# Not in workspace deps; declared locally.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rstest = { workspace = true }
+proptest = { workspace = true }
