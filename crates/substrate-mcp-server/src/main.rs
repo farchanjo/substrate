@@ -221,14 +221,37 @@ async fn async_main() -> ExitCode {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(code = e.code(), recovery_hint = e.recovery_hint(), "{e}");
-            // ADR-0036: SUBSTRATE_RUNTIME_INIT_FAILED → exit 73 (composition root failure).
+            // ADR-0036: map allowlist-root failures → exit 77 with the specific
+            // SUBSTRATE_ALLOWLIST_ROOT_MISSING / SUBSTRATE_ALLOWLIST_ROOT_UNREADABLE code
+            // and a `details.path` field so the test harness and operators can identify
+            // the offending root. All other composition errors → exit 73.
+            let (exit_byte, error_code, details) = match e.code() {
+                "SUBSTRATE_ALLOWLIST_ROOT_MISSING" | "SUBSTRATE_ALLOWLIST_ROOT_UNREADABLE" => {
+                    // Extract the root path from the error message when present.
+                    // The error Display includes the path after the colon separator.
+                    let path = e
+                        .to_string()
+                        .split_once(": ")
+                        .map_or_else(|| e.to_string(), |(_, p)| p.to_owned());
+                    (
+                        77u8,
+                        e.code(),
+                        serde_json::json!({ "path": path, "error_code": e.code() }),
+                    )
+                }
+                _ => (
+                    73u8,
+                    "SUBSTRATE_RUNTIME_INIT_FAILED",
+                    serde_json::json!({ "error_code": e.code(), "cause": e.to_string() }),
+                ),
+            };
             emit_startup_error(
-                "SUBSTRATE_RUNTIME_INIT_FAILED",
+                error_code,
                 &format!("composition root wiring failed: {e}"),
                 e.recovery_hint(),
-                &serde_json::json!({ "error_code": e.code(), "cause": e.to_string() }),
+                &details,
             );
-            return ExitCode::from(73);
+            return ExitCode::from(exit_byte);
         },
     };
 
