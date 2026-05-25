@@ -596,6 +596,17 @@ impl SubprocessPort for SubprocessRegistry {
         let state_observers_for_dispatcher = Arc::clone(&self.state_observers);
         let job_id_for_dispatcher = job_id.clone();
         let handle_for_dispatcher = Arc::clone(&handle);
+        // ADR-0056 race-window fix: when a supervisor watcher is going to drive
+        // this handle, the dispatcher MUST NOT overwrite the atomic state on
+        // child exit — the watcher owns state writes (Restarting during
+        // backoff, Running after rebind). If both wrote, the order between
+        // dispatcher.state.store(terminal) and watcher.state.store(Restarting)
+        // is non-deterministic and result(supervisor_id) could observe stale
+        // terminal state during the backoff window.
+        let is_supervised_for_dispatcher = req
+            .restart_policy
+            .as_ref()
+            .is_some_and(|p| !matches!(p, RestartPolicy::Never));
         tokio::spawn(async move {
             while let Some(chunk) = receiver.recv().await {
                 for observer in observers_for_dispatcher.iter() {
@@ -615,12 +626,16 @@ impl SubprocessPort for SubprocessRegistry {
 
             // Persist the terminal state atomically so snapshot_handle / result()
             // observe the real state instead of the hardcoded Running fallback.
-            // This MUST happen before on_terminal so that any observer that calls
-            // back into snapshot_handle sees the committed terminal state.
-            handle_for_dispatcher.state.store(
-                crate::spawn::state_to_u8(terminal_state),
-                Ordering::SeqCst,
-            );
+            // Skip the write when the handle is supervised — the watcher writes
+            // Restarting + the post-respawn rebind on NEW ChildHandle starts
+            // fresh at Running. Dispatcher's role on supervised handles is the
+            // data-plane (chunk drain + on_terminal observer fan-out) only.
+            if !is_supervised_for_dispatcher {
+                handle_for_dispatcher.state.store(
+                    crate::spawn::state_to_u8(terminal_state),
+                    Ordering::SeqCst,
+                );
+            }
 
             for observer in observers_for_dispatcher.iter() {
                 observer.on_terminal(&job_id_for_dispatcher, terminal_state).await;
@@ -640,6 +655,7 @@ impl SubprocessPort for SubprocessRegistry {
             tracing::debug!(
                 job_id = %job_id_for_dispatcher,
                 ?terminal_state,
+                supervised = is_supervised_for_dispatcher,
                 "stream dispatcher task exiting — both reader senders dropped"
             );
         });
@@ -771,6 +787,16 @@ impl SubprocessPort for SubprocessRegistry {
                     };
 
                     if !should_restart {
+                        // Persist the actual terminal state to the supervisor_id
+                        // handle's atomic so result(supervisor_id) reflects it
+                        // after the watcher exits (dispatcher skipped the write
+                        // because is_supervised was true at spawn).
+                        if let Some(h) = watcher_handles.get(&supervisor_id) {
+                            h.value().state.store(
+                                crate::spawn::state_to_u8(exit_state),
+                                Ordering::SeqCst,
+                            );
+                        }
                         tracing::debug!(
                             job_id = %current_job_id,
                             ?exit_state,
@@ -799,6 +825,22 @@ impl SubprocessPort for SubprocessRegistry {
                         SubprocessState::Restarting,
                     )
                     .await;
+
+                    // Persist Restarting to the supervisor_id handle's atomic so
+                    // that concurrent `subprocess.result(supervisor_id)` queries
+                    // during the backoff window observe `Restarting` instead of
+                    // the stale terminal state written by the dispatcher task on
+                    // the just-exited child. Without this, the race window
+                    // [child exit → backoff sleep → respawn rebind] returns the
+                    // terminal state (e.g. Killed) to external callers. ADR-0056
+                    // §"Lifecycle" defines Restarting as the canonical state
+                    // during this window.
+                    if let Some(h) = watcher_handles.get(&supervisor_id) {
+                        h.value().state.store(
+                            crate::spawn::state_to_u8(SubprocessState::Restarting),
+                            Ordering::SeqCst,
+                        );
+                    }
 
                     // Remove the old terminal handle from the live map UNLESS it is
                     // the supervisor_id itself — that id is the stable external

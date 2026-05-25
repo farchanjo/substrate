@@ -37,3 +37,11 @@ Feature: OnFailure restart policy retries with backoff and exhausts max_retries
     And then the child exits with exit code 1
     Then the restart counter is reset to zero before applying the new restart attempt
     And the job has max_retries restart attempts available for the new failure cycle
+
+  Scenario: subprocess.result during backoff window observes Restarting state
+    Given the child process is in state Running
+    When the child exits with exit code 1
+    And subprocess.result is invoked with the supervisor job_id before the backoff_ms window has elapsed
+    Then the response payload terminal_state field equals Restarting
+    And the response payload does not equal the prior exit state Killed nor Failed
+    And the supervisor watcher task has not yet re-spawned the child
