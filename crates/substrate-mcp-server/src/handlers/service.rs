@@ -295,6 +295,88 @@ fn schema_subprocess_signal() -> std::sync::Arc<serde_json::Map<String, serde_js
     }))
 }
 
+/// Pagination sub-schema shared by network list tools.
+///
+/// Produces the same cursor-based shape as the subprocess pagination schema so
+/// callers can use a single mental model for all paginated tools.
+fn net_pagination_schema_object() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "0-based entry offset for the requested page."
+            },
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50,
+                "description": "Entries to return per page."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+/// Converts a `serde_json::Value::Object` into the `Arc<Map>` form expected by `Tool::new`.
+///
+/// Used by the network schema helpers below (mirrors the subprocess `schema_from_json` helper,
+/// which is `#[cfg(feature = "subprocess")]`-gated and therefore unavailable here).
+fn net_schema_from_json(
+    value: serde_json::Value,
+) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    let map = value
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    std::sync::Arc::new(map)
+}
+
+fn schema_net_tcp_list() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    net_schema_from_json(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "state_filter": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "Closed", "Listen", "SynSent", "SynReceived", "Established",
+                        "FinWait1", "FinWait2", "CloseWait", "Closing", "LastAck",
+                        "TimeWait", "Unknown"
+                    ]
+                },
+                "description": "Restrict results to these TCP states; omit to return all."
+            },
+            "resolve_pid": {
+                "type": "boolean",
+                "default": false,
+                "description": "Attempt PID resolution for each socket entry."
+            },
+            "pagination": net_pagination_schema_object()
+        },
+        "additionalProperties": false
+    }))
+}
+
+fn schema_net_udp_list() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    net_schema_from_json(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "resolve_pid": {
+                "type": "boolean",
+                "default": false,
+                "description": "Attempt PID resolution for each socket entry."
+            },
+            "pagination": net_pagination_schema_object()
+        },
+        "additionalProperties": false
+    }))
+}
+
 /// Thin MCP tool descriptions per ADR-0007 amendment 2026-05-22 (MCP + skill synergy).
 ///
 /// Each description is <= 100 chars. Full lookup reference (buckets, errors,
@@ -495,6 +577,24 @@ mod descriptions {
     pub(super) const fn subprocess_search() -> &'static str {
         "Regex search over captured subprocess stdout/stderr with pagination. Returns matching lines and total count. See substrate skill."
     }
+
+    // ---- network-info -------------------------------------------------------
+
+    pub(super) const fn net_tcp_list() -> &'static str {
+        "List TCP sockets (paginated, optional state filter + PID resolution). Read-only OS introspection. See substrate skill."
+    }
+
+    pub(super) const fn net_udp_list() -> &'static str {
+        "List UDP sockets (paginated). Read-only OS introspection. See substrate skill."
+    }
+
+    pub(super) const fn net_tcp_stats() -> &'static str {
+        "Global TCP counters (segs in/out/retransmitted, established, etc.). Read-only OS introspection. See substrate skill."
+    }
+
+    pub(super) const fn net_connection_count() -> &'static str {
+        "TCP connection-state histogram (LISTEN, ESTABLISHED, TIME_WAIT, etc.). Read-only OS introspection. See substrate skill."
+    }
 }
 
 // Job control-plane request types used for schemars schema generation (Task A).
@@ -540,7 +640,7 @@ struct JobListRequest {
     cursor: Option<String>,
 }
 
-/// Returns the static list of all 37 substrate tools.
+/// Returns the static list of all 41 substrate tools (45 with `subprocess` feature).
 ///
 /// Each entry carries a thin description (<= 100 chars) plus a schemars-derived
 /// `inputSchema`. The companion `substrate` skill body at
@@ -681,6 +781,15 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             "subprocess_search",
             descriptions::subprocess_search(),
             schema_subprocess_search(),
+        ),
+        // ---- network-info BC (always-on) ------------------------------------
+        Tool::new("net_tcp_list", descriptions::net_tcp_list(), schema_net_tcp_list()),
+        Tool::new("net_udp_list", descriptions::net_udp_list(), schema_net_udp_list()),
+        Tool::new("net_tcp_stats", descriptions::net_tcp_stats(), schema_empty()),
+        Tool::new(
+            "net_connection_count",
+            descriptions::net_connection_count(),
+            schema_empty(),
         ),
     ]
 }
@@ -1430,11 +1539,12 @@ mod tests {
     #[test]
     fn tool_registry_count() {
         // 5 fs-query + 8 fs-mutation + 3 process + 6 sys-info + 4 text +
-        // 7 archive + 4 job = 37 base. +6 subprocess when feature enabled = 43.
+        // 7 archive + 4 job + 4 network-info = 41 base.
+        // +6 subprocess when feature enabled = 47.
         // The dispatch match arms in `dispatcher.rs` define the authoritative
         // count; this test pins parity between the registry and the dispatcher.
         let tools = tool_registry();
-        let expected = if cfg!(feature = "subprocess") { 43 } else { 37 };
+        let expected = if cfg!(feature = "subprocess") { 47 } else { 41 };
         assert_eq!(
             tools.len(),
             expected,

@@ -17,6 +17,7 @@
 pub(crate) mod dispatcher;
 pub(crate) mod initialize;
 pub(crate) mod job_tools;
+pub(crate) mod network_tools;
 pub(crate) mod rmcp_progress_notifier;
 #[cfg(feature = "subprocess")]
 pub(crate) mod rmcp_stream_notifier;

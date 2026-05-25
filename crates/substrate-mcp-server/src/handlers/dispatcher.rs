@@ -215,6 +215,13 @@ pub(crate) struct ToolDispatcher {
     /// for all `subprocess.*` tool names when disabled.
     #[cfg(feature = "subprocess")]
     pub(crate) subprocess: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+
+    /// Network-info port — always-on (Noop adapter on unsupported platforms per ADR-0058).
+    ///
+    /// Wired unconditionally: `NetworkInfoFactory::build` selects the best
+    /// available adapter (macOS sysctl / Linux procnet) or falls back to
+    /// `NoopNetworkInfoPort` which returns `InternalError` at runtime.
+    pub(crate) network: Arc<dyn substrate_domain::ports::network_info::NetworkInfoPort>,
 }
 
 impl std::fmt::Debug for ToolDispatcher {
@@ -232,6 +239,7 @@ impl std::fmt::Debug for ToolDispatcher {
             .field("allowlist_roots_count", &self.allowlist_roots.len())
             .field("cpu_state", &"<SharedCpuState>")
             .field("pid_cpu_cache", &"<SharedPidCpuCache>")
+            .field("network", &"<dyn NetworkInfoPort>")
             .finish_non_exhaustive()
     }
 }
@@ -627,6 +635,23 @@ impl ToolDispatcher {
             "subprocess_search" => {
                 let port = Arc::clone(&self.subprocess);
                 crate::handlers::subprocess_tools::handle_subprocess_search(args, port).await
+            },
+            // ---- network.* tools (always-on; Noop on unsupported platforms) --
+            "net_tcp_list" => {
+                let port = Arc::clone(&self.network);
+                crate::handlers::network_tools::handle_net_tcp_list(args, port).await
+            },
+            "net_udp_list" => {
+                let port = Arc::clone(&self.network);
+                crate::handlers::network_tools::handle_net_udp_list(args, port).await
+            },
+            "net_tcp_stats" => {
+                let port = Arc::clone(&self.network);
+                crate::handlers::network_tools::handle_net_tcp_stats(args, port).await
+            },
+            "net_connection_count" => {
+                let port = Arc::clone(&self.network);
+                crate::handlers::network_tools::handle_net_connection_count(args, port).await
             },
             // ---- Unknown tool -----------------------------------------------
             unknown => Err(SubstrateError::InvalidArgument {

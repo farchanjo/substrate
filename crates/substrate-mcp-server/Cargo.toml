@@ -38,6 +38,7 @@ substrate-system-info = { path = "../substrate-system-info" }
 substrate-text = { path = "../substrate-text" }
 substrate-archive = { path = "../substrate-archive" }
 substrate-subprocess = { path = "../substrate-subprocess", optional = true }
+substrate-network-info = { path = "../substrate-network-info" }
 
 rmcp = { workspace = true }
 schemars = { workspace = true }

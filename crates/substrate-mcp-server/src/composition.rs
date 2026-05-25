@@ -50,6 +50,8 @@ use substrate_text::TextDeps;
 use crate::audit;
 use crate::handlers::dispatcher::ToolDispatcher;
 
+use substrate_network_info::NetworkInfoFactory;
+
 // ---- Runtime component bundle ------------------------------------------------
 
 /// All runtime-constructed ports and shared state injected into the MCP handler.
@@ -211,6 +213,18 @@ pub(crate) async fn wire(
     let job_registry: Arc<dyn JobRegistryPort> =
         InMemoryJobRegistry::new(job_cfg, notifier_dyn, shutdown_token.child_token());
 
+    // ---- NetworkInfoPort (ADR-0058) -----------------------------------------
+    //
+    // The factory probes the current platform and selects the best adapter:
+    //   - macOS: MacosSysctlAdapter (sysctlbyname net.inet.tcp.pcblist_n)
+    //   - Linux: LinuxProcNetAdapter (/proc/net/{tcp,tcp6,udp,udp6,snmp})
+    //   - Other: NoopNetworkInfoPort — all calls return InternalError at runtime.
+    //
+    // This port is always-on (no feature flag). Platforms without support receive
+    // the Noop fallback; tool calls return SUBSTRATE_INTERNAL_ERROR.
+    let (network_port, network_tier) = NetworkInfoFactory::build();
+    tracing::info!(network_tier = ?network_tier, "network-info tier selected");
+
     // ---- Process scanner (ADR-0028) -----------------------------------------
     //
     // Built once at composition time; the platform-specific implementation
@@ -350,6 +364,7 @@ pub(crate) async fn wire(
         pid_cpu_cache,
         #[cfg(feature = "subprocess")]
         subprocess: subprocess_port,
+        network: network_port,
     };
 
     Ok(RuntimeComponents {
