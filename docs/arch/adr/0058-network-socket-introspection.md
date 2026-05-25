@@ -469,3 +469,90 @@ Both codes extend the taxonomy from [ADR-0010](0010-error-taxonomy.md).
 - [ADR-0044](0044-no-subprocess-policy.md) — no lsof/netstat/ss subprocess
 - [ADR-0057](0057-subprocess-output-pagination-and-search.md) — Pagination
   value object reused verbatim
+
+## Amendment 2026-05-25 (v2) — macOS sysctl parser kernel-layout correction
+
+**Context.** Initial macOS adapter was deployed with `xinpcb_n` and `tcpstat`
+Rust struct mirrors derived from header documentation rather than verified
+offsets. Live testing on macOS 15.4 / xnu-10002 / arm64 surfaced two layout
+drift bugs:
+
+- `xinpcb_n` field order in the Rust mirror did not match `<netinet/in_pcb.h>`:
+  all Listen entries returned `local_port=0` and garbled IPv6 addresses.
+- `tcpstat` offset shortcut `idx*4` was incorrect when the kernel struct
+  contains non-u32 fields. All counters returned 0.
+
+**Decision.** Rust `#[repr(C)]` mirrors for both structs are now derived
+directly from canonical xnu source (or local SDK headers when available) with
+`std::mem::offset_of!`-based compile-time guards on critical fields
+(`inp_lport`, `inp_dependladdr`, `inp_dependfaddr`, `inp_vflag`, plus every
+read counter in `tcpstat`).
+
+**Consequence.**
+
+- Every kernel-layout struct in `substrate-network-info` now carries a
+  compile-time offset assertion. Any future XNU layout change affecting
+  observed offsets will fail the build immediately, not silently corrupt
+  parsed data.
+- Two ignored integration tests (`live_listen_entry_has_nonzero_port`,
+  `live_tcp_stats_returns_nonzero_counters`) act as regression guards on the
+  dev host. Run via
+  `cargo test -p substrate-network-info -- --include-ignored`.
+- Source of truth recorded: private xnu kernel header `xinpcb_n` definition
+  (the public SDK at
+  `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/netinet/in_pcb.h`
+  exposes only the older `xinpcb64`); offsets empirically verified by
+  correlating live `net.inet.tcp.pcblist_n` blobs with
+  `netstat -an -p tcp` on macOS 15.4 / xnu-10002 / arm64. `tcpstat` offsets
+  come from the SDK-shipped
+  `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/netinet/tcp_var.h`.
+- Companion Gherkin features:
+  `docs/arch/specs/features/network/net-tcp-list-listen-entry-has-nonzero-local-port.feature`,
+  `docs/arch/specs/features/network/net-tcp-stats-returns-nonzero-counters-on-active-host.feature`.
+- Companion Rego invariant:
+  `docs/arch/policies/network_invariants.rego` rule
+  `listen_entry_has_nonzero_port`.
+
+**Status.** Implemented in commit `b30815a` (fix(network-info): correct
+macOS xinpcb_n and tcpstat kernel layouts).
+
+## Amendment 2026-05-25 (v3) — macOS Sequoia `disable_access_to_stats` flag
+
+**Context.** Post-v2 live verification on macOS 15.4 Sequoia confirmed that
+`net.tcp_list` now returns correct addresses, ports, and states, and
+`net.connection_count` reports a coherent state distribution. However,
+`net.tcp_stats` continued to return all-zero counters even though the host
+clearly had active TCP traffic (82 Established + 2 CloseWait connections).
+
+Root cause: macOS Sequoia ships with the read-only sysctl flag
+`net.inet.tcp.disable_access_to_stats` set to `1` by default. When this flag
+is enabled the kernel silently zeroes every counter returned by
+`sysctlbyname("net.inet.tcp.stats")` for unprivileged callers.
+This behaviour is shared with the system `netstat -s -p tcp` utility, which
+also returns all-zero counters on the same host with the flag enabled.
+The substrate `tcpstat_n` Rust mirror and offset_of! guards are therefore
+correct; the zeroing happens inside the kernel before our parser is
+reached.
+
+**Decision.** The macOS adapter continues to call
+`sysctlbyname("net.inet.tcp.stats")` as the primary stats source. When the
+returned blob is all-zero (and the flag is set) the adapter reports the
+counters verbatim — substrate does not lie about kernel-reported values.
+A v1.1 path will surface a structuredContent hint
+`stats_access_disabled: true` when
+`sysctlbyname("net.inet.tcp.disable_access_to_stats")` returns `1`, so MCP
+clients can distinguish "host has no traffic" from "kernel hides counters".
+
+**Consequence.**
+
+- `net.tcp_stats` on macOS Sequoia + later may report zeros on a host with
+  real traffic. This is an OS hardening policy, not a substrate bug.
+- Operators who need real counters must disable the flag with
+  `sudo sysctl -w net.inet.tcp.disable_access_to_stats=0` (or persist via
+  `/etc/sysctl.conf`). Substrate will not perform this mutation.
+- v1.1 will surface a `stats_access_disabled` hint so consumers can branch
+  on the policy state.
+
+**Status.** Documented; the hint field is tracked as a follow-up under
+`docs/arch/adr/0058-network-socket-introspection.md` and not yet wired
+into the tool card.

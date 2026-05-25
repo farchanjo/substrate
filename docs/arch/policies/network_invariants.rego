@@ -268,3 +268,25 @@ deny contains msg if {
 		[st],
 	)
 }
+
+# ---------------------------------------------------------------------------
+# Invariant 10 — Listen entries must have local_port > 0
+#
+# A LISTEN socket is bound to a concrete port; local_port=0 indicates a
+# kernel-layout struct alignment bug in the platform adapter.
+# Cross-reference: ADR-0058 Amendment 2026-05-25 (v2), rule
+# listen_entry_has_nonzero_port.
+# ---------------------------------------------------------------------------
+
+listen_entry_has_nonzero_port if {
+	entry := input.socketEntry
+	entry.state == "Listen"
+	entry.local_port > 0
+}
+
+deny contains msg if {
+	entry := input.socketEntry
+	entry.state == "Listen"
+	entry.local_port == 0
+	msg := "socketEntry.local_port must be > 0 for Listen entries; got 0 (indicates platform adapter struct layout bug)"
+}

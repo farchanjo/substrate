@@ -353,3 +353,36 @@ test_tcp_list_request_state_filter_empty if {
 		"networkTcpListRequest": {"state_filter": []},
 	}
 }
+
+# ---------------------------------------------------------------------------
+# Invariant 10 — Listen entries must have local_port > 0
+# ---------------------------------------------------------------------------
+
+# PASS — Listen entry with local_port=22 is valid
+test_listen_entry_nonzero_port_valid if {
+	count(network_invariants.deny) == 0 with input as {
+		"socketEntry": {
+			"protocol": "Tcp",
+			"family": "Inet",
+			"local_addr": "0.0.0.0",
+			"local_port": 22,
+			"state": "Listen",
+		},
+	}
+}
+
+# FAIL — Listen entry with local_port=0 indicates adapter layout bug
+test_listen_entry_zero_port_invalid if {
+	result := network_invariants.deny with input as {
+		"socketEntry": {
+			"protocol": "Tcp",
+			"family": "Inet",
+			"local_addr": "0.0.0.0",
+			"local_port": 0,
+			"state": "Listen",
+		},
+	}
+	some msg
+	result[msg]
+	contains(msg, "socketEntry.local_port must be > 0 for Listen entries")
+}
