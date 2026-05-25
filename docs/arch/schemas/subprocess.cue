@@ -6,6 +6,7 @@
 //   ADR-0052 — subprocess bounded context decision
 //   ADR-0053 — process lifecycle cascade contract (setsid, PR_SET_PDEATHSIG, watchdog pipe)
 //   ADR-0054 — subprocess stdout/stderr stream multiplex via notifications/progress
+//   ADR-0057 — subprocess output pagination and search
 //
 // Dependency on shared kernel: #JobId (job.cue) for the job_id field.
 package schemas
@@ -173,6 +174,32 @@ package schemas
 	// Always a terminal value; SubprocessResult is never returned for
 	// non-terminal jobs.
 	terminal_state: #SubprocessState
+
+	// stdout_lines, when pagination was requested, contains the decoded UTF-8 lines
+	// for the current page of stdout output. Absent when pagination was not requested.
+	// Per ADR-0057.
+	stdout_lines?: [...string]
+
+	// stdout_total_lines is the total number of lines in the captured stdout ring buffer.
+	// Present only when pagination was requested. Per ADR-0057.
+	stdout_total_lines?: int & >=0
+
+	// stdout_next_offset is the pagination offset for the next stdout page.
+	// Absent when this is the last (or only) page. Per ADR-0057.
+	stdout_next_offset?: int & >=0
+
+	// stderr_lines, when pagination was requested, contains the decoded UTF-8 lines
+	// for the current page of stderr output. Absent when pagination was not requested.
+	// Per ADR-0057.
+	stderr_lines?: [...string]
+
+	// stderr_total_lines is the total number of lines in the captured stderr ring buffer.
+	// Present only when pagination was requested. Per ADR-0057.
+	stderr_total_lines?: int & >=0
+
+	// stderr_next_offset is the pagination offset for the next stderr page.
+	// Absent when this is the last (or only) page. Per ADR-0057.
+	stderr_next_offset?: int & >=0
 }
 
 // #StreamChunk is the value object carried in each notifications/progress event
@@ -261,4 +288,98 @@ package schemas
 		max_bytes_per_file: int & >=1048576 & <=1073741824 // 1 MiB .. 1 GiB
 		keep_files:         int & >=1 & <=20
 	}
+}
+
+// DDD role: ValueObject
+// #Stream identifies a standard I/O channel of a child process.
+// Used by #StreamChunk, #SubprocessSearchRequest, and #SearchMatch.
+#Stream: "stdout" | "stderr"
+
+// DDD role: ValueObject
+// #Order controls the traversal direction for paginated subprocess output per ADR-0057.
+// Tail (default) returns lines from the most-recent end; Head returns from the oldest end.
+#Order: "Tail" | "Head"
+
+// DDD role: ValueObject
+// #Pagination describes a single page of line-oriented subprocess output per ADR-0057.
+// Pagination is optional on subprocess.result and subprocess.search; absent means
+// the caller receives the full ring-buffer aggregate without line decomposition.
+#Pagination: {
+	// offset is the 0-based line offset from which to start the page.
+	// For order=Tail offset 0 = most-recent line; for order=Head offset 0 = oldest line.
+	offset: int & >=0
+
+	// page_size is the maximum number of lines to return in this page.
+	// Default 100; hard ceiling 10000.
+	page_size: int & >=1 & <=10000 | *100
+
+	// order controls traversal direction. Default Tail (most-recent-first).
+	order: #Order | *"Tail"
+}
+
+// DDD role: ValueObject
+// #SubprocessResultRequest is the value object submitted to subprocess.result
+// to retrieve the terminal output of a completed job per ADR-0057.
+// When pagination is absent the full ring-buffer aggregate (base64 blobs) is returned.
+// When pagination is set the line-decomposed fields (stdout_lines, stderr_lines, etc.) are
+// populated in #SubprocessResult and the aggregate blobs are omitted.
+#SubprocessResultRequest: {
+	// job_id identifies the target job.
+	job_id: string & =~"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+
+	// pagination, when present, enables line-based paged retrieval of captured output.
+	// Absent preserves original full-aggregate behavior.
+	pagination?: #Pagination
+}
+
+// DDD role: ValueObject
+// #SubprocessSearchRequest submits a regex search across captured subprocess output
+// per ADR-0057. Results are line-oriented and optionally paginated.
+#SubprocessSearchRequest: {
+	// job_id identifies the target job.
+	job_id: string & =~"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+
+	// pattern is the regex applied to each captured output line.
+	// Length: 1..1024 characters.
+	pattern: string & =~"^.{1,1024}$"
+
+	// streams limits search to the specified output channels.
+	// Default: both stdout and stderr.
+	streams: [...#Stream] | *["stdout", "stderr"]
+
+	// case_insensitive, when true, applies the regex in case-insensitive mode.
+	case_insensitive: bool | *false
+
+	// pagination, when present, enables paged retrieval of matching lines.
+	pagination?: #Pagination
+}
+
+// DDD role: ValueObject
+// #SearchMatch is a single line that matched the search pattern per ADR-0057.
+// line_number is 1-based and scoped per stream (stdout and stderr each start at 1).
+#SearchMatch: {
+	// stream identifies the output channel that produced the matching line.
+	stream: #Stream
+
+	// line_number is the 1-based line index within the identified stream.
+	line_number: int & >=1
+
+	// line_text is the raw text content of the matching line (newline excluded).
+	line_text: string
+}
+
+// DDD role: ValueObject
+// #SubprocessSearchResult is the response returned by subprocess.search per ADR-0057.
+// matches contains the page of #SearchMatch entries for this request; total_matches
+// reflects the full match count across all pages.
+#SubprocessSearchResult: {
+	// matches is the current page of matching lines.
+	matches: [...#SearchMatch]
+
+	// total_matches is the total number of lines matching the pattern across all pages.
+	total_matches: int & >=0
+
+	// next_offset, when present, is the pagination offset to pass in the next request
+	// to retrieve the subsequent page. Absent indicates the last page.
+	next_offset?: int & >=0
 }

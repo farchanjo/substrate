@@ -246,3 +246,21 @@ contract. The two amendments are coordinated: every byte saved here is
 supplemented by the skill body which loads inline only on matching turns
 (driven by `triggers:` covering the `mcp__substrate__` namespace plus
 dotted tool names).
+
+### 2026-05-24 — subprocess.search added as sixth subprocess tool (ADR-0057)
+
+[ADR-0057](0057-subprocess-output-pagination-and-search.md) adds
+`subprocess.search` as the sixth tool in the `subprocess` namespace. The tool
+provides regex full-text search over the stdout/stderr ring buffer retained by
+[ADR-0054](0054-subprocess-stream-multiplex.md).
+
+`subprocess.search` MUST carry the same `structuredContent.hints` entries
+required of all `subprocess.*` tools by the 2026-05-24 amendment above:
+`confirm_destructive: true` and `cascade_kill_pgid: true`. The description string
+follows the ≤100-char budget of the 2026-05-22 amendment.
+
+`subprocess.result` gains an optional `pagination` argument (per ADR-0057); its
+description string is updated to note optional line pagination while staying
+within the ≤100-char cap.
+
+Cross-reference: [ADR-0057](0057-subprocess-output-pagination-and-search.md).

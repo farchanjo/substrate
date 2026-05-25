@@ -447,3 +447,27 @@ configured `subprocess.tmp_root` cannot accidentally trigger disk persistence.
 - [ADR-0017](0017-concurrency-limits.md) — `subprocess.tmp_root` configuration key
 - [ADR-0040](0040-async-job-control-plane.md) — hints map extension for
   `subprocess_stdout_tmp_path` and `subprocess_stderr_tmp_path`
+
+### 2026-05-24 — Ring buffer is source of truth for pagination and search (ADR-0057)
+
+[ADR-0057](0057-subprocess-output-pagination-and-search.md) introduces line-based
+pagination on `subprocess.result` and a new `subprocess.search` tool. Both
+features read exclusively from the in-memory ring buffers defined in this ADR
+(the "Aggregate Retention Ring Buffer" section). No additional persistence layer
+is introduced.
+
+Key invariants that remain unchanged:
+
+- The ring buffer capacity bounds are unchanged: default 64 KiB per stream,
+  server cap 1 MiB per stream (`subprocess.aggregate_buffer_bytes_max`).
+- Newest-byte-wins eviction still applies; ADR-0057 pagination and search operate
+  on whatever bytes are currently retained in the buffer.
+- `stdout_aggregate_truncated` and `stderr_aggregate_truncated` flags remain
+  authoritative signals that the ring buffer overflowed during the job lifetime.
+  Agents SHOULD surface these flags when presenting paginated or search results to
+  indicate that earlier output was discarded.
+- The ring buffer is populated from the reader task directly and independently
+  of the mpsc channel; dropped mpsc chunks (backpressure) do NOT affect ring
+  buffer contents.
+
+Cross-reference: [ADR-0057](0057-subprocess-output-pagination-and-search.md).
