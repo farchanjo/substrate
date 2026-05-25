@@ -60,8 +60,20 @@ impl NetworkInfoPort for LinuxProcNetAdapter {
         req.validate()?;
 
         let mut entries = Vec::new();
-        parse_proc_net(Protocol::Tcp, AddrFamily::Inet, "/proc/net/tcp", &mut entries).await?;
-        parse_proc_net(Protocol::Tcp, AddrFamily::Inet6, "/proc/net/tcp6", &mut entries).await?;
+        parse_proc_net(
+            Protocol::Tcp,
+            AddrFamily::Inet,
+            "/proc/net/tcp",
+            &mut entries,
+        )
+        .await?;
+        parse_proc_net(
+            Protocol::Tcp,
+            AddrFamily::Inet6,
+            "/proc/net/tcp6",
+            &mut entries,
+        )
+        .await?;
 
         if let Some(ref filter) = req.state_filter {
             entries.retain(|e| filter.contains(&e.state));
@@ -87,8 +99,20 @@ impl NetworkInfoPort for LinuxProcNetAdapter {
         req.validate()?;
 
         let mut entries = Vec::new();
-        parse_proc_net(Protocol::Udp, AddrFamily::Inet, "/proc/net/udp", &mut entries).await?;
-        parse_proc_net(Protocol::Udp, AddrFamily::Inet6, "/proc/net/udp6", &mut entries).await?;
+        parse_proc_net(
+            Protocol::Udp,
+            AddrFamily::Inet,
+            "/proc/net/udp",
+            &mut entries,
+        )
+        .await?;
+        parse_proc_net(
+            Protocol::Udp,
+            AddrFamily::Inet6,
+            "/proc/net/udp6",
+            &mut entries,
+        )
+        .await?;
 
         if req.resolve_pid {
             resolve_pids(&mut entries).await;
@@ -136,10 +160,24 @@ impl NetworkInfoPort for LinuxProcNetAdapter {
 // ---- Internal helpers -------------------------------------------------------
 
 /// Collects every TCP entry (both IPv4 and IPv6) without pagination.
-async fn collect_all_tcp(adapter: &LinuxProcNetAdapter) -> Result<Vec<SocketEntry>, SubstrateError> {
+async fn collect_all_tcp(
+    adapter: &LinuxProcNetAdapter,
+) -> Result<Vec<SocketEntry>, SubstrateError> {
     let mut entries = Vec::new();
-    parse_proc_net(Protocol::Tcp, AddrFamily::Inet, "/proc/net/tcp", &mut entries).await?;
-    parse_proc_net(Protocol::Tcp, AddrFamily::Inet6, "/proc/net/tcp6", &mut entries).await?;
+    parse_proc_net(
+        Protocol::Tcp,
+        AddrFamily::Inet,
+        "/proc/net/tcp",
+        &mut entries,
+    )
+    .await?;
+    parse_proc_net(
+        Protocol::Tcp,
+        AddrFamily::Inet6,
+        "/proc/net/tcp6",
+        &mut entries,
+    )
+    .await?;
     Ok(entries)
 }
 
@@ -159,20 +197,19 @@ async fn parse_proc_net(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // tcp6/udp6 may not exist on kernels without IPv6 support.
             return Ok(());
-        }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             return Err(SubstrateError::PermissionDenied {
                 path: path.to_string(),
-                reason: "cannot read proc/net socket table".to_string(),
                 correlation_id: None,
             });
-        }
+        },
         Err(e) => {
             return Err(SubstrateError::InternalError {
                 reason: format!("read {path}: {e}"),
                 correlation_id: None,
             });
-        }
+        },
     };
 
     for line in content.lines().skip(1) {
@@ -180,7 +217,7 @@ async fn parse_proc_net(
             Ok(entry) => out.push(entry),
             Err(reason) => {
                 warn!(path, reason, "skipping malformed /proc/net line");
-            }
+            },
         }
     }
     Ok(())
@@ -250,8 +287,8 @@ fn parse_addr_port(raw: &str, family: AddrFamily) -> Result<(String, u16), Strin
         .split_once(':')
         .ok_or_else(|| format!("missing colon in addr:port field: {raw}"))?;
 
-    let port = u16::from_str_radix(port_hex, 16)
-        .map_err(|_| format!("bad port hex: {port_hex}"))?;
+    let port =
+        u16::from_str_radix(port_hex, 16).map_err(|_| format!("bad port hex: {port_hex}"))?;
 
     let addr = match family {
         AddrFamily::Inet => {
@@ -264,13 +301,10 @@ fn parse_addr_port(raw: &str, family: AddrFamily) -> Result<(String, u16), Strin
             // (little-endian), so we byte-swap to get network order (big-endian),
             // then build Ipv4Addr which expects big-endian u32.
             Ipv4Addr::from(raw_u32.swap_bytes()).to_string()
-        }
+        },
         AddrFamily::Inet6 => {
             if addr_hex.len() != 32 {
-                return Err(format!(
-                    "expected 32-char IPv6 hex, got {}",
-                    addr_hex.len()
-                ));
+                return Err(format!("expected 32-char IPv6 hex, got {}", addr_hex.len()));
             }
             // 32 chars = 4 × 8-char words, each little-endian u32.
             let mut words = [0u32; 4];
@@ -286,7 +320,7 @@ fn parse_addr_port(raw: &str, family: AddrFamily) -> Result<(String, u16), Strin
                 bytes[i * 4..(i + 1) * 4].copy_from_slice(&w.to_be_bytes());
             }
             Ipv6Addr::from(bytes).to_string()
-        }
+        },
     };
 
     Ok((addr, port))
@@ -423,7 +457,10 @@ async fn parse_snmp_stats() -> Result<TcpStats, SubstrateError> {
 ///
 /// Returns `(page, next_offset)`. When `pagination` is `None` the first 50
 /// entries are returned (default page size per ADR-0008).
-fn paginate(entries: Vec<SocketEntry>, pagination: Option<&Pagination>) -> (Vec<SocketEntry>, Option<u64>) {
+fn paginate(
+    entries: Vec<SocketEntry>,
+    pagination: Option<&Pagination>,
+) -> (Vec<SocketEntry>, Option<u64>) {
     let offset = pagination.map_or(0, |p| p.offset as usize);
     let page_size = pagination.map_or(50, |p| p.page_size as usize);
 
@@ -450,8 +487,8 @@ mod tests {
     #[test]
     fn ipv4_loopback_parses_correctly() {
         // 0100007F = 0x7F000001 byte-swapped = 127.0.0.1
-        let (addr, port) = parse_addr_port("0100007F:1F40", AddrFamily::Inet)
-            .expect("parse loopback");
+        let (addr, port) =
+            parse_addr_port("0100007F:1F40", AddrFamily::Inet).expect("parse loopback");
         assert_eq!(addr, "127.0.0.1");
         assert_eq!(port, 0x1F40); // 8000
     }
@@ -459,8 +496,7 @@ mod tests {
     #[test]
     fn ipv4_any_parses_correctly() {
         // 00000000:0000 = 0.0.0.0:0
-        let (addr, port) = parse_addr_port("00000000:0000", AddrFamily::Inet)
-            .expect("parse any");
+        let (addr, port) = parse_addr_port("00000000:0000", AddrFamily::Inet).expect("parse any");
         assert_eq!(addr, "0.0.0.0");
         assert_eq!(port, 0);
     }
@@ -468,8 +504,8 @@ mod tests {
     #[test]
     fn ipv4_non_loopback_parses_correctly() {
         // 0101A8C0 = 0xC0A80101 byte-swapped = 192.168.1.1
-        let (addr, _) = parse_addr_port("0101A8C0:0050", AddrFamily::Inet)
-            .expect("parse 192.168.1.1");
+        let (addr, _) =
+            parse_addr_port("0101A8C0:0050", AddrFamily::Inet).expect("parse 192.168.1.1");
         assert_eq!(addr, "192.168.1.1");
     }
 
@@ -479,8 +515,7 @@ mod tests {
     fn ipv6_loopback_parses_correctly() {
         // All-zero except last word which is 0x01000000 → after swap = 0x00000001 → ::1
         let raw = "00000000000000000000000001000000:0050";
-        let (addr, port) = parse_addr_port(raw, AddrFamily::Inet6)
-            .expect("parse ::1");
+        let (addr, port) = parse_addr_port(raw, AddrFamily::Inet6).expect("parse ::1");
         assert_eq!(addr, "::1");
         assert_eq!(port, 80);
     }
@@ -488,8 +523,7 @@ mod tests {
     #[test]
     fn ipv6_any_parses_correctly() {
         let raw = "00000000000000000000000000000000:0000";
-        let (addr, port) = parse_addr_port(raw, AddrFamily::Inet6)
-            .expect("parse ::");
+        let (addr, port) = parse_addr_port(raw, AddrFamily::Inet6).expect("parse ::");
         assert_eq!(addr, "::");
         assert_eq!(port, 0);
     }
@@ -500,8 +534,8 @@ mod tests {
     fn proc_net_tcp_listen_line_parses() {
         // Real-world /proc/net/tcp line for a listening socket on port 22.
         let line = "   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 12345 1 0000000000000000 100 0 0 10 0";
-        let entry = parse_proc_net_line(line, Protocol::Tcp, AddrFamily::Inet)
-            .expect("parse listen line");
+        let entry =
+            parse_proc_net_line(line, Protocol::Tcp, AddrFamily::Inet).expect("parse listen line");
         assert_eq!(entry.local_addr, "0.0.0.0");
         assert_eq!(entry.local_port, 22);
         assert_eq!(entry.state, TcpState::Listen);

@@ -17,7 +17,10 @@
 // This crate wraps raw OS syscalls on macOS; unsafe blocks are required by
 // design for sysctl / struct-cast FFI. Each unsafe block carries a SAFETY
 // comment justifying the invariants upheld (ADR-0042, ADR-0044, ADR-0058).
-#![allow(unsafe_code, reason = "macOS sysctl + struct-cast FFI per ADR-0058/ADR-0042/ADR-0044")]
+#![allow(
+    unsafe_code,
+    reason = "macOS sysctl + struct-cast FFI per ADR-0058/ADR-0042/ADR-0044"
+)]
 
 pub mod factory;
 pub mod state;

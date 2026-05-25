@@ -60,7 +60,7 @@ impl NetworkInfoFactory {
             let port: Arc<dyn NetworkInfoPort> = match tier {
                 NetworkInfoTier::MacosSysctl => {
                     Arc::new(crate::macos::MacosSysctlAdapter::default())
-                }
+                },
                 _ => Arc::new(NoopNetworkInfoPort::default()),
             };
             info!(
@@ -109,7 +109,10 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         assert!(
-            matches!(tier, NetworkInfoTier::MacosSysctl | NetworkInfoTier::Unsupported),
+            matches!(
+                tier,
+                NetworkInfoTier::MacosSysctl | NetworkInfoTier::Unsupported
+            ),
             "macOS should select MacosSysctl or Unsupported, got {tier:?}",
         );
 
