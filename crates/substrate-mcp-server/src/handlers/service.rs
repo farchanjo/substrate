@@ -227,19 +227,13 @@ fn schema_subprocess_cancel() -> std::sync::Arc<serde_json::Map<String, serde_js
     }))
 }
 
-/// Reusable pagination sub-schema object referenced by both `subprocess_result`
-/// and `subprocess_search` schemas.
+/// Reusable pagination sub-schema object for subprocess tools.
+///
+/// Delegates to [`pagination_schema_object_unconditional`] so the canonical
+/// shape (bounds, defaults, `order` enum) is defined in one place.
 #[cfg(feature = "subprocess")]
 fn pagination_schema_object() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "offset": { "type": "integer", "minimum": 0, "default": 0, "description": "0-based line offset for the requested page." },
-            "page_size": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 100, "description": "Lines to return per page." },
-            "order": { "type": "string", "enum": ["Tail", "Head"], "default": "Tail", "description": "Tail = newest first; Head = oldest first." }
-        },
-        "additionalProperties": false
-    })
+    pagination_schema_object_unconditional()
 }
 
 #[cfg(feature = "subprocess")]
@@ -295,11 +289,16 @@ fn schema_subprocess_signal() -> std::sync::Arc<serde_json::Map<String, serde_js
     }))
 }
 
-/// Pagination sub-schema shared by network list tools.
+/// Reusable pagination sub-schema shared by all paginated tools (network and subprocess).
 ///
-/// Produces the same cursor-based shape as the subprocess pagination schema so
-/// callers can use a single mental model for all paginated tools.
-fn net_pagination_schema_object() -> serde_json::Value {
+/// Shape matches [`substrate_domain::subprocess::pagination::Pagination`]:
+/// - `offset`: 0-based line/entry offset (default 0).
+/// - `page_size`: entries per page, range 1..=10 000 (default 100).
+/// - `order`: `"Tail"` (newest-first, default) or `"Head"` (oldest-first).
+///
+/// Not `#[cfg(feature = "subprocess")]`-gated because network tools are always-on
+/// and share the same [`Pagination`] domain type.
+fn pagination_schema_object_unconditional() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
@@ -312,9 +311,15 @@ fn net_pagination_schema_object() -> serde_json::Value {
             "page_size": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 500,
-                "default": 50,
+                "maximum": 10000,
+                "default": 100,
                 "description": "Entries to return per page."
+            },
+            "order": {
+                "type": "string",
+                "enum": ["Tail", "Head"],
+                "default": "Tail",
+                "description": "Tail = newest first; Head = oldest first."
             }
         },
         "additionalProperties": false
@@ -356,7 +361,7 @@ fn schema_net_tcp_list() -> std::sync::Arc<serde_json::Map<String, serde_json::V
                 "default": false,
                 "description": "Attempt PID resolution for each socket entry."
             },
-            "pagination": net_pagination_schema_object()
+            "pagination": pagination_schema_object_unconditional()
         },
         "additionalProperties": false
     }))
@@ -371,7 +376,7 @@ fn schema_net_udp_list() -> std::sync::Arc<serde_json::Map<String, serde_json::V
                 "default": false,
                 "description": "Attempt PID resolution for each socket entry."
             },
-            "pagination": net_pagination_schema_object()
+            "pagination": pagination_schema_object_unconditional()
         },
         "additionalProperties": false
     }))
