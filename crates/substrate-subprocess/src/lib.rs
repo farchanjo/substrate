@@ -50,7 +50,7 @@ pub mod watchdog;
 
 pub use health_probe::{ProbeOutcome, run_probe};
 pub use orphan_reaper::{ReaperStats, run_once as run_orphan_reaper_once};
-pub use registry::SubprocessRegistry;
+pub use registry::{SubprocessRegistry, paginate_lines};
 
 use substrate_domain::ports::subprocess::SubprocessPort;
 /// Alias confirming that [`SubprocessRegistry`] implements the inbound port.

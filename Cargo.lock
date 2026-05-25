@@ -2533,6 +2533,7 @@ dependencies = [
  "libc",
  "nix",
  "proptest",
+ "regex",
  "rstest",
  "serde",
  "substrate-domain",

@@ -34,6 +34,7 @@ use substrate_domain::ports::stream_observer::StreamChunkObserver;
 use substrate_domain::ports::subprocess::{
     SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName,
 };
+use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
 use substrate_domain::subprocess::errors::SubprocessError;
 use substrate_domain::subprocess::handle::SubprocessHandle;
 use substrate_domain::subprocess::request::{CaptureKind, SubprocessRequest};
@@ -1156,6 +1157,15 @@ impl SubprocessPort for SubprocessRegistry {
             stdout_bytes_total: stdout_total,
             stderr_bytes_total: stderr_total,
             terminal_at: time::OffsetDateTime::now_utc(),
+            // Pagination fields (ADR-0057): populated by the adapter when
+            // SubprocessResultRequest includes a pagination cursor. Absent here
+            // until the adapter implementation lands (TODO ADR-0057).
+            stdout_lines: None,
+            stdout_total_lines: None,
+            stdout_next_offset: None,
+            stderr_lines: None,
+            stderr_total_lines: None,
+            stderr_next_offset: None,
         })
     }
 
@@ -1195,6 +1205,188 @@ impl SubprocessPort for SubprocessRegistry {
         };
 
         Self::do_signal(handle.process_group, signal_name, target)
+    }
+
+    /// Searches subprocess output lines by regex pattern per ADR-0057.
+    ///
+    /// Reads the stdout and/or stderr ring buffers, splits them into lines,
+    /// applies the compiled regex, and returns paginated `SearchMatch` results.
+    ///
+    /// # Errors
+    ///
+    /// - `SubprocessError::InvalidRequest` — invalid regex or pagination params.
+    /// - `SubprocessError::JobNotFound` — no live handle for `req.job_id`.
+    async fn search(
+        &self,
+        req: SubprocessSearchRequest,
+    ) -> Result<SubprocessSearchResult, SubprocessError> {
+        req.validate()?;
+
+        // Resolve the live handle. `SubprocessError` has no dedicated `JobNotFound`
+        // variant; fall back to `InvalidRequest` so callers get a stable error code.
+        // The MCP handler maps this to `SubstrateError::InternalError` with a
+        // descriptive message; agents can inspect `structured_content.error.message`.
+        let handle_arc = {
+            let guard = self
+                .handles
+                .get(&req.job_id)
+                .ok_or_else(|| SubprocessError::InvalidRequest {
+                    msg: format!("job_id not found: {}", req.job_id),
+                })?;
+            Arc::clone(guard.value())
+        };
+
+        // Compile the regex.
+        let regex = regex::RegexBuilder::new(&req.pattern)
+            .case_insensitive(req.case_insensitive)
+            .build()
+            .map_err(|e| SubprocessError::InvalidRequest {
+                msg: format!("invalid regex: {e}"),
+            })?;
+
+        // Collect matches across requested streams in declaration order.
+        let mut all_matches: Vec<substrate_domain::subprocess::pagination::SearchMatch> =
+            Vec::new();
+        for stream in &req.streams {
+            let ring_text = match stream {
+                substrate_domain::subprocess::stream::Stream::Stdout => {
+                    let ring = handle_arc.stdout_ring.lock().await;
+                    String::from_utf8_lossy(ring.as_bytes()).into_owned()
+                },
+                substrate_domain::subprocess::stream::Stream::Stderr => {
+                    let ring = handle_arc.stderr_ring.lock().await;
+                    String::from_utf8_lossy(ring.as_bytes()).into_owned()
+                },
+            };
+            for (idx, line) in ring_text.lines().enumerate() {
+                if regex.is_match(line) {
+                    all_matches.push(substrate_domain::subprocess::pagination::SearchMatch {
+                        stream: *stream,
+                        line_number: (idx as u64).saturating_add(1),
+                        line_text: line.to_owned(),
+                    });
+                }
+            }
+        }
+
+        let total_matches = all_matches.len() as u64;
+
+        // Apply pagination.
+        let pagination = req.pagination.unwrap_or_default();
+        let (page, next_offset) = paginate_matches(&all_matches, &pagination);
+
+        Ok(SubprocessSearchResult {
+            matches: page,
+            total_matches,
+            next_offset,
+        })
+    }
+}
+
+// ---- Pagination helpers (ADR-0057) ------------------------------------------
+
+/// Splits `text` into lines and returns a paginated page, the total line count,
+/// and the `next_offset` (if more lines remain).
+///
+/// - `Order::Tail` (default): line slice is taken from the end of the buffer so
+///   the newest lines are returned first when `offset == 0`.  The slice is reversed
+///   so that index 0 in the returned `Vec` is the most-recent line.
+/// - `Order::Head`: lines are returned in chronological (oldest-first) order.
+///
+/// Trailing empty elements produced by a trailing `\n` are stripped before slicing
+/// so that `"foo\nbar\n"` is treated as two lines, not three.
+#[must_use]
+pub fn paginate_lines(
+    text: &str,
+    p: &substrate_domain::subprocess::pagination::Pagination,
+) -> (Vec<String>, u64, Option<u64>) {
+    use substrate_domain::subprocess::pagination::Order;
+
+    let mut lines: Vec<&str> = text.lines().collect();
+    // `str::lines()` strips trailing newlines already — no additional trim needed.
+    // Remove a trailing empty string that can arise from a `\n`-terminated buffer
+    // when `split('\n')` is used instead of `lines()`, but `lines()` handles it.
+    let total = lines.len() as u64;
+
+    if total == 0 {
+        return (Vec::new(), 0, None);
+    }
+
+    let offset = p.offset;
+    let page_size = u64::from(p.page_size);
+
+    match p.order {
+        Order::Tail => {
+            // Reverse the slice so newest (last) is at index 0.
+            lines.reverse();
+            let start = (offset as usize).min(lines.len());
+            let end = (start + page_size as usize).min(lines.len());
+            let page: Vec<String> = lines[start..end].iter().map(|s| (*s).to_owned()).collect();
+            let next_offset = if end < lines.len() {
+                Some(offset + page_size)
+            } else {
+                None
+            };
+            (page, total, next_offset)
+        },
+        Order::Head => {
+            let start = (offset as usize).min(lines.len());
+            let end = (start + page_size as usize).min(lines.len());
+            let page: Vec<String> = lines[start..end].iter().map(|s| (*s).to_owned()).collect();
+            let next_offset = if end < lines.len() {
+                Some(offset + page_size)
+            } else {
+                None
+            };
+            (page, total, next_offset)
+        },
+    }
+}
+
+/// Applies pagination to a slice of `SearchMatch` entries.
+///
+/// Returns `(page, next_offset)` without the total because total is tracked
+/// separately from the full match set count before slicing.
+#[must_use]
+fn paginate_matches(
+    matches: &[substrate_domain::subprocess::pagination::SearchMatch],
+    p: &substrate_domain::subprocess::pagination::Pagination,
+) -> (Vec<substrate_domain::subprocess::pagination::SearchMatch>, Option<u64>) {
+    use substrate_domain::subprocess::pagination::Order;
+
+    let total = matches.len();
+    if total == 0 {
+        return (Vec::new(), None);
+    }
+
+    let offset = p.offset as usize;
+    let page_size = p.page_size as usize;
+
+    match p.order {
+        Order::Tail => {
+            // Reverse: newest match (highest index) at position 0.
+            let reversed: Vec<_> = matches.iter().rev().collect();
+            let start = offset.min(reversed.len());
+            let end = (start + page_size).min(reversed.len());
+            let page = reversed[start..end].iter().map(|m| (*m).clone()).collect();
+            let next_offset = if end < reversed.len() {
+                Some((offset + page_size) as u64)
+            } else {
+                None
+            };
+            (page, next_offset)
+        },
+        Order::Head => {
+            let start = offset.min(total);
+            let end = (start + page_size).min(total);
+            let page = matches[start..end].to_vec();
+            let next_offset = if end < total {
+                Some((offset + page_size) as u64)
+            } else {
+                None
+            };
+            (page, next_offset)
+        },
     }
 }
 
@@ -1245,6 +1437,8 @@ pub fn deny_all_registry(
 
 #[cfg(test)]
 mod tests {
+    use substrate_domain::subprocess::pagination::{Order, Pagination};
+
     use super::*;
 
     #[test]
@@ -1384,5 +1578,113 @@ mod tests {
             "snapshot_handle must return Succeeded after /bin/sh -c 'exit 0' exits; got {:?}",
             snapshot.state
         );
+    }
+
+    // ---- paginate_lines unit tests (ADR-0057) --------------------------------
+
+    #[test]
+    fn paginate_lines_empty_text_returns_empty() {
+        let p = Pagination::default();
+        let (page, total, next) = paginate_lines("", &p);
+        assert!(page.is_empty());
+        assert_eq!(total, 0);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn paginate_lines_tail_first_page() {
+        // 5 lines; default page_size 100 — all returned in reverse (newest first).
+        let text = "line1\nline2\nline3\nline4\nline5";
+        let p = Pagination {
+            offset: 0,
+            page_size: 100,
+            order: Order::Tail,
+        };
+        let (page, total, next) = paginate_lines(text, &p);
+        assert_eq!(total, 5);
+        assert_eq!(page[0], "line5", "Tail order must return newest line first");
+        assert_eq!(page[4], "line1");
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn paginate_lines_tail_pagination_returns_next_offset() {
+        let text = "a\nb\nc\nd\ne";
+        let p = Pagination {
+            offset: 0,
+            page_size: 2,
+            order: Order::Tail,
+        };
+        let (page, total, next) = paginate_lines(text, &p);
+        assert_eq!(total, 5);
+        assert_eq!(page, vec!["e", "d"]);
+        assert_eq!(next, Some(2));
+    }
+
+    #[test]
+    fn paginate_lines_tail_second_page() {
+        let text = "a\nb\nc\nd\ne";
+        let p = Pagination {
+            offset: 2,
+            page_size: 2,
+            order: Order::Tail,
+        };
+        let (page, _total, next) = paginate_lines(text, &p);
+        assert_eq!(page, vec!["c", "b"]);
+        assert_eq!(next, Some(4));
+    }
+
+    #[test]
+    fn paginate_lines_tail_last_page_has_no_next() {
+        let text = "a\nb\nc\nd\ne";
+        let p = Pagination {
+            offset: 4,
+            page_size: 2,
+            order: Order::Tail,
+        };
+        let (page, _total, next) = paginate_lines(text, &p);
+        assert_eq!(page, vec!["a"]);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn paginate_lines_head_first_page() {
+        let text = "a\nb\nc\nd\ne";
+        let p = Pagination {
+            offset: 0,
+            page_size: 3,
+            order: Order::Head,
+        };
+        let (page, total, next) = paginate_lines(text, &p);
+        assert_eq!(total, 5);
+        assert_eq!(page, vec!["a", "b", "c"]);
+        assert_eq!(next, Some(3));
+    }
+
+    #[test]
+    fn paginate_lines_head_second_page() {
+        let text = "a\nb\nc\nd\ne";
+        let p = Pagination {
+            offset: 3,
+            page_size: 3,
+            order: Order::Head,
+        };
+        let (page, _total, next) = paginate_lines(text, &p);
+        assert_eq!(page, vec!["d", "e"]);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn paginate_lines_offset_beyond_total_returns_empty() {
+        let text = "a\nb";
+        let p = Pagination {
+            offset: 100,
+            page_size: 10,
+            order: Order::Head,
+        };
+        let (page, total, next) = paginate_lines(text, &p);
+        assert_eq!(total, 2);
+        assert!(page.is_empty());
+        assert!(next.is_none());
     }
 }
