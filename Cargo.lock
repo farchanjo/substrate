@@ -2456,6 +2456,7 @@ dependencies = [
  "substrate-fs-mutation",
  "substrate-fs-query",
  "substrate-jobs",
+ "substrate-network-info",
  "substrate-policy",
  "substrate-process",
  "substrate-signal-sys",
@@ -2472,6 +2473,20 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "substrate-network-info"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "serde",
+ "substrate-domain",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

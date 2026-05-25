@@ -1,0 +1,24 @@
+[package]
+name = "substrate-network-info"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Network socket introspection adapter for the network-info BC (ADR-0058). macOS sysctl pcblist_n + Linux /proc/net parser. Zero shell-out."
+
+[lints]
+workspace = true
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+libc = "0.2"
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
