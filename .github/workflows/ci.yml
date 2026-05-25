@@ -240,7 +240,7 @@ jobs:
           restore-keys: mise-${{ runner.os }}-
 
       - name: Install mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
 
       - name: Install spec framework (best-effort)
         run: |
