@@ -108,7 +108,87 @@ fn schema_subprocess_spawn() -> std::sync::Arc<serde_json::Map<String, serde_jso
             "capture_kind": { "type": "string", "enum": ["stream", "in_memory", "tmp_file"] },
             "timeout_secs": { "type": "integer", "minimum": 1, "maximum": 86400 },
             "idempotency_key": { "type": "string", "description": "Optional UUIDv7 in Crockford base32 (26 chars) or hyphenated UUID." },
-            "elicitation_confirmed": { "type": "boolean", "description": "Must be true. ADR-0052 requires explicit confirmation for every spawn." }
+            "elicitation_confirmed": { "type": "boolean", "description": "Must be true. ADR-0052 requires explicit confirmation for every spawn." },
+            "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]{1,64}$",
+                "description": "ADR-0056 supervisor alias. Idempotent re-spawn: spawn with existing non-terminal name returns the existing handle."
+            },
+            "restart_policy": {
+                "oneOf": [
+                    { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "Never" } } },
+                    {
+                        "type": "object",
+                        "required": ["kind", "max_retries", "backoff_ms"],
+                        "properties": {
+                            "kind": { "const": "OnFailure" },
+                            "max_retries": { "type": "integer", "minimum": 1, "maximum": 100 },
+                            "backoff_ms": { "type": "integer", "minimum": 100, "maximum": 300000 }
+                        }
+                    },
+                    {
+                        "type": "object",
+                        "required": ["kind", "backoff_ms"],
+                        "properties": {
+                            "kind": { "const": "Always" },
+                            "backoff_ms": { "type": "integer", "minimum": 100, "maximum": 300000 }
+                        }
+                    }
+                ],
+                "description": "ADR-0056 restart policy controlling supervisor re-spawn on child exit."
+            },
+            "health_probe": {
+                "oneOf": [
+                    { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "None" } } },
+                    {
+                        "type": "object",
+                        "required": ["kind", "url", "expected_status", "interval_ms", "startup_grace_ms"],
+                        "properties": {
+                            "kind": { "const": "HttpGet" },
+                            "url": { "type": "string", "pattern": "^https?://" },
+                            "expected_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+                            "interval_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
+                            "startup_grace_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+                        }
+                    },
+                    {
+                        "type": "object",
+                        "required": ["kind", "host", "port", "interval_ms", "startup_grace_ms"],
+                        "properties": {
+                            "kind": { "const": "PortOpen" },
+                            "host": { "type": "string" },
+                            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                            "interval_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
+                            "startup_grace_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+                        }
+                    },
+                    {
+                        "type": "object",
+                        "required": ["kind", "regex", "timeout_ms"],
+                        "properties": {
+                            "kind": { "const": "LogPattern" },
+                            "regex": { "type": "string", "minLength": 1 },
+                            "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 }
+                        }
+                    }
+                ],
+                "description": "ADR-0056 health probe gating Starting -> Ready transition. None = Ready immediately."
+            },
+            "log_rotation": {
+                "oneOf": [
+                    { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "None" } } },
+                    {
+                        "type": "object",
+                        "required": ["kind", "max_bytes_per_file", "keep_files"],
+                        "properties": {
+                            "kind": { "const": "BySize" },
+                            "max_bytes_per_file": { "type": "integer", "minimum": 1048576, "maximum": 1073741824 },
+                            "keep_files": { "type": "integer", "minimum": 1, "maximum": 20 }
+                        }
+                    }
+                ],
+                "description": "ADR-0056 log rotation for capture_kind=tmp_file. Cumulative cap = max_bytes_per_file * keep_files."
+            }
         },
         "additionalProperties": false
     }))
@@ -123,7 +203,7 @@ fn schema_subprocess_list() -> std::sync::Arc<serde_json::Map<String, serde_json
                 "type": "array",
                 "items": {
                     "type": "string",
-                    "enum": ["pending", "running", "succeeded", "failed", "cancelled", "timed_out"]
+                    "enum": ["pending", "starting", "running", "ready", "restarting", "succeeded", "failed", "cancelled", "timed_out", "killed"]
                 }
             },
             "page_cursor": { "type": "string" },
