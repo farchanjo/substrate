@@ -260,7 +260,7 @@ pub(crate) async fn wire(
         // spec'd constructor parameter. We adapt: call `new` then chain
         // `with_tmp_root` when a tmp_root is available.
         let registry_base = substrate_subprocess::registry::SubprocessRegistry::new(
-            substrate_subprocess::registry::BinaryAllowlist::deny_all(),
+            substrate_subprocess::registry::BinaryAllowlist::new(subprocess_cfg.binary_allowlist.clone()),
             Vec::new(),
             subprocess_cfg.max_per_client,
             subprocess_cfg.max_concurrent,
@@ -269,11 +269,21 @@ pub(crate) async fn wire(
             path_allowlist_clone,
             shutdown_token.child_token(),
         );
-        let registry = if let Some(root) = tmp_root {
+        let registry_with_tmp = if let Some(root) = tmp_root {
             registry_base.with_tmp_root(root)
         } else {
             registry_base
         };
+        // Wire the RmcpStreamNotifier observer (Observer + Mediator pattern per
+        // ADR-0054 and arch review). Shares the late-bound peer with
+        // `RmcpPeerNotifier` so both job-progress and stream-chunk events flow
+        // over the same `Peer<RoleServer>` after `initialize`.
+        let stream_observer: std::sync::Arc<
+            dyn substrate_domain::ports::stream_observer::StreamChunkObserver,
+        > = std::sync::Arc::new(
+            crate::handlers::rmcp_stream_notifier::RmcpStreamNotifier::new(Arc::clone(&notifier)),
+        );
+        let registry = registry_with_tmp.with_observers(vec![stream_observer]);
         let port_a: std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort> =
             Arc::clone(&registry)
                 as std::sync::Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>;
