@@ -67,6 +67,118 @@ fn schema_empty() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> 
     rmcp::handler::server::common::schema_for_empty_input()
 }
 
+/// Converts a `serde_json::Value::Object` into the `Arc<Map>` form rmcp expects
+/// for `Tool::new`'s input schema parameter.
+#[cfg(feature = "subprocess")]
+fn schema_from_json(
+    value: serde_json::Value,
+) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    let map = value
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    std::sync::Arc::new(map)
+}
+
+#[cfg(feature = "subprocess")]
+fn schema_subprocess_spawn() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["binary_path", "cwd", "stdin_kind", "capture_kind", "elicitation_confirmed"],
+        "properties": {
+            "binary_path": { "type": "string", "description": "Absolute path to allowlisted binary." },
+            "args": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "env_allowlist": { "type": "array", "items": { "type": "string" }, "default": [] },
+            "env_override": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "default": {}
+            },
+            "cwd": { "type": "string", "description": "Absolute working directory inside PathJail." },
+            "stdin_kind": {
+                "oneOf": [
+                    { "type": "string", "enum": ["none", "piped"] },
+                    {
+                        "type": "object",
+                        "required": ["file_path"],
+                        "properties": { "file_path": { "type": "string" } }
+                    }
+                ]
+            },
+            "capture_kind": { "type": "string", "enum": ["stream", "in_memory", "tmp_file"] },
+            "timeout_secs": { "type": "integer", "minimum": 1, "maximum": 86400 },
+            "idempotency_key": { "type": "string", "description": "Optional UUIDv7 in Crockford base32 (26 chars) or hyphenated UUID." },
+            "elicitation_confirmed": { "type": "boolean", "description": "Must be true. ADR-0052 requires explicit confirmation for every spawn." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "subprocess")]
+fn schema_subprocess_list() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    schema_from_json(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "state_filter": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["pending", "running", "succeeded", "failed", "cancelled", "timed_out"]
+                }
+            },
+            "page_cursor": { "type": "string" },
+            "page_size": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 },
+            "client_id": { "type": "string" }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "subprocess")]
+fn schema_subprocess_cancel() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["job_id"],
+        "properties": {
+            "job_id": { "type": "string", "description": "UUIDv7 in Crockford base32 (26 chars) or hyphenated UUID." },
+            "force": { "type": "boolean", "default": false, "description": "Skip SIGTERM drain and send SIGKILL immediately." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "subprocess")]
+fn schema_subprocess_result() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["job_id"],
+        "properties": {
+            "job_id": { "type": "string" },
+            "wait_ms": { "type": "integer", "minimum": 0, "default": 0, "description": "Long-poll timeout in milliseconds." },
+            "include_aggregates": { "type": "boolean", "default": true }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "subprocess")]
+fn schema_subprocess_signal() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["job_id", "signal"],
+        "properties": {
+            "job_id": { "type": "string" },
+            "signal": {
+                "type": "string",
+                "enum": ["SIGHUP", "SIGINT", "SIGTERM", "SIGKILL", "SIGSTOP", "SIGCONT", "SIGUSR1", "SIGUSR2"]
+            },
+            "target": { "type": "string", "enum": ["process", "process_group"], "default": "process_group" },
+            "elicitation_confirmed": { "type": "boolean", "default": false, "description": "Required true for SIGKILL/SIGTERM/SIGSTOP." }
+        },
+        "additionalProperties": false
+    }))
+}
+
 /// Thin MCP tool descriptions per ADR-0007 amendment 2026-05-22 (MCP + skill synergy).
 ///
 /// Each description is <= 100 chars. Full lookup reference (buckets, errors,
@@ -235,6 +347,33 @@ mod descriptions {
     pub(super) const fn job_list() -> &'static str {
         "List async jobs for the current session, paginated. See substrate skill."
     }
+
+    // ---- subprocess (feature-gated) -----------------------------------------
+
+    #[cfg(feature = "subprocess")]
+    pub(super) const fn subprocess_spawn() -> &'static str {
+        "Spawn supervised child process from allowlisted binary. Destructive — needs elicitation_confirmed. See substrate skill."
+    }
+
+    #[cfg(feature = "subprocess")]
+    pub(super) const fn subprocess_list() -> &'static str {
+        "List live subprocess handles for the current client, paginated. See substrate skill."
+    }
+
+    #[cfg(feature = "subprocess")]
+    pub(super) const fn subprocess_cancel() -> &'static str {
+        "Cancel a running subprocess (SIGTERM drain → SIGKILL). See substrate skill."
+    }
+
+    #[cfg(feature = "subprocess")]
+    pub(super) const fn subprocess_result() -> &'static str {
+        "Retrieve terminal result, exit code, and captured output of a subprocess. See substrate skill."
+    }
+
+    #[cfg(feature = "subprocess")]
+    pub(super) const fn subprocess_signal() -> &'static str {
+        "Send POSIX signal to subprocess or its process group. KILL/TERM/STOP need elicitation_confirmed. See substrate skill."
+    }
 }
 
 // Job control-plane request types used for schemars schema generation (Task A).
@@ -385,6 +524,37 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
         make::<JobResultRequest>("job_result", descriptions::job_result()),
         make::<JobCancelRequest>("job_cancel", descriptions::job_cancel()),
         make::<JobListRequest>("job_list", descriptions::job_list()),
+        // ---- subprocess BC (feature-gated) -----------------------------------
+        #[cfg(feature = "subprocess")]
+        Tool::new(
+            "subprocess_spawn",
+            descriptions::subprocess_spawn(),
+            schema_subprocess_spawn(),
+        ),
+        #[cfg(feature = "subprocess")]
+        Tool::new(
+            "subprocess_list",
+            descriptions::subprocess_list(),
+            schema_subprocess_list(),
+        ),
+        #[cfg(feature = "subprocess")]
+        Tool::new(
+            "subprocess_cancel",
+            descriptions::subprocess_cancel(),
+            schema_subprocess_cancel(),
+        ),
+        #[cfg(feature = "subprocess")]
+        Tool::new(
+            "subprocess_result",
+            descriptions::subprocess_result(),
+            schema_subprocess_result(),
+        ),
+        #[cfg(feature = "subprocess")]
+        Tool::new(
+            "subprocess_signal",
+            descriptions::subprocess_signal(),
+            schema_subprocess_signal(),
+        ),
     ]
 }
 
@@ -1133,14 +1303,15 @@ mod tests {
     #[test]
     fn tool_registry_count() {
         // 5 fs-query + 8 fs-mutation + 3 process + 6 sys-info + 4 text +
-        // 7 archive + 4 job = 37.  The dispatch match arms in `dispatcher.rs`
-        // define the authoritative count; this test pins parity between the
-        // registry and the dispatcher.
+        // 7 archive + 4 job = 37 base. +5 subprocess when feature enabled = 42.
+        // The dispatch match arms in `dispatcher.rs` define the authoritative
+        // count; this test pins parity between the registry and the dispatcher.
         let tools = tool_registry();
+        let expected = if cfg!(feature = "subprocess") { 42 } else { 37 };
         assert_eq!(
             tools.len(),
-            37,
-            "registry/dispatcher parity check failed: found {} tools, expected 37",
+            expected,
+            "registry/dispatcher parity check failed: found {} tools, expected {expected}",
             tools.len()
         );
     }
