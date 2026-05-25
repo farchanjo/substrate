@@ -227,6 +227,21 @@ fn schema_subprocess_cancel() -> std::sync::Arc<serde_json::Map<String, serde_js
     }))
 }
 
+/// Reusable pagination sub-schema object referenced by both `subprocess_result`
+/// and `subprocess_search` schemas.
+#[cfg(feature = "subprocess")]
+fn pagination_schema_object() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "offset": { "type": "integer", "minimum": 0, "default": 0, "description": "0-based line offset for the requested page." },
+            "page_size": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 100, "description": "Lines to return per page." },
+            "order": { "type": "string", "enum": ["Tail", "Head"], "default": "Tail", "description": "Tail = newest first; Head = oldest first." }
+        },
+        "additionalProperties": false
+    })
+}
+
 #[cfg(feature = "subprocess")]
 fn schema_subprocess_result() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
     schema_from_json(serde_json::json!({
@@ -235,7 +250,28 @@ fn schema_subprocess_result() -> std::sync::Arc<serde_json::Map<String, serde_js
         "properties": {
             "job_id": { "type": "string" },
             "wait_ms": { "type": "integer", "minimum": 0, "default": 0, "description": "Long-poll timeout in milliseconds." },
-            "include_aggregates": { "type": "boolean", "default": true }
+            "include_aggregates": { "type": "boolean", "default": true },
+            "pagination": pagination_schema_object()
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "subprocess")]
+fn schema_subprocess_search() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["job_id", "pattern"],
+        "properties": {
+            "job_id": { "type": "string", "description": "UUIDv7 of the subprocess to search." },
+            "pattern": { "type": "string", "minLength": 1, "maxLength": 1024, "description": "RE2-compatible regular expression." },
+            "streams": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["Stdout", "Stderr"] },
+                "default": ["Stdout", "Stderr"]
+            },
+            "case_insensitive": { "type": "boolean", "default": false },
+            "pagination": pagination_schema_object()
         },
         "additionalProperties": false
     }))
@@ -454,6 +490,11 @@ mod descriptions {
     pub(super) const fn subprocess_signal() -> &'static str {
         "Send POSIX signal to subprocess or its process group. KILL/TERM/STOP need elicitation_confirmed. See substrate skill."
     }
+
+    #[cfg(feature = "subprocess")]
+    pub(super) const fn subprocess_search() -> &'static str {
+        "Regex search over captured subprocess stdout/stderr with pagination. Returns matching lines and total count. See substrate skill."
+    }
 }
 
 // Job control-plane request types used for schemars schema generation (Task A).
@@ -634,6 +675,12 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             "subprocess_signal",
             descriptions::subprocess_signal(),
             schema_subprocess_signal(),
+        ),
+        #[cfg(feature = "subprocess")]
+        Tool::new(
+            "subprocess_search",
+            descriptions::subprocess_search(),
+            schema_subprocess_search(),
         ),
     ]
 }
@@ -1383,11 +1430,11 @@ mod tests {
     #[test]
     fn tool_registry_count() {
         // 5 fs-query + 8 fs-mutation + 3 process + 6 sys-info + 4 text +
-        // 7 archive + 4 job = 37 base. +5 subprocess when feature enabled = 42.
+        // 7 archive + 4 job = 37 base. +6 subprocess when feature enabled = 43.
         // The dispatch match arms in `dispatcher.rs` define the authoritative
         // count; this test pins parity between the registry and the dispatcher.
         let tools = tool_registry();
-        let expected = if cfg!(feature = "subprocess") { 42 } else { 37 };
+        let expected = if cfg!(feature = "subprocess") { 43 } else { 37 };
         assert_eq!(
             tools.len(),
             expected,

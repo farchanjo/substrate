@@ -24,6 +24,7 @@ use substrate_domain::{
     SubstrateError, SubstrateResult,
     ports::subprocess::{CancelSignal, SignalTarget, SubprocessSignalName},
     subprocess::errors::SubprocessError,
+    subprocess::pagination::{Pagination, SubprocessSearchRequest},
     subprocess::request::SubprocessRequest,
     subprocess::state::SubprocessState,
     value_objects::JobId,
@@ -247,6 +248,14 @@ pub(crate) struct SubprocessResultRequest {
     /// Include aggregated stdout/stderr in the response.
     #[serde(default = "default_true")]
     pub(crate) include_aggregates: bool,
+    /// Optional line-based pagination for stdout/stderr output (ADR-0057).
+    ///
+    /// When `Some`, the response includes `stdout_lines`, `stdout_total_lines`,
+    /// `stdout_next_offset`, and the stderr equivalents in addition to the raw
+    /// base64 aggregates (which remain populated for backward compatibility).
+    /// When `None`, the six pagination fields are absent from the response.
+    #[serde(default)]
+    pub(crate) pagination: Option<Pagination>,
 }
 
 const fn default_true() -> bool {
@@ -309,6 +318,43 @@ pub(crate) async fn handle_subprocess_result(
         .as_ref()
         .map(|p| p.display().to_string());
 
+    // Apply line-based pagination when the caller supplied a `pagination` cursor
+    // (ADR-0057). The raw aggregate bytes are decoded to UTF-8 lossily and split
+    // into lines; the paginated slice is returned alongside the existing base64
+    // aggregate fields (backward-compatible — old callers that do not supply
+    // `pagination` see `null` for all six optional fields).
+    let (stdout_lines, stdout_total_lines, stdout_next_offset) =
+        if let Some(ref pag) = req.pagination {
+            let stdout_text = String::from_utf8_lossy(&result.stdout_aggregate).into_owned();
+            let (lines, total, next) =
+                substrate_subprocess::registry::paginate_lines(&stdout_text, pag);
+            (
+                Some(lines),
+                Some(total),
+                next,
+            )
+        } else {
+            (result.stdout_lines, result.stdout_total_lines, result.stdout_next_offset)
+        };
+
+    let (stderr_lines, stderr_total_lines, stderr_next_offset) =
+        if let Some(ref pag) = req.pagination {
+            let stderr_text = String::from_utf8_lossy(&result.stderr_aggregate).into_owned();
+            let (lines, total, next) =
+                substrate_subprocess::registry::paginate_lines(&stderr_text, pag);
+            (
+                Some(lines),
+                Some(total),
+                next,
+            )
+        } else {
+            (result.stderr_lines, result.stderr_total_lines, result.stderr_next_offset)
+        };
+
+    // Derive a pagination-aware next_action hint: suggest subprocess.result with
+    // a follow-up offset when more output pages remain.
+    let has_more = stdout_next_offset.is_some() || stderr_next_offset.is_some();
+
     let structured = json!({
         "job_id": req.job_id,
         "terminal_state": result.terminal_state,
@@ -324,11 +370,75 @@ pub(crate) async fn handle_subprocess_result(
         "stdout_bytes_total": result.stdout_bytes_total,
         "stderr_bytes_total": result.stderr_bytes_total,
         "terminal_at": result.terminal_at,
+        "stdout_lines": stdout_lines,
+        "stdout_total_lines": stdout_total_lines,
+        "stdout_next_offset": stdout_next_offset,
+        "stderr_lines": stderr_lines,
+        "stderr_total_lines": stderr_total_lines,
+        "stderr_next_offset": stderr_next_offset,
     });
     let hints = substrate_domain::Hints {
-        next_action_suggested: Some("subprocess.list".to_owned()),
+        next_action_suggested: if has_more {
+            Some("subprocess.result".to_owned())
+        } else {
+            Some("subprocess.list".to_owned())
+        },
         ..substrate_domain::Hints::default()
     };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
+// ---- subprocess_search ------------------------------------------------------
+
+/// Dispatches `subprocess.search` — regex search over captured subprocess output.
+///
+/// Compiles the pattern, scans the stdout/stderr ring buffers, and returns
+/// paginated `SearchMatch` results per ADR-0057. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_subprocess_search(
+    args: Value,
+    port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: SubprocessSearchRequest =
+        serde_json::from_value(args).map_err(|e| SubstrateError::InvalidArgument {
+            offending_field: "arguments".to_owned(),
+            reason: e.to_string(),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        })?;
+
+    let result = port.search(req).await.map_err(|e| subprocess_err(&e))?;
+
+    let n = result.matches.len();
+    let total = result.total_matches;
+    let next = result.next_offset;
+
+    let content = format!(
+        "subprocess.search: matches={n} total={total} next_offset={next:?}.",
+    );
+
+    let structured = json!({
+        "matches": result.matches.iter().map(|m| json!({
+            "stream": m.stream,
+            "line_number": m.line_number,
+            "line_text": m.line_text,
+        })).collect::<Vec<_>>(),
+        "total_matches": total,
+        "next_offset": next,
+    });
+
+    let hints = substrate_domain::Hints {
+        next_action_suggested: if next.is_some() {
+            Some("subprocess.search".to_owned())
+        } else {
+            Some("subprocess.result".to_owned())
+        },
+        ..substrate_domain::Hints::default()
+    };
+
     Ok(DispatchedResponse {
         content,
         structured_content: structured,

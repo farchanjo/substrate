@@ -623,6 +623,11 @@ impl ToolDispatcher {
                 let port = Arc::clone(&self.subprocess);
                 crate::handlers::subprocess_tools::handle_subprocess_signal(args, port).await
             },
+            #[cfg(feature = "subprocess")]
+            "subprocess_search" => {
+                let port = Arc::clone(&self.subprocess);
+                crate::handlers::subprocess_tools::handle_subprocess_search(args, port).await
+            },
             // ---- Unknown tool -----------------------------------------------
             unknown => Err(SubstrateError::InvalidArgument {
                 offending_field: "tool_name".to_owned(),
