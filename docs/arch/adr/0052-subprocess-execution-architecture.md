@@ -327,3 +327,17 @@ The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonom
 - [ADR-0042](0042-capability-adapter-factory.md) — capability adapter factory
 - [ADR-0053](0053-process-lifecycle-cascade-contract.md) — cascade kill contract
 - [ADR-0054](0054-subprocess-stream-multiplex.md) — stream multiplex
+
+## Amendment 2026-05-25: supervisor semantics
+
+Per [ADR-0056](0056-subprocess-supervisor-semantics.md), the subprocess BC now
+hosts both one-shot tooling and long-running supervised processes. New optional
+fields on `SubprocessRequest`: `name` (operator alias with idempotent re-spawn
+semantics), `restart_policy` (`Never` / `OnFailure` / `Always`), `health_probe`
+(`None` / `HttpGet` / `PortOpen` / `LogPattern`), `log_rotation`
+(`None` / `BySize`). New `SubprocessState` variants: `Starting` (child spawned,
+probe not yet passed), `Ready` (first successful probe; backward-compatible alias
+for `Running` when no probe is configured), `Restarting` (transient between exit
+and re-spawn). Backward compatible: omitting all new fields preserves the original
+one-shot semantics defined by this ADR. See [ADR-0056](0056-subprocess-supervisor-semantics.md)
+for the full contract.

@@ -13,7 +13,7 @@ package schemas
 // #SubprocessState enumerates the lifecycle states of a spawned child process.
 // Terminal states (Succeeded, Failed, Cancelled, Killed, TimedOut) never regress.
 // Mirrors JobState from job.cue but with subprocess-specific terminal distinctions.
-#SubprocessState: "Pending" | "Running" | "Cancelled" | "Killed" | "Succeeded" | "Failed" | "TimedOut"
+#SubprocessState: "Pending" | "Starting" | "Running" | "Ready" | "Restarting" | "Cancelled" | "Killed" | "Succeeded" | "Failed" | "TimedOut"
 
 // #SubprocessRequest is the value object submitted by an MCP client to launch a
 // child process. All fields are validated by the subprocess_invariants Rego policy
@@ -66,6 +66,25 @@ package schemas
 	// idempotency_key is a client-generated UUIDv7 for deduplication.
 	// Reuses the idempotency-key contract from the job control-plane (ADR-0040).
 	idempotency_key?: string
+
+	// name is an operator-supplied alias scoped to (client_id, name) per ADR-0056.
+	// Enables idempotent re-spawn: if (client_id, name) maps to a non-terminal
+	// JobId, subprocess.spawn returns that handle instead of starting a new
+	// process. Absent (default) preserves original one-shot semantics.
+	// Format: lowercase alphanumeric + hyphens, 1..64 chars.
+	name?: string & =~"^[a-z0-9-]{1,64}$"
+
+	// restart_policy controls supervisor re-spawn behavior per ADR-0056.
+	// Absent = Never (default, one-shot).
+	restart_policy?: #RestartPolicy
+
+	// health_probe gates the Starting -> Ready transition per ADR-0056.
+	// Absent = None (Running == Ready immediately).
+	health_probe?: #HealthProbe
+
+	// log_rotation rotates capture_kind=tmp_file output per ADR-0056.
+	// Absent = None (no rotation; tmp file grows unbounded).
+	log_rotation?: #LogRotation
 }
 
 // #SubprocessHandle is the aggregate root for an active or completed child process.
@@ -188,4 +207,58 @@ package schemas
 	// timestamp is the RFC 3339 timestamp at which the chunk was read from the
 	// OS pipe into the substrate capture buffer.
 	timestamp: string
+}
+
+// DDD role: ValueObject
+// #RestartPolicy controls supervisor re-spawn behavior per ADR-0056.
+// Discriminated union: each variant carries its own constraints.
+#RestartPolicy: {
+	{
+		kind: "Never"
+	} | {
+		kind:        "OnFailure"
+		max_retries: int & >=1 & <=100
+		backoff_ms:  int & >=100 & <=300000
+	} | {
+		kind:       "Always"
+		backoff_ms: int & >=100 & <=300000
+	}
+}
+
+// DDD role: ValueObject
+// #HealthProbe transitions Starting -> Ready per ADR-0056.
+// Three consecutive failures trigger restart_policy.
+#HealthProbe: {
+	{
+		kind: "None"
+	} | {
+		kind:             "HttpGet"
+		url:              string & =~"^https?://"
+		expected_status:  int & >=100 & <=599
+		interval_ms:      int & >=100 & <=60000
+		startup_grace_ms: int & >=0 & <=600000
+	} | {
+		kind:             "PortOpen"
+		host:             string
+		port:             int & >=1 & <=65535
+		interval_ms:      int & >=100 & <=60000
+		startup_grace_ms: int & >=0 & <=600000
+	} | {
+		kind:       "LogPattern"
+		regex:      string
+		timeout_ms: int & >=1000 & <=600000
+	}
+}
+
+// DDD role: ValueObject
+// #LogRotation rotates capture_kind=tmp_file output per ADR-0056.
+// Cumulative cap = max_bytes_per_file * keep_files.
+#LogRotation: {
+	{
+		kind: "None"
+	} | {
+		kind:               "BySize"
+		max_bytes_per_file: int & >=1048576 & <=1073741824 // 1 MiB .. 1 GiB
+		keep_files:         int & >=1 & <=20
+	}
 }
