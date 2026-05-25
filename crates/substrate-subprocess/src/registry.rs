@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use substrate_domain::errors::{SubstrateError, SubstrateResult};
+use substrate_domain::ports::stream_observer::StreamChunkObserver;
 use substrate_domain::ports::subprocess::{
     SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName,
 };
@@ -135,6 +136,13 @@ pub struct SubprocessRegistry {
     /// Set via [`SubprocessRegistry::with_tmp_root`] on the builder; or passed
     /// directly to [`SubprocessRegistry::new`] as the `tmp_root` parameter.
     tmp_root: Option<PathBuf>,
+
+    /// Stream-chunk observers fanned-out by the per-job dispatcher task per ADR-0054.
+    ///
+    /// Empty Vec means no client push channel is active (equivalent to a Null Object
+    /// observer). Multiple observers receive each chunk via the GoF Mediator pattern
+    /// implemented by the dispatcher task.
+    observers: Arc<Vec<Arc<dyn StreamChunkObserver>>>,
 }
 
 impl SubprocessRegistry {
@@ -180,6 +188,36 @@ impl SubprocessRegistry {
             root_cancel,
             per_client_active: Arc::default(),
             tmp_root: None,
+            observers: Arc::new(Vec::new()),
+        })
+    }
+
+    /// Builder-style setter for the stream-chunk observers fanned-out by the
+    /// dispatcher task per ADR-0054 and the arch review (Observer + Mediator).
+    ///
+    /// Empty Vec is equivalent to a Null Object observer (no client push).
+    #[must_use]
+    pub fn with_observers(
+        self: Arc<Self>,
+        observers: Vec<Arc<dyn StreamChunkObserver>>,
+    ) -> Arc<Self> {
+        let inner = Arc::try_unwrap(self).unwrap_or_else(|arc| Self {
+            handles: Arc::clone(&arc.handles),
+            binary_allowlist: arc.binary_allowlist.clone(),
+            env_allowlist: arc.env_allowlist.clone(),
+            max_per_client: arc.max_per_client,
+            max_concurrent: arc.max_concurrent,
+            aggregate_buffer_bytes: arc.aggregate_buffer_bytes,
+            shutdown_drain_secs: arc.shutdown_drain_secs,
+            path_allowlist: arc.path_allowlist.clone(),
+            root_cancel: arc.root_cancel.clone(),
+            per_client_active: Arc::clone(&arc.per_client_active),
+            tmp_root: arc.tmp_root.clone(),
+            observers: Arc::clone(&arc.observers),
+        });
+        Arc::new(Self {
+            observers: Arc::new(observers),
+            ..inner
         })
     }
 
@@ -396,7 +434,7 @@ impl SubprocessPort for SubprocessRegistry {
         let job_id = handle.job_id.clone();
 
         // Wire stream capture tasks. Lock child mutex, set up captures, then drop guard.
-        let (sender, _receiver) = make_stream_channel();
+        let (sender, mut receiver) = make_stream_channel();
         {
             let mut child_guard = handle.child.lock().await;
             let Some(child) = child_guard.as_mut() else {
@@ -412,6 +450,47 @@ impl SubprocessPort for SubprocessRegistry {
             })?;
             drop(child_guard);
         }
+
+        // Per-job dispatcher task per ADR-0054 + arch review (Observer + Mediator).
+        // Drains the per-stream mpsc receiver and fans out each chunk to every
+        // registered observer. Terminates when both reader tasks drop their
+        // sender clones (child exit + EOF on both pipes).
+        let observers_for_dispatcher = Arc::clone(&self.observers);
+        let job_id_for_dispatcher = job_id.clone();
+        let handle_for_dispatcher = Arc::clone(&handle);
+        tokio::spawn(async move {
+            while let Some(chunk) = receiver.recv().await {
+                for observer in observers_for_dispatcher.iter() {
+                    observer.on_chunk(&chunk).await;
+                }
+            }
+
+            // Derive terminal state from the child's exit status and fire the
+            // on_terminal sentinel on every observer.  This fires AFTER the
+            // last chunk has been delivered, which is guaranteed because the
+            // mpsc sender is dropped only once both reader tasks (stdout +
+            // stderr) finish, and the recv() loop above drains the bounded
+            // channel fully before exiting.
+            let terminal_state = match handle_for_dispatcher.wait_exit().await {
+                Ok(Some(status)) if status.success() => SubprocessState::Succeeded,
+                Ok(Some(_)) => SubprocessState::Failed,
+                // Already reaped by another path (e.g. cancellation).
+                Ok(None) => SubprocessState::Killed,
+                // wait_exit I/O failure — default to Failed rather than leaving
+                // observers in an uncertain state.
+                Err(_) => SubprocessState::Failed,
+            };
+
+            for observer in observers_for_dispatcher.iter() {
+                observer.on_terminal(&job_id_for_dispatcher, terminal_state).await;
+            }
+
+            tracing::debug!(
+                job_id = %job_id_for_dispatcher,
+                ?terminal_state,
+                "stream dispatcher task exiting — both reader senders dropped"
+            );
+        });
 
         // Register in the live map.
         self.handles.insert(job_id.clone(), Arc::clone(&handle));
