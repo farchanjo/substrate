@@ -11,14 +11,64 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, AtomicU8};
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use substrate_domain::subprocess::request::CaptureKind;
+use substrate_domain::subprocess::state::SubprocessState;
 use substrate_domain::subprocess::{StdinKind, SubprocessError, SubprocessRequest};
 use substrate_domain::value_objects::{JobId, ProcessGroup};
+
+// ---------------------------------------------------------------------------
+// SubprocessState ↔ u8 conversion helpers (private to this crate).
+// AtomicU8 is used in ChildHandle.state for lock-free reads by snapshot_handle.
+// ---------------------------------------------------------------------------
+
+/// Maps a [`SubprocessState`] to its stable u8 discriminant.
+///
+/// Values are stable internal constants — never persisted or sent over wire.
+/// Existing 0-6 assignments are frozen; new ADR-0056 variants occupy 7-9.
+#[inline]
+pub(crate) const fn state_to_u8(s: SubprocessState) -> u8 {
+    match s {
+        SubprocessState::Pending => 0,
+        SubprocessState::Running => 1,
+        SubprocessState::Succeeded => 2,
+        SubprocessState::Failed => 3,
+        SubprocessState::Cancelled => 4,
+        SubprocessState::TimedOut => 5,
+        SubprocessState::Killed => 6,
+        // ADR-0056 additions — must not overlap with 0-6.
+        SubprocessState::Starting => 7,
+        SubprocessState::Ready => 8,
+        SubprocessState::Restarting => 9,
+    }
+}
+
+/// Maps a u8 discriminant back to a [`SubprocessState`].
+///
+/// An unrecognised byte (written by a future variant before upgrade) falls back
+/// to `Running` so that the process is treated as still-live rather than silently
+/// terminal — the conservative safe choice.
+#[inline]
+pub(crate) const fn u8_to_state(v: u8) -> SubprocessState {
+    match v {
+        0 => SubprocessState::Pending,
+        1 => SubprocessState::Running,
+        2 => SubprocessState::Succeeded,
+        3 => SubprocessState::Failed,
+        4 => SubprocessState::Cancelled,
+        5 => SubprocessState::TimedOut,
+        6 => SubprocessState::Killed,
+        // ADR-0056 additions.
+        7 => SubprocessState::Starting,
+        8 => SubprocessState::Ready,
+        9 => SubprocessState::Restarting,
+        _ => SubprocessState::Running,
+    }
+}
 
 use crate::tmp_file::TmpFileWriter;
 use crate::watchdog::WatchdogPipe;
@@ -67,6 +117,15 @@ pub struct ChildHandle {
 
     /// Platform watchdog pipe (macOS: write end; Linux: zero-cost no-op).
     pub watchdog: WatchdogPipe,
+
+    /// Live lifecycle state stored atomically for lock-free reads by `snapshot_handle`.
+    ///
+    /// Initialized to `Running` at spawn time. Updated by the dispatcher task
+    /// (after `wait_exit` resolves) and by the cancel path (after cascade kill).
+    /// Reads use `Ordering::SeqCst` to guarantee visibility across tasks.
+    ///
+    /// Encoding: see `state_to_u8` / `u8_to_state` in this module.
+    pub state: Arc<AtomicU8>,
 
     /// The `tokio::process::Child` under a mutex so that `wait()` can be called
     /// from the cascade kill chain without racing with the reader tasks.
@@ -359,6 +418,7 @@ pub async fn spawn_supervised(
         cancel,
         tmp_files: Mutex::new(tmp_files_vec),
         watchdog,
+        state: Arc::new(AtomicU8::new(state_to_u8(SubprocessState::Running))),
         child: Mutex::new(Some(child)),
         stdout_ring: Arc::new(Mutex::new(RingBuffer::new(aggregate_buffer_bytes))),
         stderr_ring: Arc::new(Mutex::new(RingBuffer::new(aggregate_buffer_bytes))),

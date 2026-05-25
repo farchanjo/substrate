@@ -39,6 +39,7 @@
 
 pub mod cascade;
 pub mod cleanup;
+pub mod health_probe;
 pub mod pre_exec;
 pub mod registry;
 pub mod spawn;
@@ -46,6 +47,7 @@ pub mod stream_capture;
 pub mod tmp_file;
 pub mod watchdog;
 
+pub use health_probe::{ProbeOutcome, run_probe};
 pub use registry::SubprocessRegistry;
 
 use substrate_domain::ports::subprocess::SubprocessPort;

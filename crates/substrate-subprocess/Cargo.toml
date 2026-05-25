@@ -8,6 +8,11 @@ repository.workspace = true
 homepage.workspace = true
 description = "Subprocess BC adapter: spawns child processes with stdout/stderr capture, cascade cleanup, watchdog. ADR-0052 supersedes ADR-0044."
 
+[features]
+## Enable `tokio/net` for `PortOpen` and `HttpGet` health probes per ADR-0056.
+## Without this flag both variants return `FailedTransient` immediately.
+outbound-net = ["tokio/net"]
+
 [lints]
 workspace = true
 
