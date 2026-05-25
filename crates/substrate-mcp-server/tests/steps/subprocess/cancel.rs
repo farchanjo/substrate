@@ -180,6 +180,10 @@ async fn given_subprocess_running_sleep_100(world: &mut SubstrateWorld) {
         timeout_secs: Some(120),
         idempotency_key: None,
         elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
     };
 
     match registry.spawn(req, &NoCancel).await {

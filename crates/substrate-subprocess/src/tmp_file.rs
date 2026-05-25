@@ -17,7 +17,18 @@
 //! rely on the cascade cleanup chain via `ChildHandle.tmp_files`) which removes
 //! the transit path.
 //!
-//! References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch".
+//! ## Log rotation (ADR-0056)
+//!
+//! When a subprocess runs for hours (e.g., a dev server), its captured output can
+//! grow unbounded. The optional [`LogRotationPolicy`] enables size-based rotation:
+//! once the current transit file reaches `max_bytes_per_file`, [`TmpFileWriter::rotate_if_needed`]
+//! atomically shifts older logs (`<base>.log.1` → `<base>.log.2`, …), renames the
+//! current file to `<base>.log.1`, and opens a fresh `<base>.log` for continued writes.
+//! Files beyond `keep_files` are unlinked. The rotation is purely best-effort from the
+//! capture loop's perspective; an error is logged but never aborts the stream reader.
+//!
+//! References: ADR-0033 §"Transactional Write Pattern", ADR-0054 §"`TmpFile` Branch",
+//! ADR-0056 §"Log Rotation".
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -25,10 +36,29 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::Mutex;
+use tracing::info;
 
 use substrate_domain::subprocess::errors::SubprocessError;
 use substrate_domain::subprocess::stream::Stream;
 use substrate_domain::value_objects::JobId;
+
+/// Size-based log rotation policy per ADR-0056.
+///
+/// Attached to a [`TmpFileWriter`] via [`TmpFileWriter::with_rotation`].  When the
+/// cumulative bytes written to the current transit file exceeds `max_bytes_per_file`,
+/// the next call to [`TmpFileWriter::rotate_if_needed`] will atomically shift older
+/// numbered files and open a fresh log.
+///
+/// `keep_files` controls how many numbered archives are retained (`<base>.log.1` …
+/// `<base>.log.<keep_files>`).  Files beyond `keep_files` are unlinked. The minimum
+/// useful value is `1`.
+#[derive(Debug, Clone)]
+pub struct LogRotationPolicy {
+    /// Byte threshold that triggers a rotation.
+    pub max_bytes_per_file: u64,
+    /// Number of numbered archive files to keep (`.log.1` … `.log.<keep_files>`).
+    pub keep_files: u8,
+}
 
 /// Transactional tmp-file writer for subprocess stream capture per ADR-0033/ADR-0054.
 ///
@@ -62,6 +92,18 @@ pub struct TmpFileWriter {
     /// Set to `true` by the first successful [`finalize`](TmpFileWriter::finalize)
     /// call. Subsequent calls are no-ops returning the final path.
     finalized: AtomicBool,
+    /// Optional size-based rotation policy per ADR-0056.  `None` = no rotation.
+    rotation: Option<LogRotationPolicy>,
+}
+
+/// Returns `<base_path>.<n>` — the path for the Nth numbered rotation archive.
+///
+/// For example, if `base` is `/tmp/.substrate-subprocess-stream-abc.stdout`, then
+/// `numbered(base, 1)` returns `/tmp/.substrate-subprocess-stream-abc.stdout.1`.
+fn numbered(base: &Path, n: u32) -> PathBuf {
+    let mut s = base.as_os_str().to_owned();
+    s.push(format!(".{n}"));
+    PathBuf::from(s)
 }
 
 impl TmpFileWriter {
@@ -116,6 +158,7 @@ impl TmpFileWriter {
             file: Mutex::new(Some(file)),
             bytes_written: AtomicU64::new(0),
             finalized: AtomicBool::new(false),
+            rotation: None,
         })
     }
 
@@ -276,6 +319,240 @@ impl TmpFileWriter {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
         }
+    }
+
+    /// Attaches a size-based log-rotation policy per ADR-0056.
+    ///
+    /// Builder-style; consumes and returns `self` so it can be chained after [`create`](Self::create).
+    ///
+    /// # Parameters
+    ///
+    /// - `max_bytes_per_file` — byte threshold that triggers rotation.
+    /// - `keep_files` — number of numbered archives to retain (`.log.1` … `.log.<keep_files>`).
+    ///   Values of `0` are treated as `1` (at least one archive is kept).
+    #[must_use]
+    pub fn with_rotation(mut self, max_bytes_per_file: u64, keep_files: u8) -> Self {
+        self.rotation = Some(LogRotationPolicy {
+            max_bytes_per_file,
+            keep_files: keep_files.max(1),
+        });
+        self
+    }
+
+    /// Atomically rotates the transit file if the byte threshold from the attached
+    /// [`LogRotationPolicy`] is exceeded.
+    ///
+    /// Returns `Ok(true)` when a rotation was performed, `Ok(false)` when no policy
+    /// is set or the threshold has not been reached.  On error the current transit
+    /// file is left intact (best-effort) and the error is returned so the caller can
+    /// log it and continue.
+    ///
+    /// ## Rotation algorithm (ADR-0056)
+    ///
+    /// Let `base` = `final_path` (e.g., `.substrate-subprocess-stream-<id>.stdout`).
+    ///
+    /// 1. Lock the file mutex and flush + close the current FD.
+    /// 2. Shift numbered archives in reverse:
+    ///    for N = `keep_files−1` … 1: rename `<base>.log.N` → `<base>.log.N+1` (ok() — missing is fine).
+    /// 3. Unlink `<base>.log.<keep_files+1>` if present (overflow from the shift).
+    /// 4. Rename current transit file → `<base>.log.1`.
+    /// 5. Reopen a fresh transit file at the original `tmp_path`.
+    /// 6. Reset `bytes_written` to 0.
+    ///
+    /// All individual renames are atomic filesystem operations.  A crash between
+    /// steps leaves at most one stale numbered file; no data is lost because the
+    /// previous content is preserved in the renamed archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::Error` if flush, a critical rename, or the reopen fails.
+    pub async fn rotate_if_needed(&self) -> io::Result<bool> {
+        let Some(policy) = self.rotation.as_ref() else {
+            return Ok(false);
+        };
+        if self.bytes_written.load(Ordering::Relaxed) < policy.max_bytes_per_file {
+            return Ok(false);
+        }
+
+        let keep = policy.keep_files;
+
+        // ── 1. Flush + close the current FD ─────────────────────────────────
+        {
+            let mut guard = self.file.lock().await;
+            if let Some(mut f) = guard.take() {
+                f.flush().await.map_err(|e| {
+                    io::Error::other(format!(
+                        "TmpFileWriter::rotate_if_needed: flush failed for {}: {e}",
+                        self.tmp_path.display()
+                    ))
+                })?;
+                // `f` is dropped here; FD closed.
+            }
+            // guard still holds None — we reopen below.
+
+            // ── 2. Shift numbered archives in reverse order ──────────────────
+            // Base path for numbered archives is the *final* path (human-visible name).
+            let base = &self.final_path;
+
+            // Optionally unlink the oldest file that would be pushed beyond `keep_files`.
+            let overflow_n = u32::from(keep) + 1;
+            let overflow_path = numbered(base, overflow_n);
+            if overflow_path.exists() {
+                tokio::fs::remove_file(&overflow_path).await.map_err(|e| {
+                    io::Error::other(format!(
+                        "TmpFileWriter::rotate_if_needed: unlink overflow {}: {e}",
+                        overflow_path.display()
+                    ))
+                })?;
+            }
+
+            // Shift: .log.(keep-1) → .log.keep  …  .log.1 → .log.2
+            // Only range keep-1 down to 1 needs shifting (1-indexed archives).
+            if keep >= 2 {
+                let mut n = u32::from(keep) - 1;
+                while n >= 1 {
+                    let from = numbered(base, n);
+                    let to = numbered(base, n + 1);
+                    // ok() — a missing source is fine; that slot simply hasn't been created yet.
+                    tokio::fs::rename(&from, &to).await.ok();
+                    n -= 1;
+                }
+            }
+
+            // ── 3. Rename current transit file → <base>.log.1 ───────────────
+            let archive_1 = numbered(base, 1);
+            tokio::fs::rename(&self.tmp_path, &archive_1).await.map_err(|e| {
+                io::Error::other(format!(
+                    "TmpFileWriter::rotate_if_needed: rename {} -> {}: {e}",
+                    self.tmp_path.display(),
+                    archive_1.display()
+                ))
+            })?;
+
+            // ── 4. Reopen a fresh transit file at `tmp_path` ────────────────
+            let new_file = {
+                use tokio::fs::OpenOptions;
+                let mut opts = OpenOptions::new();
+                opts.create(true).write(true).truncate(true);
+                #[cfg(unix)]
+                opts.mode(0o600);
+                opts.open(&self.tmp_path).await.map_err(|e| {
+                    io::Error::other(format!(
+                        "TmpFileWriter::rotate_if_needed: reopen {} failed: {e}",
+                        self.tmp_path.display()
+                    ))
+                })?
+            };
+            *guard = Some(new_file);
+        }
+
+        // ── 5. Reset byte counter ────────────────────────────────────────────
+        self.bytes_written.store(0, Ordering::Relaxed);
+
+        info!(
+            target: "substrate_audit",
+            event = "SUBSTRATE_SUBPROCESS_TMP_ROTATED",
+            transit_path = %self.tmp_path.display(),
+            final_path = %self.final_path.display(),
+            keep_files = keep,
+            "TmpFileWriter log rotation completed"
+        );
+
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use tempfile::TempDir;
+
+    use substrate_domain::subprocess::stream::Stream;
+    use substrate_domain::value_objects::JobId;
+
+    use super::TmpFileWriter;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// `rotate_if_needed` must return `Ok(false)` and leave the transit file unchanged
+    /// when the bytes written are below the `max_bytes_per_file` threshold.
+    #[tokio::test]
+    async fn rotate_if_needed_no_op_under_threshold() -> TestResult {
+        let dir = TempDir::new()?;
+        let job_id = JobId::now_v7();
+        let writer = TmpFileWriter::create(dir.path(), &job_id, Stream::Stdout)
+            .await?
+            .with_rotation(1024, 2);
+
+        let payload = vec![0u8; 100];
+        writer.write(&payload).await?;
+
+        let rotated = writer.rotate_if_needed().await?;
+        assert!(!rotated, "should not rotate when under threshold");
+        assert!(
+            writer.tmp_path().exists(),
+            "transit file must still exist when no rotation occurred"
+        );
+        assert_eq!(
+            writer.bytes_written(),
+            100,
+            "bytes_written must not reset on no-op"
+        );
+        Ok(())
+    }
+
+    /// `rotate_if_needed` must return `Ok(true)`, rename the current transit file to
+    /// `<final>.1`, and reopen a fresh transit file when the threshold is crossed.
+    /// After rotation `bytes_written` must be reset to 0.
+    #[tokio::test]
+    async fn rotate_if_needed_rotates_on_threshold() -> TestResult {
+        let dir = TempDir::new()?;
+        let job_id = JobId::now_v7();
+        let writer = TmpFileWriter::create(dir.path(), &job_id, Stream::Stdout)
+            .await?
+            .with_rotation(1024, 2); // threshold 1 KiB, keep 2 archives
+
+        // Write 2 KiB — exceeds the 1 KiB threshold.
+        let payload = vec![b'x'; 2048];
+        writer.write(&payload).await?;
+
+        assert!(
+            writer.bytes_written() >= 1024,
+            "pre-condition: bytes_written must meet or exceed threshold"
+        );
+
+        let rotated = writer.rotate_if_needed().await?;
+        assert!(rotated, "rotation must occur when threshold is crossed");
+
+        // After rotation:
+        // - `<final_path>.1` (the archive) must exist.
+        let archive_1 = {
+            use std::ffi::OsString;
+            let mut s: OsString = writer.final_path().as_os_str().to_owned();
+            s.push(".1");
+            std::path::PathBuf::from(s)
+        };
+        assert!(
+            archive_1.exists(),
+            "archive <final_path>.1 must exist after rotation"
+        );
+
+        // - Fresh transit file must be present (reopened for continued writes).
+        assert!(
+            writer.tmp_path().exists(),
+            "fresh transit file must be reopened after rotation"
+        );
+
+        // - bytes_written must be reset.
+        assert_eq!(
+            writer.bytes_written(),
+            0,
+            "bytes_written must reset to 0 after rotation"
+        );
+
+        // Sanity: the archive contains the original 2 KiB payload.
+        let contents = tokio::fs::read(&archive_1).await?;
+        assert_eq!(contents.len(), 2048, "archive must contain original payload");
+        Ok(())
     }
 }
 

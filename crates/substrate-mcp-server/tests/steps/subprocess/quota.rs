@@ -163,6 +163,10 @@ async fn when_client_spawns_fifth(world: &mut SubstrateWorld) {
             timeout_secs: Some(60),
             idempotency_key: None,
             elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
         };
         if let Ok(h) = registry.spawn(req, &NoCancel).await {
             job_ids.push(h.job_id)
@@ -212,6 +216,10 @@ async fn when_client_spawns_fifth(world: &mut SubstrateWorld) {
         timeout_secs: Some(5),
         idempotency_key: None,
         elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
     };
 
     match registry.spawn(fifth_req, &NoCancel).await {

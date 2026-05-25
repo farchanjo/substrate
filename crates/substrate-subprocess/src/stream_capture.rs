@@ -180,6 +180,20 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                                 "TmpFileWriter::write failed; continuing capture (partial persistence)"
                             );
                         }
+                        // 2b. Rotate if the size threshold is crossed (ADR-0056).
+                        //     Best-effort: error is logged but never aborts the reader.
+                        if let Some(writer) = &tmp_writer {
+                            if let Err(e) = writer.rotate_if_needed().await {
+                                warn!(
+                                    target: "substrate_audit",
+                                    event = "SUBSTRATE_SUBPROCESS_TMP_ROTATE_ERROR",
+                                    job_id = %handle.job_id,
+                                    stream = %stream,
+                                    error = %e,
+                                    "TmpFileWriter::rotate_if_needed failed; continuing without rotation"
+                                );
+                            }
+                        }
                         // 3. Accumulate for mpsc flush.
                         accumulated.extend_from_slice(data);
                         byte_offset += u64::try_from(n).unwrap_or(u64::MAX);
