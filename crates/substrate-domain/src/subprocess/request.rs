@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::subprocess::errors::SubprocessError;
+use crate::subprocess::supervisor::{HealthProbe, LogRotation, RestartPolicy};
 use crate::value_objects::IdempotencyKey;
 
 /// Unconditionally banned environment variable keys per ADR-0052 §"Layer 5".
@@ -116,6 +117,29 @@ pub struct SubprocessRequest {
     /// ADR-0052 §"Elicitation (mandatory for all spawns)". The handler MUST
     /// emit an elicitation form and gate spawn on this field being `true`.
     pub elicitation_confirmed: bool,
+
+    /// Operator-supplied alias scoped to `(client_id, name)` per ADR-0056.
+    ///
+    /// Enables idempotent re-spawn: if a non-terminal job already exists under
+    /// this `(client_id, name)` pair, `subprocess.spawn` returns the existing
+    /// `job_id` without starting a new process. Format: `^[a-z0-9-]{1,64}$`.
+    /// Default: `None` (server assigns a `job_id` as in ADR-0052).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Restart policy per ADR-0056. Default: `Never` (one-shot behavior preserved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_policy: Option<RestartPolicy>,
+
+    /// Health probe gating the `Starting` -> `Ready` transition per ADR-0056.
+    /// Default: `None` (no probe; `Running == Ready` immediately).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_probe: Option<HealthProbe>,
+
+    /// Log rotation for `capture_kind = TmpFile` per ADR-0056.
+    /// Default: `None` (tmp file grows unbounded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_rotation: Option<LogRotation>,
 }
 
 impl SubprocessRequest {
@@ -180,6 +204,178 @@ impl SubprocessRequest {
             return Err(SubprocessError::ElicitationRequired {
                 tool: "subprocess.spawn".to_owned(),
             });
+        }
+
+        // Validate `name` format: ^[a-z0-9-]{1,64}$
+        // The regex crate is not a substrate-domain dependency (zero infra deps rule
+        // per ADR-0022); validate inline with a hand-rolled ASCII predicate.
+        if let Some(name) = &self.name {
+            if name.is_empty() || name.len() > 64 {
+                return Err(SubprocessError::InvalidRequest {
+                    msg: format!(
+                        "name must be 1..=64 characters; got length {}",
+                        name.len()
+                    ),
+                });
+            }
+            if !name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                return Err(SubprocessError::InvalidRequest {
+                    msg: format!(
+                        "name must match ^[a-z0-9-]{{1,64}}$; got '{name}'"
+                    ),
+                });
+            }
+        }
+
+        // Validate `restart_policy` bounds.
+        match &self.restart_policy {
+            None | Some(RestartPolicy::Never) => {},
+            Some(RestartPolicy::OnFailure {
+                max_retries,
+                backoff_ms,
+            }) => {
+                if !(1..=100).contains(max_retries) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "restart_policy.max_retries must be in 1..=100; got {max_retries}"
+                        ),
+                    });
+                }
+                if !(100..=300_000).contains(backoff_ms) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "restart_policy.backoff_ms must be in 100..=300000; got {backoff_ms}"
+                        ),
+                    });
+                }
+            },
+            Some(RestartPolicy::Always { backoff_ms }) => {
+                if !(100..=300_000).contains(backoff_ms) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "restart_policy.backoff_ms must be in 100..=300000; got {backoff_ms}"
+                        ),
+                    });
+                }
+            },
+        }
+
+        // Validate `health_probe` bounds.
+        match &self.health_probe {
+            None | Some(HealthProbe::None) => {},
+            Some(HealthProbe::HttpGet {
+                url,
+                expected_status,
+                interval_ms,
+                startup_grace_ms,
+            }) => {
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.url must begin with http:// or https://; got '{url}'"
+                        ),
+                    });
+                }
+                if !(100..=599).contains(expected_status) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.expected_status must be in 100..=599; got {expected_status}"
+                        ),
+                    });
+                }
+                if !(100..=60_000).contains(interval_ms) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.interval_ms must be in 100..=60000; got {interval_ms}"
+                        ),
+                    });
+                }
+                if *startup_grace_ms > 600_000 {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.startup_grace_ms must be in 0..=600000; got {startup_grace_ms}"
+                        ),
+                    });
+                }
+            },
+            Some(HealthProbe::PortOpen {
+                port,
+                interval_ms,
+                startup_grace_ms,
+                ..
+            }) => {
+                if *port == 0 {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: "health_probe.port must be in 1..=65535; got 0".to_owned(),
+                    });
+                }
+                if !(100..=60_000).contains(interval_ms) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.interval_ms must be in 100..=60000; got {interval_ms}"
+                        ),
+                    });
+                }
+                if *startup_grace_ms > 600_000 {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.startup_grace_ms must be in 0..=600000; got {startup_grace_ms}"
+                        ),
+                    });
+                }
+            },
+            Some(HealthProbe::LogPattern { regex, timeout_ms }) => {
+                if regex.is_empty() {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: "health_probe.regex must not be empty".to_owned(),
+                    });
+                }
+                if !(1_000..=600_000).contains(timeout_ms) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "health_probe.timeout_ms must be in 1000..=600000; got {timeout_ms}"
+                        ),
+                    });
+                }
+            },
+        }
+
+        // Validate `log_rotation` bounds and cross-field constraint with `capture_kind`.
+        match &self.log_rotation {
+            None | Some(LogRotation::None) => {},
+            Some(LogRotation::BySize {
+                max_bytes_per_file,
+                keep_files,
+            }) => {
+                const MIN_FILE_BYTES: u64 = 1_048_576;
+                const MAX_FILE_BYTES: u64 = 1_073_741_824;
+                if !(*max_bytes_per_file >= MIN_FILE_BYTES
+                    && *max_bytes_per_file <= MAX_FILE_BYTES)
+                {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "log_rotation.max_bytes_per_file must be in \
+                             1_048_576..=1_073_741_824; got {max_bytes_per_file}"
+                        ),
+                    });
+                }
+                if !(1..=20).contains(keep_files) {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: format!(
+                            "log_rotation.keep_files must be in 1..=20; got {keep_files}"
+                        ),
+                    });
+                }
+                // Cross-field: log rotation requires TmpFile capture.
+                if self.capture_kind != CaptureKind::TmpFile {
+                    return Err(SubprocessError::InvalidRequest {
+                        msg: "log_rotation requires capture_kind = TmpFile".to_owned(),
+                    });
+                }
+            },
         }
 
         Ok(())

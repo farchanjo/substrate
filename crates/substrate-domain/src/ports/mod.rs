@@ -13,6 +13,7 @@ pub mod job_notifier;
 pub mod job_registry;
 pub mod path_jail;
 pub mod stat;
+pub mod state_transition;
 pub mod stream_observer;
 pub mod subprocess;
 
@@ -25,5 +26,6 @@ pub use job_notifier::{NoopProgressNotifier, ProgressNotifier};
 pub use job_registry::{JobPage, JobRegistryPort, JobResult, JobSubmitRequest};
 pub use path_jail::PathJailPort;
 pub use stat::{FileStat, StatPort};
+pub use state_transition::{NoopStateTransitionObserver, StateTransitionObserver};
 pub use stream_observer::{NoopStreamObserver, StreamChunkObserver};
 pub use subprocess::{SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName};
