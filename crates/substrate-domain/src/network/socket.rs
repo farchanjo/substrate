@@ -75,6 +75,52 @@ pub enum TcpState {
     Unknown,
 }
 
+// ---- Tests ------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::TcpState;
+
+    /// Regression: `state_filter = ["Listen"]` from an MCP client must deserialize
+    /// to `TcpState::Listen`. All variants use `rename_all = "PascalCase"`, so the
+    /// JSON wire value `"Listen"` must round-trip through serde correctly.
+    #[test]
+    fn tcp_state_listen_serde_round_trip() {
+        let encoded = serde_json::to_string(&TcpState::Listen)
+            .expect("serialization must succeed");
+        assert_eq!(encoded, r#""Listen""#, "TcpState::Listen must serialize as \"Listen\"");
+
+        let decoded: TcpState = serde_json::from_str(r#""Listen""#)
+            .expect("deserialization of \"Listen\" must succeed");
+        assert_eq!(decoded, TcpState::Listen, "\"Listen\" must deserialize to TcpState::Listen");
+    }
+
+    /// Verify that every named variant serializes to and from PascalCase.
+    #[test]
+    fn tcp_state_all_variants_round_trip() {
+        let cases: &[(TcpState, &str)] = &[
+            (TcpState::Closed, "\"Closed\""),
+            (TcpState::Listen, "\"Listen\""),
+            (TcpState::SynSent, "\"SynSent\""),
+            (TcpState::SynReceived, "\"SynReceived\""),
+            (TcpState::Established, "\"Established\""),
+            (TcpState::FinWait1, "\"FinWait1\""),
+            (TcpState::FinWait2, "\"FinWait2\""),
+            (TcpState::CloseWait, "\"CloseWait\""),
+            (TcpState::Closing, "\"Closing\""),
+            (TcpState::LastAck, "\"LastAck\""),
+            (TcpState::TimeWait, "\"TimeWait\""),
+            (TcpState::Unknown, "\"Unknown\""),
+        ];
+        for (state, expected_json) in cases {
+            let got = serde_json::to_string(state).expect("serialization must succeed");
+            assert_eq!(&got, expected_json, "wrong serialization for {state:?}");
+            let back: TcpState = serde_json::from_str(&got).expect("deserialization must succeed");
+            assert_eq!(&back, state, "round-trip failed for {state:?}");
+        }
+    }
+}
+
 // ---- SocketEntry ------------------------------------------------------------
 
 /// A single socket entry as reported by the OS network stack.
