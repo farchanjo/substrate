@@ -26,6 +26,8 @@ channels:
     messages:
       progressEvent:
         $ref: '#/components/messages/ProgressEvent'
+      streamProgressEvent:
+        $ref: '#/components/messages/StreamProgressEvent'
   notificationsCancelled:
     address: notifications/cancelled
     description: |
@@ -125,6 +127,37 @@ components:
               - Failed
               - Cancelled
               - TimedOut
+    StreamProgressEvent:
+      name: StreamProgressEvent
+      title: Subprocess stream chunk progress event
+      summary: >-
+        Subprocess stdout/stderr chunk delivered as a
+        notifications/progress frame per ADR-0054 stream multiplex.
+      description: |
+        rmcp 1.7 wire-format constraint: ProgressNotificationParam
+        exposes only four fields (progressToken, progress, total,
+        message). Stream-extension fields (stream, chunk_base64,
+        chunk_bytes, chunk_seq, byte_offset, job_state) cannot be
+        carried as top-level keys because rmcp 1.7 does not support a
+        _meta extension map on ProgressNotificationParam. As a result,
+        all stream-extension fields are packed as a JSON-encoded object
+        inside the standard message field. Consumers MUST JSON-parse
+        message to extract stream payload.
+
+        This is a known limitation tracked as a TODO in ADR-0054:
+        migrate to top-level fields when rmcp adds _meta extension
+        support. Until then, the message field carries the JSON shape
+        described by StreamMessagePayload.
+
+        The progressToken equals job_id (ADR-0040 triple-equality).
+        The progress field carries an increasing byte count for
+        backpressure monitoring (not a percentage). The total field is
+        absent or zero for streaming events. The terminal sentinel event
+        includes job_state in the packed message to signal subprocess
+        completion without a separate notification.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StreamProgressEventPayload'
     CancelEvent:
       name: CancelEvent
       summary: >-
@@ -178,3 +211,102 @@ components:
               Equals job_id when scoped to an async job per ADR-0040.
             type: string
             pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+  schemas:
+    StreamProgressEventPayload:
+      description: |
+        Top-level shape of a notifications/progress frame carrying a
+        subprocess stream chunk. Due to the rmcp 1.7 ProgressNotificationParam
+        wire-format constraint (no _meta extension support), stream-extension
+        fields are packed as JSON inside the message field. See ADR-0054.
+      type: object
+      required:
+        - progressToken
+        - progress
+        - message
+      properties:
+        progressToken:
+          description: |
+            UUIDv7 Crockford base32 (26 chars); equals job_id per
+            ADR-0040 triple-equality contract.
+          type: string
+          pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+        progress:
+          description: |
+            Cumulative byte count of output delivered so far on this
+            stream. Used for backpressure monitoring, not a percentage.
+          type: number
+          minimum: 0
+        total:
+          description: |
+            Always absent or 0 for streaming events; not a percentage-
+            based total. Included only for protocol compatibility.
+          type: number
+          default: 0
+        message:
+          description: |
+            JSON-encoded StreamMessagePayload object packed into the
+            standard message field due to rmcp 1.7 ProgressNotificationParam
+            lacking _meta extension support (ADR-0054 TODO: migrate when
+            rmcp adds _meta). Consumers MUST JSON-parse this field to
+            extract stream payload fields.
+          type: string
+          contentSchema:
+            $ref: '#/components/schemas/StreamMessagePayload'
+    StreamMessagePayload:
+      description: |
+        JSON object packed inside StreamProgressEventPayload.message.
+        Carries all stream-extension fields that cannot be expressed as
+        top-level ProgressNotificationParam keys in rmcp 1.7.
+      type: object
+      required:
+        - stream
+        - chunk_base64
+        - chunk_bytes
+        - chunk_seq
+        - byte_offset
+      properties:
+        stream:
+          description: Identifies which subprocess output stream this chunk belongs to.
+          type: string
+          enum:
+            - stdout
+            - stderr
+        chunk_base64:
+          description: |
+            Base64-encoded bytes of the captured output chunk. Decode
+            to recover the original raw bytes.
+          type: string
+          contentEncoding: base64
+        chunk_bytes:
+          description: |
+            Number of raw (pre-base64) bytes in this chunk. Range 0..4096
+            per ADR-0054 chunk-size budget.
+          type: integer
+          minimum: 0
+          maximum: 4096
+        chunk_seq:
+          description: |
+            Monotonic per-stream sequence counter starting at 0. Consumers
+            MUST use this to detect dropped chunks and reorder out-of-order
+            deliveries within a single stream (stdout or stderr).
+          type: integer
+          minimum: 0
+        byte_offset:
+          description: |
+            Byte offset of this chunk within the full stream since process
+            start. Enables reassembly of the complete stream from partial
+            deliveries.
+          type: integer
+          minimum: 0
+        job_state:
+          description: |
+            Present ONLY in the terminal sentinel event to signal subprocess
+            completion. Consumers MUST treat its presence as end-of-stream
+            for this job. Absent on all non-terminal chunks.
+          type: string
+          enum:
+            - Succeeded
+            - Failed
+            - TimedOut
+            - Cancelled
+            - Killed

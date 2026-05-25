@@ -175,6 +175,11 @@ package schemas
 	// encoding (RFC 4648 §4). Clients decode before interpretation.
 	chunk_base64: string
 
+	// chunk_bytes is the decoded byte count of chunk_base64. Cap: 4096 (4 KiB)
+	// per ADR-0054 §"Tokio Task Architecture". Clients use this for backpressure
+	// hints and to validate chunk_base64 decoding.
+	chunk_bytes: int & >=0 & <=4096
+
 	// byte_offset is the cumulative byte offset of the first byte in this chunk
 	// relative to the beginning of the stream, allowing ordered reassembly even
 	// when events arrive out of order.

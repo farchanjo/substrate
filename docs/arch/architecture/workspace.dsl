@@ -140,6 +140,7 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
         subprocessAdapter -> policy "Validates binary path and env allowlist"
         subprocessAdapter -> domain "Implements SubprocessPort"
         subprocessAdapter -> localOs "Spawns and signals child process groups on"
+        subprocessAdapter -> mcpServer "Forwards stdout/stderr stream chunks as notifications/progress (ADR-0054 dispatcher task)"
     }
 
     views {
