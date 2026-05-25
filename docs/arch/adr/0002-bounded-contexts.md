@@ -227,6 +227,85 @@ mindmap
 
 Cross-reference: [ADR-0052](0052-subprocess-execution-architecture.md).
 
+### 2026-05-25 — Ninth bounded context: network-info (ADR-0058)
+
+[ADR-0058](0058-network-socket-introspection.md) introduces a ninth bounded
+context: `network-info`.
+
+**network-info**
+
+Purpose: read-only introspection of kernel TCP/UDP socket state and global
+TCP protocol counters.
+
+Ubiquitous language: `SocketEntry`, `TcpState`, `PcbList`, `TcpStats`,
+`ConnectionCounts`, `NetworkInfoPort`, `PidResolver`.
+
+Aggregates: `SocketEntry` (query read-model).
+
+Tools exposed: `net.tcp_list`, `net.udp_list`, `net.tcp_stats`,
+`net.connection_count`.
+
+Mutation risk: none. All tools are read-only; no elicitation required.
+
+The context map is updated to include the `network-info` branch:
+
+```mermaid
+mindmap
+  root((substrate-domain))
+    filesystem-query
+      ls
+      find
+      stat
+      du
+      file
+    filesystem-mutation
+      mkdir
+      cp
+      mv
+      rm
+      ln
+      touch
+      chmod
+    process
+      ps
+      kill
+      pgrep
+      lsof
+    system-info
+      uname
+      uptime
+      df
+      free
+      hostname
+    text-processing
+      grep
+      sed
+      awk
+      wc
+    archive
+      tar
+      gzip
+      zip
+    job
+      job.status
+      job.result
+      job.cancel
+      job.list
+    subprocess
+      subprocess.spawn
+      subprocess.list
+      subprocess.cancel
+      subprocess.result
+      subprocess.signal
+    network-info
+      net.tcp_list
+      net.udp_list
+      net.tcp_stats
+      net.connection_count
+```
+
+Cross-reference: [ADR-0058](0058-network-socket-introspection.md).
+
 ## Links
 
 - Related: [ADR-0025](0025-bounded-context-interactions.md)

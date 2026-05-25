@@ -247,6 +247,25 @@ supplemented by the skill body which loads inline only on matching turns
 (driven by `triggers:` covering the `mcp__substrate__` namespace plus
 dotted tool names).
 
+### 2026-05-25 — net.* tools added (ADR-0058)
+
+[ADR-0058](0058-network-socket-introspection.md) adds the `net` namespace with
+four read-only network introspection tools. All four follow the ≤100-char
+description budget of the 2026-05-22 amendment. None require `confirm_destructive`
+or `cascade_kill_pgid` (read-only, no destructive action).
+
+Narrative-arc one-liners for the four new tools:
+
+- `net.tcp_list` — list TCP sockets filtered by state; optional PID resolution.
+  `See substrate skill.`
+- `net.udp_list` — list UDP sockets. `See substrate skill.`
+- `net.tcp_stats` — read global TCP counters (retransmits, segments, connections).
+  `See substrate skill.`
+- `net.connection_count` — TCP connection-state histogram (LISTEN/ESTABLISHED/
+  TIME_WAIT/etc.). `See substrate skill.`
+
+Cross-reference: [ADR-0058](0058-network-socket-introspection.md).
+
 ### 2026-05-24 — subprocess.search added as sixth subprocess tool (ADR-0057)
 
 [ADR-0057](0057-subprocess-output-pagination-and-search.md) adds
