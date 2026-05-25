@@ -61,6 +61,15 @@ impl RmcpPeerNotifier {
     pub(crate) fn set_peer(&self, peer: Peer<RoleServer>) {
         self.peer.store(Some(Arc::new(peer)));
     }
+
+    /// Returns a clone of the currently bound peer, if any.
+    ///
+    /// Used by sibling observers (e.g. [`RmcpStreamNotifier`]) that share the
+    /// same late-bound peer slot but emit distinct payload shapes.
+    #[must_use]
+    pub(crate) fn peer_handle(&self) -> Option<Arc<Peer<RoleServer>>> {
+        self.peer.load_full()
+    }
 }
 
 impl Default for RmcpPeerNotifier {
