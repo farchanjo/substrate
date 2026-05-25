@@ -10,6 +10,7 @@
 //! - [`hints`] — structured response hints map (ADR-0007 + ADR-0040 extension).
 //! - [`jobs`] — async job control-plane value objects (ADR-0040).
 //! - [`ports`] — inbound port traits implemented by adapter crates.
+//! - [`network`] — network-info BC domain types: socket, stats, request/result (ADR-0058).
 //! - [`subprocess`] — subprocess BC domain types: request, handle, state, stream, errors (ADR-0052).
 //! - [`value_objects`] — shared value objects used across bounded contexts.
 
@@ -20,6 +21,7 @@ pub mod capabilities;
 pub mod errors;
 pub mod hints;
 pub mod jobs;
+pub mod network;
 pub mod ports;
 pub mod subprocess;
 pub mod value_objects;

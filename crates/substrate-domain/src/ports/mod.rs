@@ -11,6 +11,7 @@ pub mod fs_watcher;
 pub mod hash;
 pub mod job_notifier;
 pub mod job_registry;
+pub mod network_info;
 pub mod path_jail;
 pub mod stat;
 pub mod state_transition;
@@ -18,6 +19,7 @@ pub mod stream_observer;
 pub mod subprocess;
 
 pub use dir_walker::{DirEntry, DirWalkerPort, WalkOpts};
+pub use network_info::{NetworkInfoPort, NoopNetworkInfoPort};
 pub use factory::PortFactory;
 pub use fs_index::{CancelSignal, FsIndexPort, IndexQuery};
 pub use fs_watcher::{FsWatcherPort, WatchEvent, WatchGuard};
