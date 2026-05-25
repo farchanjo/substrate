@@ -17,6 +17,9 @@ use time::OffsetDateTime;
 use crate::errors::SubstrateResult;
 use crate::subprocess::errors::SubprocessError;
 use crate::subprocess::handle::SubprocessHandle;
+use crate::subprocess::pagination::{
+    SubprocessSearchRequest, SubprocessSearchResult,
+};
 use crate::subprocess::request::SubprocessRequest;
 use crate::subprocess::state::SubprocessState;
 use crate::value_objects::{ClientId, JobId};
@@ -127,6 +130,26 @@ pub trait SubprocessPort: Send + Sync {
         signal_name: SubprocessSignalName,
         target: SignalTarget,
     ) -> SubstrateResult<()>;
+
+    /// Searches subprocess output lines by regex pattern with pagination.
+    ///
+    /// Applies the compiled regex from `req.pattern` to the captured stdout and/or
+    /// stderr line buffers for the identified job, returning `SearchMatch` entries
+    /// ordered and paginated according to `req.pagination`.
+    ///
+    /// When `req.case_insensitive` is `true`, ASCII case is ignored during matching.
+    ///
+    /// `req.validate()` MUST be called before invoking the adapter; the adapter
+    /// MAY call it again as a defense-in-depth measure.
+    ///
+    /// # Errors
+    ///
+    /// - `SubprocessError::InvalidRequest` — pattern length or pagination out of range.
+    /// - `SubstrateError::JobNotFound` — no subprocess with the given `job_id`.
+    async fn search(
+        &self,
+        req: SubprocessSearchRequest,
+    ) -> Result<SubprocessSearchResult, SubprocessError>;
 }
 
 // ---- Supporting types -------------------------------------------------------
@@ -213,6 +236,48 @@ pub struct SubprocessResult {
     /// Timestamp when the subprocess transitioned to the terminal state.
     #[serde(with = "time::serde::rfc3339")]
     pub terminal_at: OffsetDateTime,
+
+    // ---- Pagination fields (ADR-0057) ----------------------------------------
+    //
+    // Populated when `SubprocessResultRequest.pagination` is `Some`. All six
+    // fields are `None` when pagination was not requested, keeping backward
+    // compatibility with callers that do not supply a pagination cursor.
+
+    /// Paginated stdout lines for this result page.
+    ///
+    /// `None` when the caller did not include a `pagination` cursor in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_lines: Option<Vec<String>>,
+
+    /// Total number of stdout lines available across all pages.
+    ///
+    /// `None` when the caller did not include a `pagination` cursor in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_total_lines: Option<u64>,
+
+    /// Offset to pass as `pagination.offset` to fetch the next stdout page.
+    ///
+    /// `None` when there are no more stdout lines or pagination was not requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_next_offset: Option<u64>,
+
+    /// Paginated stderr lines for this result page.
+    ///
+    /// `None` when the caller did not include a `pagination` cursor in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_lines: Option<Vec<String>>,
+
+    /// Total number of stderr lines available across all pages.
+    ///
+    /// `None` when the caller did not include a `pagination` cursor in the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_total_lines: Option<u64>,
+
+    /// Offset to pass as `pagination.offset` to fetch the next stderr page.
+    ///
+    /// `None` when there are no more stderr lines or pagination was not requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_next_offset: Option<u64>,
 }
 
 /// POSIX signal names available for `subprocess.signal`.

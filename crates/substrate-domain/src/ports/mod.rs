@@ -29,3 +29,6 @@ pub use stat::{FileStat, StatPort};
 pub use state_transition::{NoopStateTransitionObserver, StateTransitionObserver};
 pub use stream_observer::{NoopStreamObserver, StreamChunkObserver};
 pub use subprocess::{SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName};
+pub use crate::subprocess::pagination::{
+    Order, Pagination, SearchMatch, SubprocessSearchRequest, SubprocessSearchResult,
+};
