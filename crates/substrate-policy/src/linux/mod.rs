@@ -24,7 +24,7 @@
 )]
 
 use std::ffi::CString;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
