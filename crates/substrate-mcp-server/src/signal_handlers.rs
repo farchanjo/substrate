@@ -219,5 +219,28 @@ async fn terminate_subprocesses_on_shutdown(
             .await;
     }
 
-    tracing::info!("subprocess cascade termination complete");
+    // ADR-0033 tmp-file cleanup: invoke `cancel()` on each handle so the
+    // adapter's terminate_cascade runs `cleanup_tmp_files` on transit
+    // `.tmp.<uuid7>` paths. Pure signal()+drain leaves transit files
+    // orphaned because finalize-on-EOF only fires when readers observe
+    // clean EOF, which is not guaranteed during SIGKILL.
+    //
+    // Re-list because the previous SIGKILL pass may have lagged; cancel
+    // is idempotent on already-terminal handles.
+    let Ok((final_handles, _)) = port.list(&client_id, None, None, 500).await else {
+        tracing::info!("subprocess cascade termination complete (tmp-cleanup skipped — list failed)");
+        return;
+    };
+    for handle in &final_handles {
+        // force=true to skip another SIGTERM drain (already drained above)
+        if let Err(e) = port.cancel(&handle.job_id, true).await {
+            tracing::debug!(
+                job_id = %handle.job_id,
+                error = %e,
+                "subprocess cancel during shutdown failed (handle likely already terminal)"
+            );
+        }
+    }
+
+    tracing::info!("subprocess cascade termination complete (tmp-cleanup invoked)");
 }

@@ -83,6 +83,14 @@ pub struct RuntimeConfig {
     /// consumers can detect whether the operator explicitly set the section).
     #[serde(default)]
     pub subprocess: Option<SubprocessConfig>,
+
+    /// Startup-time configuration per ADR-0055 (orphan reaper) and other
+    /// initialization knobs that run before the MCP server accepts requests.
+    ///
+    /// Optional at the TOML layer: when the `[startup]` section is absent the
+    /// composition root applies `StartupConfig::default()`.
+    #[serde(default)]
+    pub startup: Option<StartupConfig>,
 }
 
 impl Default for RuntimeConfig {
@@ -100,8 +108,45 @@ impl Default for RuntimeConfig {
             capabilities: None,
             simd: None,
             subprocess: None,
+            startup: None,
         }
     }
+}
+
+// ---- Startup -----------------------------------------------------------------
+
+/// Startup configuration per ADR-0055 §"Configuration".
+///
+/// Embedded under the `[startup]` TOML section. Defaults match ADR-0055.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StartupConfig {
+    /// Minimum age in seconds for an orphan tmp file to be reaped per ADR-0055.
+    ///
+    /// Default: 600 (10 minutes). Files newer than this are preserved on the
+    /// assumption that another substrate instance may be actively writing them.
+    #[serde(default = "default_600_u64")]
+    pub orphan_reap_age_secs: u64,
+
+    /// Wall-clock budget for the entire orphan-reaper pass per ADR-0055.
+    ///
+    /// Default: 30 seconds. When exceeded, the reaper logs a warning and
+    /// proceeds — the MCP server start MUST NOT block indefinitely on cleanup.
+    #[serde(default = "default_30_u64")]
+    pub orphan_reap_max_duration_secs: u64,
+
+    /// When true, skip the orphan-reaper pass entirely (operator escape hatch).
+    /// Default: false.
+    #[serde(default)]
+    pub disable_orphan_reaper: bool,
+}
+
+const fn default_600_u64() -> u64 {
+    600
+}
+
+const fn default_30_u64() -> u64 {
+    30
 }
 
 // ---- Logging -----------------------------------------------------------------
