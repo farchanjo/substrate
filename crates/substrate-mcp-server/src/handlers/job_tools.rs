@@ -40,15 +40,19 @@ pub(crate) async fn handle_job_status(
 
 /// Handles `job_result` — returns the terminal result, optionally long-polling.
 ///
-/// `wait_ms` is capped at `jobs.quotas.result_max_wait_ms` by the registry
-/// implementation.
+/// Per ADR-0059, when `wait_ms` is `None` the caller-supplied `default_wait_ms`
+/// is substituted (forming the ADR-0059 absent-field path). An explicit
+/// `Some(0)` is honored as fast-return (opt-out). The effective value is then
+/// capped server-side by `jobs.quotas.result_max_wait_ms` inside the registry.
 pub(crate) async fn handle_job_result(
     registry: &dyn JobRegistryPort,
     job_id: &JobId,
-    wait_ms: Option<u64>,
+    wait_ms: Option<u32>,
+    default_wait_ms: u32,
 ) -> SubstrateResult<JobResult> {
-    let wait = wait_ms.map(Duration::from_millis);
-    tracing::debug!(%job_id, ?wait, "job_result called");
+    let effective_ms = wait_ms.unwrap_or(default_wait_ms);
+    let wait = Some(Duration::from_millis(u64::from(effective_ms)));
+    tracing::debug!(%job_id, ?wait, supplied = ?wait_ms, default_wait_ms, "job_result called");
     registry.result(job_id, wait).await
 }
 

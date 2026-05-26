@@ -208,6 +208,18 @@ pub(crate) async fn wire(
     let notifier: Arc<RmcpPeerNotifier> = Arc::new(RmcpPeerNotifier::new());
 
     let job_cfg = config.jobs.clone().unwrap_or_default();
+
+    // ADR-0059: enforce the wait-window invariant
+    // (0 < result_default_wait_ms <= result_max_wait_ms) at startup.
+    // Fail-closed per ADR-0004: a misconfigured wait window aborts boot rather
+    // than letting unbounded waits leak through at runtime.
+    if let Err(reason) = job_cfg.quotas.validate_wait_window() {
+        return Err(substrate_domain::SubstrateError::ConfigInvalid {
+            offending_field: format!("jobs.quotas ({reason})"),
+            correlation_id: None,
+        });
+    }
+
     let notifier_dyn: Arc<dyn substrate_jobs::ProgressNotifier> =
         Arc::clone(&notifier) as Arc<dyn substrate_jobs::ProgressNotifier>;
     let job_registry: Arc<dyn JobRegistryPort> =
@@ -276,9 +288,8 @@ pub(crate) async fn wire(
         if !startup_cfg.disable_orphan_reaper {
             if let Some(ref tmp_root_path) = tmp_root {
                 let reap_age = std::time::Duration::from_secs(startup_cfg.orphan_reap_age_secs);
-                let reap_budget = std::time::Duration::from_secs(
-                    startup_cfg.orphan_reap_max_duration_secs,
-                );
+                let reap_budget =
+                    std::time::Duration::from_secs(startup_cfg.orphan_reap_max_duration_secs);
                 match tokio::time::timeout(
                     reap_budget,
                     substrate_subprocess::run_orphan_reaper_once(tmp_root_path, reap_age),
@@ -293,16 +304,16 @@ pub(crate) async fn wire(
                             errors = stats.errors,
                             "orphan reaper completed at startup"
                         );
-                    }
+                    },
                     Ok(Err(e)) => {
                         tracing::warn!(error = %e, "orphan reaper failed to read tmp_root (non-fatal)");
-                    }
+                    },
                     Err(_elapsed) => {
                         tracing::warn!(
                             budget_secs = startup_cfg.orphan_reap_max_duration_secs,
                             "orphan reaper exceeded duration budget; continuing startup"
                         );
-                    }
+                    },
                 }
             }
         }
@@ -312,7 +323,9 @@ pub(crate) async fn wire(
         // spec'd constructor parameter. We adapt: call `new` then chain
         // `with_tmp_root` when a tmp_root is available.
         let registry_base = substrate_subprocess::registry::SubprocessRegistry::new(
-            substrate_subprocess::registry::BinaryAllowlist::new(subprocess_cfg.binary_allowlist.clone()),
+            substrate_subprocess::registry::BinaryAllowlist::new(
+                subprocess_cfg.binary_allowlist.clone(),
+            ),
             Vec::new(),
             subprocess_cfg.max_per_client,
             subprocess_cfg.max_concurrent,

@@ -624,7 +624,17 @@ impl ToolDispatcher {
             #[cfg(feature = "subprocess")]
             "subprocess_result" => {
                 let port = Arc::clone(&self.subprocess);
-                crate::handlers::subprocess_tools::handle_subprocess_result(args, port).await
+                let default_wait_ms = self
+                    .config
+                    .jobs
+                    .as_ref()
+                    .map_or(5_000_u32, |j| j.quotas.result_default_wait_ms);
+                crate::handlers::subprocess_tools::handle_subprocess_result(
+                    args,
+                    port,
+                    default_wait_ms,
+                )
+                .await
             },
             #[cfg(feature = "subprocess")]
             "subprocess_signal" => {
@@ -1271,10 +1281,21 @@ impl ToolDispatcher {
         struct Req {
             job_id: JobId,
             #[serde(default)]
-            wait_ms: Option<u64>,
+            wait_ms: Option<u32>,
         }
         let req: Req = parse(&args)?;
-        let wait = req.wait_ms.map(std::time::Duration::from_millis);
+        // ADR-0059: when wait_ms is absent the handler substitutes
+        // jobs.quotas.result_default_wait_ms so callers default to long-poll
+        // instead of dropping into a polling loop. An explicit wait_ms=0 from
+        // the payload is preserved (fast-return opt-out). Type is u32 to align
+        // with JobQuotas (cap 30_000 fits comfortably in u32).
+        let default_wait_ms: u32 = self
+            .config
+            .jobs
+            .as_ref()
+            .map_or(5_000, |j| j.quotas.result_default_wait_ms);
+        let effective_ms = req.wait_ms.unwrap_or(default_wait_ms);
+        let wait = Some(std::time::Duration::from_millis(u64::from(effective_ms)));
         let result = self.jobs.result(&req.job_id, wait).await?;
         let structured = match &result {
             substrate_domain::ports::job_registry::JobResult::Succeeded(v) => v.clone(),

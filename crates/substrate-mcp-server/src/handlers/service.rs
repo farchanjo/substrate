@@ -243,7 +243,7 @@ fn schema_subprocess_result() -> std::sync::Arc<serde_json::Map<String, serde_js
         "required": ["job_id"],
         "properties": {
             "job_id": { "type": "string" },
-            "wait_ms": { "type": "integer", "minimum": 0, "default": 0, "description": "Long-poll timeout in milliseconds." },
+            "wait_ms": { "type": "integer", "minimum": 0, "maximum": 30000, "default": 5000, "description": "Long-poll timeout in milliseconds. Omit (or 0 explicitly) for fast-return; default 5000 ms per ADR-0059." },
             "include_aggregates": { "type": "boolean", "default": true },
             "pagination": pagination_schema_object()
         },
@@ -618,14 +618,22 @@ struct JobStatusRequest {
 }
 
 /// Input parameters for `job_result`.
+///
+/// Per ADR-0059, when `wait_ms` is omitted the handler substitutes
+/// `jobs.quotas.result_default_wait_ms` (5000 ms by default) so callers
+/// default to long-poll instead of a polling loop. An explicit `wait_ms = 0`
+/// in the payload preserves fast-return semantics. Type is `u32` to align
+/// with `JobQuotas` and `subprocess.result`; the server cap of 30 000 ms fits
+/// comfortably within `u32` range.
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 #[expect(dead_code, reason = "fields exist for schemars schema generation only")]
 struct JobResultRequest {
     /// `UUIDv7` job identifier — Crockford base32, 26 ASCII chars.
     job_id: String,
-    /// Optional long-poll timeout in milliseconds (capped by server config).
+    /// Optional long-poll timeout in milliseconds (capped server-side at 30000).
+    /// Omit for the configured default; pass `0` explicitly for fast-return.
     #[serde(default)]
-    wait_ms: Option<u64>,
+    wait_ms: Option<u32>,
 }
 
 /// Input parameters for `job_cancel`.
@@ -788,9 +796,21 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             schema_subprocess_search(),
         ),
         // ---- network-info BC (always-on) ------------------------------------
-        Tool::new("net_tcp_list", descriptions::net_tcp_list(), schema_net_tcp_list()),
-        Tool::new("net_udp_list", descriptions::net_udp_list(), schema_net_udp_list()),
-        Tool::new("net_tcp_stats", descriptions::net_tcp_stats(), schema_empty()),
+        Tool::new(
+            "net_tcp_list",
+            descriptions::net_tcp_list(),
+            schema_net_tcp_list(),
+        ),
+        Tool::new(
+            "net_udp_list",
+            descriptions::net_udp_list(),
+            schema_net_udp_list(),
+        ),
+        Tool::new(
+            "net_tcp_stats",
+            descriptions::net_tcp_stats(),
+            schema_empty(),
+        ),
         Tool::new(
             "net_connection_count",
             descriptions::net_connection_count(),

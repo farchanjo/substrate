@@ -242,9 +242,11 @@ pub(crate) async fn handle_subprocess_cancel(
 pub(crate) struct SubprocessResultRequest {
     /// Job identifier of the subprocess.
     pub(crate) job_id: JobId,
-    /// Long-poll timeout in milliseconds (0 = no wait).
+    /// Long-poll timeout in milliseconds. Per ADR-0059, absent field substitutes
+    /// the configured `jobs.quotas.result_default_wait_ms`; explicit `0` opts
+    /// out of long-poll (fast-return).
     #[serde(default)]
-    pub(crate) wait_ms: u32,
+    pub(crate) wait_ms: Option<u32>,
     /// Include aggregated stdout/stderr in the response.
     #[serde(default = "default_true")]
     pub(crate) include_aggregates: bool,
@@ -263,10 +265,15 @@ const fn default_true() -> bool {
 }
 
 /// Dispatches `subprocess.result` — retrieve terminal result and output. See substrate skill.
+///
+/// `default_wait_ms` is sourced from `jobs.quotas.result_default_wait_ms` per ADR-0059
+/// and substituted when the caller omits the `wait_ms` field. An explicit `wait_ms = 0`
+/// in the payload is honored unchanged (fast-return).
 #[instrument(skip(port, args))]
 pub(crate) async fn handle_subprocess_result(
     args: Value,
     port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
+    default_wait_ms: u32,
 ) -> SubstrateResult<DispatchedResponse> {
     let req: SubprocessResultRequest =
         serde_json::from_value(args).map_err(|e| SubstrateError::InvalidArgument {
@@ -275,8 +282,9 @@ pub(crate) async fn handle_subprocess_result(
             correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         })?;
 
+    let effective_wait_ms = req.wait_ms.unwrap_or(default_wait_ms);
     let result = port
-        .result(&req.job_id, req.wait_ms, req.include_aggregates)
+        .result(&req.job_id, effective_wait_ms, req.include_aggregates)
         .await?;
 
     // Base64-encode binary stdout/stderr aggregates for safe JSON transport.
@@ -328,13 +336,13 @@ pub(crate) async fn handle_subprocess_result(
             let stdout_text = String::from_utf8_lossy(&result.stdout_aggregate).into_owned();
             let (lines, total, next) =
                 substrate_subprocess::registry::paginate_lines(&stdout_text, pag);
-            (
-                Some(lines),
-                Some(total),
-                next,
-            )
+            (Some(lines), Some(total), next)
         } else {
-            (result.stdout_lines, result.stdout_total_lines, result.stdout_next_offset)
+            (
+                result.stdout_lines,
+                result.stdout_total_lines,
+                result.stdout_next_offset,
+            )
         };
 
     let (stderr_lines, stderr_total_lines, stderr_next_offset) =
@@ -342,13 +350,13 @@ pub(crate) async fn handle_subprocess_result(
             let stderr_text = String::from_utf8_lossy(&result.stderr_aggregate).into_owned();
             let (lines, total, next) =
                 substrate_subprocess::registry::paginate_lines(&stderr_text, pag);
-            (
-                Some(lines),
-                Some(total),
-                next,
-            )
+            (Some(lines), Some(total), next)
         } else {
-            (result.stderr_lines, result.stderr_total_lines, result.stderr_next_offset)
+            (
+                result.stderr_lines,
+                result.stderr_total_lines,
+                result.stderr_next_offset,
+            )
         };
 
     // Derive a pagination-aware next_action hint: suggest subprocess.result with
@@ -416,9 +424,7 @@ pub(crate) async fn handle_subprocess_search(
     let total = result.total_matches;
     let next = result.next_offset;
 
-    let content = format!(
-        "subprocess.search: matches={n} total={total} next_offset={next:?}.",
-    );
+    let content = format!("subprocess.search: matches={n} total={total} next_offset={next:?}.",);
 
     let structured = json!({
         "matches": result.matches.iter().map(|m| json!({
