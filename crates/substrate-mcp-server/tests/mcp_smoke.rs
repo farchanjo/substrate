@@ -161,7 +161,7 @@ fn initialize_returns_protocol_2025_11_25_and_capabilities() {
 // ---- tools/list test ---------------------------------------------------------
 
 #[test]
-fn tools_list_returns_37_tools() {
+fn tools_list_returns_41_tools() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().canonicalize().unwrap();
     write_config(&root, &root);
@@ -197,7 +197,7 @@ fn tools_list_returns_37_tools() {
     let resp = recv(&mut reader);
 
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 37, "expected 37 tools, found {}", tools.len());
+    assert_eq!(tools.len(), 41, "expected 41 tools, found {}", tools.len());
 
     let mut guard = child_arc.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(c) = guard.as_mut() {
