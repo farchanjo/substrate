@@ -411,6 +411,28 @@ Dependent new ADRs (future waves):
 
 ## Amendments
 
+### 2026-05-26 — Default wait_ms tightened via ADR-0059
+
+[ADR-0059](0059-universal-wait-timeout-enforcement.md) introduces a new quota field
+`jobs.quotas.result_default_wait_ms` (default 5 000 ms) and mandates that the MCP
+handler layer substitute this value whenever a caller omits `wait_ms` entirely from a
+`job.result` call. The substitution happens exclusively in the handler; the
+`JobRegistryPort::result` port trait and the `InMemoryJobRegistry` adapter always
+receive a concrete duration and are unaware of the default.
+
+The `wait_ms: default 0` declaration in the §Pull Channel section of this ADR is
+therefore superseded at the handler level: an absent `wait_ms` is no longer equivalent
+to `0`. An explicit `wait_ms = 0` from the caller is still preserved as a fast-return
+(non-blocking poll) with no substitution applied. The JSON schema published by the MCP
+server now declares `default: 5000` on the `wait_ms` field for `job.result`, replacing
+the former `default: 0`.
+
+The boot guard introduced by ADR-0059 rejects a server configuration where
+`result_default_wait_ms` falls outside the open interval `(0, result_max_wait_ms)`,
+returning `SUBSTRATE_CONFIG_INVALID` at startup. The `JobState` machine, Bucket
+classifications, cap behaviour (`result_max_wait_ms`), TTL, GC, and all other
+control-plane invariants defined in this ADR are unchanged.
+
 ### 2026-05-24 — Bucket E (long-running subprocess) introduced via ADR-0052
 
 [ADR-0052](0052-subprocess-execution-architecture.md) introduces a fifth dispatch bucket for subprocess tools. Bucket E is always-async with no inline path; every `subprocess.spawn` call dispatches as an async job and returns a job receipt immediately.

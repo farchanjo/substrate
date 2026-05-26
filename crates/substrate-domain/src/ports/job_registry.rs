@@ -44,6 +44,15 @@ pub trait JobRegistryPort: Send + Sync {
     /// When `wait` is `Some(d)`, long-polls up to `d` for the job to reach a
     /// terminal state. The server-side cap is `jobs.result_max_wait_ms`.
     ///
+    /// **ADR-0059 — handler-side substitution:** the MCP tool handler substitutes
+    /// the configured `jobs.quotas.result_default_wait_ms` (default 5 000 ms) when
+    /// the caller omits `wait_ms` entirely. An explicit `wait_ms = 0` is preserved
+    /// as a fast-return (non-blocking poll). This port trait always receives the
+    /// already-substituted value as `Some(d)` or `None` (fast-return). The
+    /// substitution logic and the boot guard that rejects an invalid wait window
+    /// live exclusively in the handler layer; the port and the registry adapter are
+    /// unaware of the default. See [ADR-0059](../../../docs/arch/adr/0059-universal-wait-timeout-enforcement.md).
+    ///
     /// # Errors
     ///
     /// - `SUBSTRATE_JOB_NOT_FOUND` — job expired or never existed.

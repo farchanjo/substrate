@@ -17,9 +17,7 @@ use time::OffsetDateTime;
 use crate::errors::SubstrateResult;
 use crate::subprocess::errors::SubprocessError;
 use crate::subprocess::handle::SubprocessHandle;
-use crate::subprocess::pagination::{
-    SubprocessSearchRequest, SubprocessSearchResult,
-};
+use crate::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
 use crate::subprocess::request::SubprocessRequest;
 use crate::subprocess::state::SubprocessState;
 use crate::value_objects::{ClientId, JobId};
@@ -97,6 +95,14 @@ pub trait SubprocessPort: Send + Sync {
     /// When `wait_ms > 0`, long-polls up to `wait_ms` milliseconds for the
     /// subprocess to reach a terminal state. The server-side cap is
     /// `jobs.result_max_wait_ms`.
+    ///
+    /// **ADR-0059 — handler-side substitution:** the MCP tool handler substitutes
+    /// the configured `jobs.quotas.result_default_wait_ms` (default 5 000 ms) when
+    /// the caller omits `wait_ms` entirely. An explicit caller-supplied `wait_ms = 0`
+    /// is preserved as a fast-return (non-blocking poll). This port trait always
+    /// receives the already-substituted value; the substitution and the boot guard
+    /// that rejects an invalid wait window reside exclusively in the handler layer.
+    /// See [ADR-0059](../../../docs/arch/adr/0059-universal-wait-timeout-enforcement.md).
     ///
     /// When `include_aggregates` is `false`, the `stdout_aggregate` and
     /// `stderr_aggregate` fields in the result are empty to reduce response size.
@@ -242,7 +248,6 @@ pub struct SubprocessResult {
     // Populated when `SubprocessResultRequest.pagination` is `Some`. All six
     // fields are `None` when pagination was not requested, keeping backward
     // compatibility with callers that do not supply a pagination cursor.
-
     /// Paginated stdout lines for this result page.
     ///
     /// `None` when the caller did not include a `pagination` cursor in the request.

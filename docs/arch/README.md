@@ -166,6 +166,8 @@ Five decisions were recorded after the initial specification wave:
 - [ADR-0044](adr/0044-no-subprocess-policy.md) — bans `std::process::Command`
   and subprocess-invocation crates from shipped code; enforced by the
   `no_subprocess.rego` Rego policy.
+- [ADR-0059](adr/0059-universal-wait-timeout-enforcement.md) — universal
+  wait/timeout enforcement — no unbounded waits in pull-channel tools.
 
 ## License
 
