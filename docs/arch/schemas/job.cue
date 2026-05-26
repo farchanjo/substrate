@@ -155,6 +155,12 @@ package schemas
 	// result_max_wait_ms caps the wait_ms parameter of job.result (long-poll ceiling).
 	result_max_wait_ms: int & >=0 | *30000
 
+	// result_default_wait_ms is the wait_ms substituted by the handler when the
+	// caller omits the field per ADR-0059. Must satisfy 0 < default <= result_max_wait_ms.
+	// An explicit wait_ms=0 in the request payload is honored as before; only the
+	// "field absent" case is substituted by this default.
+	result_default_wait_ms: int & >0 & <=result_max_wait_ms | *5000
+
 	// progress_interval_ms is the minimum emission interval between progress events.
 	// Events are also suppressed unless progress delta >= 1 percentage point.
 	progress_interval_ms: int & >=10 | *250
