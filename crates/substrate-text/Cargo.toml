@@ -32,6 +32,7 @@ regex = { workspace = true }
 aho-corasick = { workspace = true }
 bytecount = { workspace = true }
 simdutf8 = { workspace = true }
+ignore = { workspace = true }
 
 [dev-dependencies]
 rstest    = { workspace = true }

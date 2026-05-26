@@ -30,6 +30,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ignore::WalkBuilder;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -258,6 +259,16 @@ fn scan_file(
 /// Returns the aggregated `(matches, skipped_binary_count)` across all files.
 /// Directories and other non-file entries are silently skipped.
 /// Cancellation is checked at each file boundary.
+///
+/// # Ignore semantics
+///
+/// Uses `ignore::WalkBuilder` (the same crate `ripgrep` uses internally).
+/// Honours `.gitignore`, `.ignore`, `.git/info/exclude`, the global git
+/// `core.excludesfile`, and parent-directory ignore files. Hidden entries
+/// (dotfiles) are also skipped by default, matching `ripgrep`'s default
+/// behaviour. Without this, a search over a typical project root that
+/// contains `target/`, `node_modules/`, or `.git/` walks gigabytes of
+/// irrelevant content and violates the performance budget in ADR-0030.
 fn scan_dir(
     dir: &Path,
     regex: &regex::Regex,
@@ -266,17 +277,26 @@ fn scan_dir(
     let mut all_matches: Vec<MatchRecord> = Vec::new();
     let mut total_skipped: u64 = 0;
 
-    // Collect file paths first to allow sorted, deterministic output.
-    let mut file_paths: Vec<PathBuf> = Vec::new();
-    collect_files(dir, &mut file_paths);
+    let walker = WalkBuilder::new(dir)
+        .standard_filters(true)
+        .sort_by_file_name(std::cmp::Ord::cmp)
+        .build();
 
-    for path in &file_paths {
+    for entry in walker {
         if cancel.is_cancelled() {
             return Err(SubstrateError::Cancelled {
                 correlation_id: None,
             });
         }
-        match scan_file(path, regex, cancel.child_token()) {
+        let Ok(entry) = entry else { continue };
+        let Some(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_file() {
+            continue;
+        }
+        let path: PathBuf = entry.into_path();
+        match scan_file(&path, regex, cancel.child_token()) {
             Ok((file_matches, skipped)) => {
                 all_matches.extend(file_matches);
                 total_skipped += skipped;
@@ -292,25 +312,6 @@ fn scan_dir(
     }
 
     Ok((all_matches, total_skipped))
-}
-
-/// Populate `out` with all regular file paths reachable under `dir` (recursive).
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut entries: Vec<_> = rd.flatten().collect();
-    // Sort for determinism.
-    entries.sort_by_key(std::fs::DirEntry::path);
-    for entry in entries {
-        let path = entry.path();
-        let Ok(meta) = entry.metadata() else { continue };
-        if meta.is_dir() {
-            collect_files(&path, out);
-        } else if meta.is_file() {
-            out.push(path);
-        }
-    }
 }
 
 // ---- Tests -------------------------------------------------------------------

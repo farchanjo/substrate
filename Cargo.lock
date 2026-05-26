@@ -2592,6 +2592,7 @@ dependencies = [
  "bytecount",
  "criterion",
  "futures",
+ "ignore",
  "memchr",
  "proptest",
  "regex",
