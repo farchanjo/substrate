@@ -26,6 +26,18 @@ pub struct JobQuotas {
     /// Cap in milliseconds for the `wait_ms` parameter of `job.result`. Default: 30000.
     pub result_max_wait_ms: u32,
 
+    /// Substituted `wait_ms` value when callers omit the field per ADR-0059. Default: 5000.
+    ///
+    /// Invariant: `0 < result_default_wait_ms <= result_max_wait_ms`. An explicit
+    /// `wait_ms = 0` in the request payload is honored unchanged; only field-absence
+    /// triggers substitution.
+    ///
+    /// Carries a serde default so existing TOML configs (predating ADR-0059) that
+    /// enumerate `[jobs.quotas]` fields explicitly continue to deserialize without
+    /// requiring an operator-side edit.
+    #[serde(default = "default_result_default_wait_ms")]
+    pub result_default_wait_ms: u32,
+
     /// Minimum emission interval between progress events in milliseconds. Default: 250.
     ///
     /// Events are also suppressed unless the progress delta >= 1 percentage point.
@@ -41,6 +53,10 @@ pub struct JobQuotas {
     pub gc_interval_secs: u32,
 }
 
+const fn default_result_default_wait_ms() -> u32 {
+    5_000
+}
+
 impl Default for JobQuotas {
     fn default() -> Self {
         Self {
@@ -48,10 +64,75 @@ impl Default for JobQuotas {
             max_per_client: 4,
             result_ttl_secs: 300,
             result_max_wait_ms: 30_000,
+            result_default_wait_ms: 5_000,
             progress_interval_ms: 250,
             progress_channel_size: 64,
             gc_interval_secs: 60,
         }
+    }
+}
+
+impl JobQuotas {
+    /// Validates the cross-field invariant
+    /// `0 < result_default_wait_ms <= result_max_wait_ms` per ADR-0059.
+    ///
+    /// Returns the offending field name + message when violated. The composition
+    /// root calls this after TOML load and refuses to start on violation
+    /// (fail-closed per ADR-0004).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the configured default-wait is zero or exceeds the
+    /// configured maximum-wait.
+    pub const fn validate_wait_window(&self) -> Result<(), &'static str> {
+        if self.result_default_wait_ms == 0 {
+            return Err("jobs.quotas.result_default_wait_ms must be > 0 per ADR-0059");
+        }
+        if self.result_default_wait_ms > self.result_max_wait_ms {
+            return Err(
+                "jobs.quotas.result_default_wait_ms must be <= result_max_wait_ms per ADR-0059",
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::JobQuotas;
+
+    #[test]
+    fn default_passes_wait_window_invariant() {
+        assert!(JobQuotas::default().validate_wait_window().is_ok());
+    }
+
+    #[test]
+    fn zero_default_wait_is_rejected() {
+        let q = JobQuotas {
+            result_default_wait_ms: 0,
+            ..JobQuotas::default()
+        };
+        assert!(q.validate_wait_window().is_err());
+    }
+
+    #[test]
+    fn default_above_max_is_rejected() {
+        let q = JobQuotas {
+            result_max_wait_ms: 1_000,
+            result_default_wait_ms: 5_000,
+            ..JobQuotas::default()
+        };
+        assert!(q.validate_wait_window().is_err());
+    }
+
+    #[test]
+    fn equal_default_and_max_is_allowed() {
+        let q = JobQuotas {
+            result_max_wait_ms: 5_000,
+            result_default_wait_ms: 5_000,
+            ..JobQuotas::default()
+        };
+        assert!(q.validate_wait_window().is_ok());
     }
 }
 
