@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU8};
+use std::sync::atomic::{AtomicU8, AtomicU64};
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;

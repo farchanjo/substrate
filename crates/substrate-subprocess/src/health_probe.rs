@@ -91,7 +91,7 @@ pub async fn run_probe(probe: &HealthProbe, cancel: &CancellationToken) -> Probe
             // from stdout/stderr is matched in the StreamChunkObserver fan-out, not
             // polled. Returning Skipped causes the polling loop to short-circuit.
             ProbeOutcome::Skipped
-        }
+        },
         HealthProbe::PortOpen {
             host,
             port,
@@ -142,11 +142,11 @@ pub async fn run_probe_with_escalation(
             } else {
                 ProbeOutcome::FailedTransient
             }
-        }
+        },
         ProbeOutcome::Ready | ProbeOutcome::Skipped => {
             *consecutive_failures = 0;
             raw
-        }
+        },
         ProbeOutcome::Cancelled | ProbeOutcome::FailedTerminal => raw,
     }
 }
@@ -455,20 +455,14 @@ mod tests {
     #[cfg(feature = "outbound-net")]
     fn parse_url_explicit_port() {
         let result = parse_url("http://localhost:8080/");
-        assert_eq!(
-            result,
-            Some(("localhost".to_owned(), 8080, "/".to_owned()))
-        );
+        assert_eq!(result, Some(("localhost".to_owned(), 8080, "/".to_owned())));
     }
 
     #[test]
     #[cfg(feature = "outbound-net")]
     fn parse_url_no_path() {
         let result = parse_url("http://localhost:9000");
-        assert_eq!(
-            result,
-            Some(("localhost".to_owned(), 9000, "/".to_owned()))
-        );
+        assert_eq!(result, Some(("localhost".to_owned(), 9000, "/".to_owned())));
     }
 
     #[test]
@@ -493,8 +487,7 @@ mod tests {
         // directly through run_probe_with_escalation on HealthProbe::None (Skipped)
         // to verify counter stays 0, then manually drive the counter via a
         // wrapper that pretends to fail.
-        let outcome =
-            run_probe_with_escalation(&HealthProbe::None, &cancel, &mut counter).await;
+        let outcome = run_probe_with_escalation(&HealthProbe::None, &cancel, &mut counter).await;
         assert_eq!(outcome, ProbeOutcome::Skipped);
         assert_eq!(counter, 0);
 
@@ -502,8 +495,7 @@ mod tests {
         // calling the threshold logic.
         counter = 2; // two prior failures already tracked
         // Next call to run_probe_with_escalation with a Skipped probe resets counter.
-        let outcome =
-            run_probe_with_escalation(&HealthProbe::None, &cancel, &mut counter).await;
+        let outcome = run_probe_with_escalation(&HealthProbe::None, &cancel, &mut counter).await;
         assert_eq!(outcome, ProbeOutcome::Skipped);
         assert_eq!(counter, 0, "Skipped must reset counter");
     }

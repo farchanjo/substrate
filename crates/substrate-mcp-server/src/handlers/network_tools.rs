@@ -16,10 +16,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tracing::instrument;
 
+use substrate_domain::network::{NetworkTcpListRequest, NetworkUdpListRequest};
 use substrate_domain::{SubstrateError, SubstrateResult, ports::network_info::NetworkInfoPort};
-use substrate_domain::network::{
-    NetworkTcpListRequest, NetworkUdpListRequest,
-};
 
 use crate::handlers::dispatcher::DispatchedResponse;
 
@@ -50,9 +48,8 @@ pub(crate) async fn handle_net_tcp_list(
     let entry_count = result.entries.len();
     let next_offset = result.next_offset;
 
-    let content = format!(
-        "net.tcp_list: total={total} entries={entry_count} next_offset={next_offset:?}."
-    );
+    let content =
+        format!("net.tcp_list: total={total} entries={entry_count} next_offset={next_offset:?}.");
 
     let structured = json!({
         "entries": result.entries,
@@ -103,9 +100,8 @@ pub(crate) async fn handle_net_udp_list(
     let entry_count = result.entries.len();
     let next_offset = result.next_offset;
 
-    let content = format!(
-        "net.udp_list: total={total} entries={entry_count} next_offset={next_offset:?}."
-    );
+    let content =
+        format!("net.udp_list: total={total} entries={entry_count} next_offset={next_offset:?}.");
 
     let structured = json!({
         "entries": result.entries,
@@ -144,13 +140,10 @@ pub(crate) async fn handle_net_tcp_stats(
 
     let content = format!(
         "net.tcp_stats: initiated={} accepted={} established={}.",
-        stats.connections_initiated,
-        stats.connections_accepted,
-        stats.connections_established,
+        stats.connections_initiated, stats.connections_accepted, stats.connections_established,
     );
 
-    let structured =
-        serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null);
+    let structured = serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null);
 
     Ok(DispatchedResponse {
         content,
@@ -179,8 +172,7 @@ pub(crate) async fn handle_net_connection_count(
         counts.by_state.len(),
     );
 
-    let structured =
-        serde_json::to_value(&counts).unwrap_or(serde_json::Value::Null);
+    let structured = serde_json::to_value(&counts).unwrap_or(serde_json::Value::Null);
 
     Ok(DispatchedResponse {
         content,

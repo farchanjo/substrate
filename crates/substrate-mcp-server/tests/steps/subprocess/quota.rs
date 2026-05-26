@@ -216,10 +216,10 @@ async fn when_client_spawns_fifth(world: &mut SubstrateWorld) {
         timeout_secs: Some(5),
         idempotency_key: None,
         elicitation_confirmed: true,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     match registry.spawn(fifth_req, &NoCancel).await {

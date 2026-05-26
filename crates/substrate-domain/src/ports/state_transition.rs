@@ -30,11 +30,6 @@ pub struct NoopStateTransitionObserver;
 
 #[async_trait]
 impl StateTransitionObserver for NoopStateTransitionObserver {
-    async fn on_state_change(
-        &self,
-        _job_id: &JobId,
-        _old: SubprocessState,
-        _new: SubprocessState,
-    ) {
+    async fn on_state_change(&self, _job_id: &JobId, _old: SubprocessState, _new: SubprocessState) {
     }
 }

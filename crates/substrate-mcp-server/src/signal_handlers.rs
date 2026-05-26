@@ -228,7 +228,9 @@ async fn terminate_subprocesses_on_shutdown(
     // Re-list because the previous SIGKILL pass may have lagged; cancel
     // is idempotent on already-terminal handles.
     let Ok((final_handles, _)) = port.list(&client_id, None, None, 500).await else {
-        tracing::info!("subprocess cascade termination complete (tmp-cleanup skipped — list failed)");
+        tracing::info!(
+            "subprocess cascade termination complete (tmp-cleanup skipped — list failed)"
+        );
         return;
     };
     for handle in &final_handles {

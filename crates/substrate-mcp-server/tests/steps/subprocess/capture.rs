@@ -114,10 +114,10 @@ async fn when_child_writes_to_stdout(world: &mut SubstrateWorld, byte_count: usi
         timeout_secs: Some(10),
         idempotency_key: None,
         elicitation_confirmed: true,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;
@@ -208,10 +208,10 @@ async fn when_child_writes_to_stderr(world: &mut SubstrateWorld, byte_count: usi
         timeout_secs: Some(10),
         idempotency_key: None,
         elicitation_confirmed: true,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;
@@ -525,10 +525,10 @@ async fn given_spawn_tmp_file_capture(world: &mut SubstrateWorld, byte_count: us
         timeout_secs: Some(10),
         idempotency_key: None,
         elicitation_confirmed: true,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let spawn_result = registry.spawn(req, &NoCancel).await;

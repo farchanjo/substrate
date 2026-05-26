@@ -27,7 +27,9 @@ pub mod supervisor;
 
 pub use errors::SubprocessError;
 pub use handle::SubprocessHandle;
-pub use pagination::{Order, Pagination, SearchMatch, SubprocessSearchRequest, SubprocessSearchResult};
+pub use pagination::{
+    Order, Pagination, SearchMatch, SubprocessSearchRequest, SubprocessSearchResult,
+};
 pub use request::{CaptureKind, StdinKind, SubprocessRequest};
 pub use state::SubprocessState;
 pub use stream::{Stream, StreamChunk};

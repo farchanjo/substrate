@@ -212,10 +212,7 @@ impl SubprocessRequest {
         if let Some(name) = &self.name {
             if name.is_empty() || name.len() > 64 {
                 return Err(SubprocessError::InvalidRequest {
-                    msg: format!(
-                        "name must be 1..=64 characters; got length {}",
-                        name.len()
-                    ),
+                    msg: format!("name must be 1..=64 characters; got length {}", name.len()),
                 });
             }
             if !name
@@ -223,9 +220,7 @@ impl SubprocessRequest {
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
             {
                 return Err(SubprocessError::InvalidRequest {
-                    msg: format!(
-                        "name must match ^[a-z0-9-]{{1,64}}$; got '{name}'"
-                    ),
+                    msg: format!("name must match ^[a-z0-9-]{{1,64}}$; got '{name}'"),
                 });
             }
         }
@@ -352,8 +347,7 @@ impl SubprocessRequest {
             }) => {
                 const MIN_FILE_BYTES: u64 = 1_048_576;
                 const MAX_FILE_BYTES: u64 = 1_073_741_824;
-                if !(*max_bytes_per_file >= MIN_FILE_BYTES
-                    && *max_bytes_per_file <= MAX_FILE_BYTES)
+                if !(*max_bytes_per_file >= MIN_FILE_BYTES && *max_bytes_per_file <= MAX_FILE_BYTES)
                 {
                     return Err(SubprocessError::InvalidRequest {
                         msg: format!(
@@ -364,9 +358,7 @@ impl SubprocessRequest {
                 }
                 if !(1..=20).contains(keep_files) {
                     return Err(SubprocessError::InvalidRequest {
-                        msg: format!(
-                            "log_rotation.keep_files must be in 1..=20; got {keep_files}"
-                        ),
+                        msg: format!("log_rotation.keep_files must be in 1..=20; got {keep_files}"),
                     });
                 }
                 // Cross-field: log rotation requires TmpFile capture.

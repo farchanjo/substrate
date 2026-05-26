@@ -18,19 +18,19 @@ pub mod state_transition;
 pub mod stream_observer;
 pub mod subprocess;
 
+pub use crate::subprocess::pagination::{
+    Order, Pagination, SearchMatch, SubprocessSearchRequest, SubprocessSearchResult,
+};
 pub use dir_walker::{DirEntry, DirWalkerPort, WalkOpts};
-pub use network_info::{NetworkInfoPort, NoopNetworkInfoPort};
 pub use factory::PortFactory;
 pub use fs_index::{CancelSignal, FsIndexPort, IndexQuery};
 pub use fs_watcher::{FsWatcherPort, WatchEvent, WatchGuard};
 pub use hash::{Blake3Digest, HashPort};
 pub use job_notifier::{NoopProgressNotifier, ProgressNotifier};
 pub use job_registry::{JobPage, JobRegistryPort, JobResult, JobSubmitRequest};
+pub use network_info::{NetworkInfoPort, NoopNetworkInfoPort};
 pub use path_jail::PathJailPort;
 pub use stat::{FileStat, StatPort};
 pub use state_transition::{NoopStateTransitionObserver, StateTransitionObserver};
 pub use stream_observer::{NoopStreamObserver, StreamChunkObserver};
 pub use subprocess::{SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName};
-pub use crate::subprocess::pagination::{
-    Order, Pagination, SearchMatch, SubprocessSearchRequest, SubprocessSearchResult,
-};

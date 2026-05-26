@@ -119,10 +119,10 @@ async fn when_spawn_binary_with_args(
         timeout_secs: Some(10),
         idempotency_key: None,
         elicitation_confirmed: confirmed,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;
@@ -189,10 +189,10 @@ async fn when_spawn_binary(world: &mut SubstrateWorld, binary_path: String) {
         // Elicitation is confirmed to ensure the binary allowlist check is
         // the failure point, not the elicitation gate.
         elicitation_confirmed: true,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;

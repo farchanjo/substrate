@@ -421,13 +421,15 @@ impl TmpFileWriter {
 
             // ── 3. Rename current transit file → <base>.log.1 ───────────────
             let archive_1 = numbered(base, 1);
-            tokio::fs::rename(&self.tmp_path, &archive_1).await.map_err(|e| {
-                io::Error::other(format!(
-                    "TmpFileWriter::rotate_if_needed: rename {} -> {}: {e}",
-                    self.tmp_path.display(),
-                    archive_1.display()
-                ))
-            })?;
+            tokio::fs::rename(&self.tmp_path, &archive_1)
+                .await
+                .map_err(|e| {
+                    io::Error::other(format!(
+                        "TmpFileWriter::rotate_if_needed: rename {} -> {}: {e}",
+                        self.tmp_path.display(),
+                        archive_1.display()
+                    ))
+                })?;
 
             // ── 4. Reopen a fresh transit file at `tmp_path` ────────────────
             let new_file = {
@@ -551,7 +553,11 @@ mod rotation_tests {
 
         // Sanity: the archive contains the original 2 KiB payload.
         let contents = tokio::fs::read(&archive_1).await?;
-        assert_eq!(contents.len(), 2048, "archive must contain original payload");
+        assert_eq!(
+            contents.len(),
+            2048,
+            "archive must contain original payload"
+        );
         Ok(())
     }
 }

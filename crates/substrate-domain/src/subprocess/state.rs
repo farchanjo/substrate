@@ -88,7 +88,10 @@ impl SubprocessState {
         matches!(
             (self, next),
             (Self::Pending, Self::Starting | Self::Cancelled)
-                | (Self::Starting, Self::Running | Self::Failed | Self::Cancelled)
+                | (
+                    Self::Starting,
+                    Self::Running | Self::Failed | Self::Cancelled
+                )
                 | (
                     Self::Running,
                     Self::Ready

@@ -82,10 +82,10 @@ async fn given_spawn_without_elicitation(world: &mut SubstrateWorld) {
         timeout_secs: Some(5),
         idempotency_key: None,
         elicitation_confirmed: false,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;
@@ -146,10 +146,10 @@ async fn given_spawn_with_banned_env(world: &mut SubstrateWorld, banned_key: Str
         idempotency_key: None,
         // Elicitation is confirmed so env-var check is the failure point.
         elicitation_confirmed: true,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;
@@ -260,10 +260,10 @@ async fn then_reinvocation_also_blocked(_world: &mut SubstrateWorld) {
         timeout_secs: Some(5),
         idempotency_key: None,
         elicitation_confirmed: false,
-            name: None,
-            restart_policy: None,
-            health_probe: None,
-            log_rotation: None,
+        name: None,
+        restart_policy: None,
+        health_probe: None,
+        log_rotation: None,
     };
 
     let result = registry.spawn(req, &NoCancel).await;
