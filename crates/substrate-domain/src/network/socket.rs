@@ -78,6 +78,10 @@ pub enum TcpState {
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code: serde round-trip on fixed enum cannot fail; expect carries diagnostic message"
+)]
 mod tests {
     use super::TcpState;
 
@@ -86,13 +90,19 @@ mod tests {
     /// JSON wire value `"Listen"` must round-trip through serde correctly.
     #[test]
     fn tcp_state_listen_serde_round_trip() {
-        let encoded = serde_json::to_string(&TcpState::Listen)
-            .expect("serialization must succeed");
-        assert_eq!(encoded, r#""Listen""#, "TcpState::Listen must serialize as \"Listen\"");
+        let encoded = serde_json::to_string(&TcpState::Listen).expect("serialization must succeed");
+        assert_eq!(
+            encoded, r#""Listen""#,
+            "TcpState::Listen must serialize as \"Listen\""
+        );
 
         let decoded: TcpState = serde_json::from_str(r#""Listen""#)
             .expect("deserialization of \"Listen\" must succeed");
-        assert_eq!(decoded, TcpState::Listen, "\"Listen\" must deserialize to TcpState::Listen");
+        assert_eq!(
+            decoded,
+            TcpState::Listen,
+            "\"Listen\" must deserialize to TcpState::Listen"
+        );
     }
 
     /// Verify that every named variant serializes to and from PascalCase.

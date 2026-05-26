@@ -61,7 +61,7 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
                 "orphan reaper: tmp_root not yet created — nothing to reap"
             );
             return Ok(stats);
-        }
+        },
         Err(e) => return Err(e),
     };
 
@@ -73,7 +73,7 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
             Err(_) => {
                 stats.skipped_unrelated += 1;
                 continue;
-            }
+            },
         };
 
         if !is_transit_filename(&file_name) {
@@ -93,7 +93,7 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
                 );
                 stats.errors += 1;
                 continue;
-            }
+            },
         };
 
         let mtime = match metadata.modified() {
@@ -108,7 +108,7 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
                 );
                 stats.errors += 1;
                 continue;
-            }
+            },
         };
 
         let age = now.duration_since(mtime).unwrap_or_default();
@@ -128,11 +128,11 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
                     "orphan reaper: removed stale transit file"
                 );
                 stats.reaped += 1;
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Race with another reaper or operator; treat as reaped.
                 stats.reaped += 1;
-            }
+            },
             Err(e) => {
                 warn!(
                     target: "substrate_audit",
@@ -142,7 +142,7 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
                     "orphan reaper: unlink failed (non-fatal)"
                 );
                 stats.errors += 1;
-            }
+            },
         }
     }
 
@@ -181,6 +181,12 @@ fn is_transit_filename(name: &str) -> bool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test code: filesystem/timing assertions where panic on setup failure is the correct failure mode"
+)]
 mod tests {
     use super::*;
     use std::fs;
@@ -210,7 +216,9 @@ mod tests {
     fn unrelated_files_rejected() {
         assert!(!is_transit_filename("foo.log"));
         assert!(!is_transit_filename(".DS_Store"));
-        assert!(!is_transit_filename("substrate-subprocess-stream-x.stdout.tmp.1"));
+        assert!(!is_transit_filename(
+            "substrate-subprocess-stream-x.stdout.tmp.1"
+        ));
     }
 
     #[tokio::test]

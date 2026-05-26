@@ -34,9 +34,9 @@ use substrate_domain::ports::stream_observer::StreamChunkObserver;
 use substrate_domain::ports::subprocess::{
     SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName,
 };
-use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
 use substrate_domain::subprocess::errors::SubprocessError;
 use substrate_domain::subprocess::handle::SubprocessHandle;
+use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
 use substrate_domain::subprocess::request::{CaptureKind, SubprocessRequest};
 use substrate_domain::subprocess::state::SubprocessState;
 use substrate_domain::subprocess::supervisor::RestartPolicy;
@@ -632,14 +632,15 @@ impl SubprocessPort for SubprocessRegistry {
             // fresh at Running. Dispatcher's role on supervised handles is the
             // data-plane (chunk drain + on_terminal observer fan-out) only.
             if !is_supervised_for_dispatcher {
-                handle_for_dispatcher.state.store(
-                    crate::spawn::state_to_u8(terminal_state),
-                    Ordering::SeqCst,
-                );
+                handle_for_dispatcher
+                    .state
+                    .store(crate::spawn::state_to_u8(terminal_state), Ordering::SeqCst);
             }
 
             for observer in observers_for_dispatcher.iter() {
-                observer.on_terminal(&job_id_for_dispatcher, terminal_state).await;
+                observer
+                    .on_terminal(&job_id_for_dispatcher, terminal_state)
+                    .await;
             }
 
             // Emit state transition to state observers (ADR-0056 control plane).
@@ -744,7 +745,9 @@ impl SubprocessPort for SubprocessRegistry {
                 loop {
                     // Wait for the handle to reach a terminal state.
                     let exit_state = {
-                        let handle_opt = watcher_handles.get(&current_job_id).map(|e| Arc::clone(e.value()));
+                        let handle_opt = watcher_handles
+                            .get(&current_job_id)
+                            .map(|e| Arc::clone(e.value()));
                         match handle_opt {
                             None => SubprocessState::Failed,
                             Some(h) => {
@@ -769,7 +772,10 @@ impl SubprocessPort for SubprocessRegistry {
                     let policy = watcher_req.restart_policy.clone();
                     let should_restart = match &policy {
                         None | Some(RestartPolicy::Never) => false,
-                        Some(RestartPolicy::OnFailure { max_retries, backoff_ms }) => {
+                        Some(RestartPolicy::OnFailure {
+                            max_retries,
+                            backoff_ms,
+                        }) => {
                             if exit_state == SubprocessState::Succeeded {
                                 false
                             } else {
@@ -793,10 +799,9 @@ impl SubprocessPort for SubprocessRegistry {
                         // after the watcher exits (dispatcher skipped the write
                         // because is_supervised was true at spawn).
                         if let Some(h) = watcher_handles.get(&supervisor_id) {
-                            h.value().state.store(
-                                crate::spawn::state_to_u8(exit_state),
-                                Ordering::SeqCst,
-                            );
+                            h.value()
+                                .state
+                                .store(crate::spawn::state_to_u8(exit_state), Ordering::SeqCst);
                         }
                         tracing::debug!(
                             job_id = %current_job_id,
@@ -867,28 +872,32 @@ impl SubprocessPort for SubprocessRegistry {
                     // All fields are cloned/Arc-cloned so the new view shares the same
                     // live state as the parent registry (handles map, named_handles, etc.).
                     let respawn_registry = Arc::new(SubprocessRegistry {
-                            handles: Arc::clone(&watcher_handles),
-                            binary_allowlist: binary_allowlist.clone(),
-                            env_allowlist: env_allowlist.clone(),
-                            max_per_client,
-                            max_concurrent,
-                            aggregate_buffer_bytes,
-                            shutdown_drain_secs,
-                            path_allowlist: path_allowlist.clone(),
-                            root_cancel: root_cancel.clone(),
-                            per_client_active: Arc::clone(&per_client_active),
-                            tmp_root: tmp_root.clone(),
-                            observers: Arc::clone(&chunk_observers),
-                            state_observers: Arc::clone(&watcher_state_observers),
-                            named_handles: Arc::clone(&watcher_named_handles),
-                            supervisor_cancels: Arc::clone(&watcher_supervisor_cancels),
-                        });
+                        handles: Arc::clone(&watcher_handles),
+                        binary_allowlist: binary_allowlist.clone(),
+                        env_allowlist: env_allowlist.clone(),
+                        max_per_client,
+                        max_concurrent,
+                        aggregate_buffer_bytes,
+                        shutdown_drain_secs,
+                        path_allowlist: path_allowlist.clone(),
+                        root_cancel: root_cancel.clone(),
+                        per_client_active: Arc::clone(&per_client_active),
+                        tmp_root: tmp_root.clone(),
+                        observers: Arc::clone(&chunk_observers),
+                        state_observers: Arc::clone(&watcher_state_observers),
+                        named_handles: Arc::clone(&watcher_named_handles),
+                        supervisor_cancels: Arc::clone(&watcher_supervisor_cancels),
+                    });
 
                     struct NoCancel;
                     #[async_trait::async_trait]
                     impl substrate_domain::ports::fs_index::CancelSignal for NoCancel {
-                        fn is_cancelled(&self) -> bool { false }
-                        async fn cancelled(&self) { std::future::pending::<()>().await }
+                        fn is_cancelled(&self) -> bool {
+                            false
+                        }
+                        async fn cancelled(&self) {
+                            std::future::pending::<()>().await
+                        }
                     }
 
                     last_spawn_at = std::time::Instant::now();
@@ -1227,12 +1236,12 @@ impl SubprocessPort for SubprocessRegistry {
         // The MCP handler maps this to `SubstrateError::InternalError` with a
         // descriptive message; agents can inspect `structured_content.error.message`.
         let handle_arc = {
-            let guard = self
-                .handles
-                .get(&req.job_id)
-                .ok_or_else(|| SubprocessError::InvalidRequest {
-                    msg: format!("job_id not found: {}", req.job_id),
-                })?;
+            let guard =
+                self.handles
+                    .get(&req.job_id)
+                    .ok_or_else(|| SubprocessError::InvalidRequest {
+                        msg: format!("job_id not found: {}", req.job_id),
+                    })?;
             Arc::clone(guard.value())
         };
 
@@ -1351,7 +1360,10 @@ pub fn paginate_lines(
 fn paginate_matches(
     matches: &[substrate_domain::subprocess::pagination::SearchMatch],
     p: &substrate_domain::subprocess::pagination::Pagination,
-) -> (Vec<substrate_domain::subprocess::pagination::SearchMatch>, Option<u64>) {
+) -> (
+    Vec<substrate_domain::subprocess::pagination::SearchMatch>,
+    Option<u64>,
+) {
     use substrate_domain::subprocess::pagination::Order;
 
     let total = matches.len();
@@ -1436,6 +1448,12 @@ pub fn deny_all_registry(
 // ---- Re-exports for tests --------------------------------------------------
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test code: pagination/state assertions where panic on setup failure is the correct failure mode"
+)]
 mod tests {
     use substrate_domain::subprocess::pagination::{Order, Pagination};
 
@@ -1508,8 +1526,8 @@ mod tests {
 
         // Canonicalize the temp dir so that macOS /var/folders paths are
         // consistent between the allowlist root and the cwd used by spawn.
-        let tmp_dir = std::fs::canonicalize(std::env::temp_dir())
-            .expect("temp_dir must be canonicalisable");
+        let tmp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).expect("temp_dir must be canonicalisable");
 
         // Build an allowlist rooted at the canonical temp dir so the cwd check passes.
         let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
@@ -1558,7 +1576,10 @@ mod tests {
             }
         }
 
-        let handle_snapshot = registry.spawn(req, &NullCancel).await.expect("spawn must succeed");
+        let handle_snapshot = registry
+            .spawn(req, &NullCancel)
+            .await
+            .expect("spawn must succeed");
         let job_id = handle_snapshot.job_id.clone();
 
         // Give the dispatcher task time to reap the child and store the terminal state.
@@ -1566,7 +1587,10 @@ mod tests {
 
         // Obtain the live ChildHandle from the registry map.
         let live_handle = {
-            let guard = registry.handles.get(&job_id).expect("handle must still exist");
+            let guard = registry
+                .handles
+                .get(&job_id)
+                .expect("handle must still exist");
             Arc::clone(&*guard)
         };
 

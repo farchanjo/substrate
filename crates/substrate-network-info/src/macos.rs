@@ -888,6 +888,10 @@ fn paginate(
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code: assertions on live-host sysctl call where expect carries the diagnostic message used by the test report"
+)]
 mod tests {
     use super::{decode_addr, probe_sysctl};
     use substrate_domain::network::AddrFamily;
