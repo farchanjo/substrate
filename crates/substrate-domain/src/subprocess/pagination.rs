@@ -135,6 +135,31 @@ pub struct SubprocessSearchRequest {
     pub pagination: Option<Pagination>,
 }
 
+impl Default for SubprocessSearchRequest {
+    /// Returns a sentinel `SubprocessSearchRequest` whose `job_id` is the nil UUID
+    /// and `pattern` is an empty string.
+    ///
+    /// This impl exists to satisfy the ADR-0061 contract: every request struct that
+    /// has `#[serde(default = "fn")]` field overrides MUST have a manual `Default`
+    /// impl (not `#[derive(Default)]`) so that the `is_null() || empty_object`
+    /// handler shortcut can be safely introduced in the future without silently
+    /// delivering Rust zero-values instead of API-contract defaults.
+    ///
+    /// The sentinel values are intentionally invalid for production use; callers
+    /// MUST supply `job_id` and `pattern` explicitly.  The `streams` field is
+    /// initialized to match `default_streams()`, honoring the
+    /// `#[serde(default = "SubprocessSearchRequest::default_streams")]` override.
+    fn default() -> Self {
+        Self {
+            job_id: JobId::from_uuid(uuid::Uuid::nil()),
+            pattern: String::new(),
+            streams: Self::default_streams(),
+            case_insensitive: false,
+            pagination: None,
+        }
+    }
+}
+
 impl SubprocessSearchRequest {
     /// Default stream set used when the caller omits the `streams` field.
     #[must_use]
@@ -215,4 +240,51 @@ pub struct SearchMatch {
 
     /// The full text of the matching line (newline stripped).
     pub line_text: String,
+}
+
+// ---- Tests ------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- ADR-0061: SubprocessSearchRequest Default contract tests ------------
+
+    /// `SubprocessSearchRequest::default()` must initialize `streams` to match
+    /// the `#[serde(default = "SubprocessSearchRequest::default_streams")]` value.
+    ///
+    /// Regression guard: if `#[derive(Default)]` were used, `streams` would be
+    /// an empty `Vec` (`Vec::default()`), not `[Stdout, Stderr]`.
+    #[test]
+    fn subprocess_search_request_default_honors_streams_serde_default() {
+        let req = SubprocessSearchRequest::default();
+        assert_eq!(
+            req.streams,
+            SubprocessSearchRequest::default_streams(),
+            "Default::default() must use default_streams(), not Vec::default()"
+        );
+        assert!(
+            !req.streams.is_empty(),
+            "streams must not be empty in the default impl"
+        );
+        assert!(!req.case_insensitive);
+        assert!(req.pagination.is_none());
+    }
+
+    // ---- Pagination Default contract test ------------------------------------
+
+    /// `Pagination::default()` must initialize `page_size` to `100` (the value
+    /// returned by `Pagination::default_page_size()`), not `0`.
+    #[test]
+    fn pagination_default_honors_page_size() {
+        let p = Pagination::default();
+        assert_eq!(
+            p.page_size,
+            Pagination::default_page_size(),
+            "Pagination::default() must use default_page_size()={}, not 0",
+            Pagination::default_page_size()
+        );
+        assert_eq!(p.offset, 0);
+        assert_eq!(p.order, Order::Tail);
+    }
 }
