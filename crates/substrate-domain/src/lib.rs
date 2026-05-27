@@ -12,7 +12,7 @@
 //! - [`ports`] — inbound port traits implemented by adapter crates.
 //! - [`network`] — network-info BC domain types: socket, stats, request/result (ADR-0058).
 //! - [`subprocess`] — subprocess BC domain types: request, handle, state, stream, errors (ADR-0052).
-//! - [`value_objects`] — shared value objects used across bounded contexts.
+//! - [`value_objects`] — shared value objects used across bounded contexts, including [`PageSize`].
 
 #![cfg_attr(not(test), forbid(unsafe_code))]
 #![warn(missing_docs)]
@@ -34,6 +34,7 @@ pub use value_objects::idempotency_key::IdempotencyKey;
 pub use value_objects::jailed_path::JailedPath;
 pub use value_objects::job_id::JobId;
 pub use value_objects::page_cursor::PageCursor;
+pub use value_objects::pagination::PageSize;
 pub use value_objects::process_group::ProcessGroup;
 pub use value_objects::subprocess_id::SubprocessId;
 
