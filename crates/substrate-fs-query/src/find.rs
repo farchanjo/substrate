@@ -33,11 +33,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{
-    value_objects::PageSize,
-    JailedPath,
-    PathJailPort,
-    SubstrateError,
-    SubstrateResult,
+    JailedPath, PathJailPort, SubstrateError, SubstrateResult, value_objects::PageSize,
 };
 
 #[cfg(unix)]

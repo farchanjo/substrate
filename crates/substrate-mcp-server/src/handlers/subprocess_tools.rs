@@ -637,7 +637,11 @@ mod tests {
             Some(n) => PageSize::try_from(n).expect("valid"),
             None => PageSize::default(),
         };
-        assert_eq!(default_ps.get(), 50, "None maps to PageSize::default() = 50");
+        assert_eq!(
+            default_ps.get(),
+            50,
+            "None maps to PageSize::default() = 50"
+        );
 
         let explicit_ps = match Some(200_u32) {
             Some(n) => PageSize::try_from(n).expect("valid"),
@@ -856,7 +860,11 @@ mod tests {
             .and_then(|v| v.as_array())
             .expect("structured_content must contain a handles array");
 
-        assert_eq!(handles.len(), 1, "absent page_size → default 50 → 1 handle returned");
+        assert_eq!(
+            handles.len(),
+            1,
+            "absent page_size → default 50 → 1 handle returned"
+        );
     }
 }
 
