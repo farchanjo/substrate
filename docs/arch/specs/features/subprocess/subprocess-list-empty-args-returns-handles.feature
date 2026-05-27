@@ -25,3 +25,8 @@ Feature: subprocess.list with empty args returns live handles
     When the client calls subprocess.list with arguments page_size=500
     Then the response contains at least 1 handle in the handles array
     And the response does not contain an error
+
+  Scenario: subprocess.list with explicit page_size=0 returns INVALID_ARGUMENT (ADR-0060)
+    When the client calls subprocess.list with arguments page_size=0
+    Then the response contains an error with code "SUBSTRATE_INVALID_ARGUMENT"
+    And the error references the field "page_size"

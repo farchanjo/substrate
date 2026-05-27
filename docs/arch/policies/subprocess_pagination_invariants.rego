@@ -7,6 +7,7 @@
 #
 # Cross-references:
 #   ADR-0057 — subprocess output pagination and search
+#   ADR-0060 — PageSize value object at domain port boundaries (1..=10_000)
 #   ADR-0052 — subprocess bounded context decision
 #   ADR-0040 — job control-plane (UUIDv7 job_id triple-equality)
 #
