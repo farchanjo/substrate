@@ -20,7 +20,7 @@ use super::socket::{SocketEntry, TcpState};
 /// When `state_filter` is `None`, all TCP connections are returned. When
 /// `Some`, at least one state MUST be listed (an empty vec is rejected by
 /// [`validate`](Self::validate)).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkTcpListRequest {
     /// Restrict results to connections in these TCP states.
     ///
@@ -95,7 +95,7 @@ pub struct NetworkTcpListResult {
 // ---- NetworkUdpListRequest --------------------------------------------------
 
 /// Request parameters for `network.udp_list`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkUdpListRequest {
     /// When `true`, the adapter attempts to resolve the owning PID for each entry.
     ///
@@ -146,4 +146,43 @@ pub struct NetworkUdpListResult {
     /// `None` when this page exhausts the result set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u64>,
+}
+
+// ---- Tests ------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- ADR-0061: NetworkTcpListRequest / NetworkUdpListRequest Default ----
+
+    /// `NetworkTcpListRequest::default()` must produce a valid request with
+    /// no state filter, no PID resolution, and no pagination cursor.
+    ///
+    /// ADR-0061 requires a manual `Default` impl so the struct is safe to use
+    /// with the `is_null() || empty_object` handler shortcut in the future.
+    #[test]
+    fn network_tcp_list_request_default_is_sensible() {
+        let req = NetworkTcpListRequest::default();
+        assert!(
+            req.state_filter.is_none(),
+            "default state_filter should be None (return all states)"
+        );
+        assert!(!req.resolve_pid, "default resolve_pid should be false");
+        assert!(
+            req.pagination.is_none(),
+            "default pagination should be None"
+        );
+    }
+
+    /// `NetworkUdpListRequest::default()` must produce a valid request.
+    #[test]
+    fn network_udp_list_request_default_is_sensible() {
+        let req = NetworkUdpListRequest::default();
+        assert!(!req.resolve_pid, "default resolve_pid should be false");
+        assert!(
+            req.pagination.is_none(),
+            "default pagination should be None"
+        );
+    }
 }
