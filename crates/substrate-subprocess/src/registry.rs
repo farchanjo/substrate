@@ -1323,7 +1323,7 @@ pub fn paginate_lines(
     }
 
     let offset = p.offset;
-    let page_size = u64::from(p.page_size);
+    let page_size = u64::from(p.page_size.get());
 
     match p.order {
         Order::Tail => {
@@ -1373,7 +1373,7 @@ fn paginate_matches(
     }
 
     let offset = p.offset as usize;
-    let page_size = p.page_size as usize;
+    let page_size = p.page_size.get() as usize;
 
     match p.order {
         Order::Tail => {
@@ -1457,6 +1457,7 @@ pub fn deny_all_registry(
 )]
 mod tests {
     use substrate_domain::subprocess::pagination::{Order, Pagination};
+    use substrate_domain::value_objects::pagination::PageSize;
 
     use super::*;
 
@@ -1622,7 +1623,7 @@ mod tests {
         let text = "line1\nline2\nline3\nline4\nline5";
         let p = Pagination {
             offset: 0,
-            page_size: 100,
+            page_size: PageSize::new_static(100),
             order: Order::Tail,
         };
         let (page, total, next) = paginate_lines(text, &p);
@@ -1637,7 +1638,7 @@ mod tests {
         let text = "a\nb\nc\nd\ne";
         let p = Pagination {
             offset: 0,
-            page_size: 2,
+            page_size: PageSize::new_static(2),
             order: Order::Tail,
         };
         let (page, total, next) = paginate_lines(text, &p);
@@ -1651,7 +1652,7 @@ mod tests {
         let text = "a\nb\nc\nd\ne";
         let p = Pagination {
             offset: 2,
-            page_size: 2,
+            page_size: PageSize::new_static(2),
             order: Order::Tail,
         };
         let (page, _total, next) = paginate_lines(text, &p);
@@ -1664,7 +1665,7 @@ mod tests {
         let text = "a\nb\nc\nd\ne";
         let p = Pagination {
             offset: 4,
-            page_size: 2,
+            page_size: PageSize::new_static(2),
             order: Order::Tail,
         };
         let (page, _total, next) = paginate_lines(text, &p);
@@ -1677,7 +1678,7 @@ mod tests {
         let text = "a\nb\nc\nd\ne";
         let p = Pagination {
             offset: 0,
-            page_size: 3,
+            page_size: PageSize::new_static(3),
             order: Order::Head,
         };
         let (page, total, next) = paginate_lines(text, &p);
@@ -1691,7 +1692,7 @@ mod tests {
         let text = "a\nb\nc\nd\ne";
         let p = Pagination {
             offset: 3,
-            page_size: 3,
+            page_size: PageSize::new_static(3),
             order: Order::Head,
         };
         let (page, _total, next) = paginate_lines(text, &p);
@@ -1704,7 +1705,7 @@ mod tests {
         let text = "a\nb";
         let p = Pagination {
             offset: 100,
-            page_size: 10,
+            page_size: PageSize::new_static(10),
             order: Order::Head,
         };
         let (page, total, next) = paginate_lines(text, &p);

@@ -462,7 +462,7 @@ fn paginate(
     pagination: Option<&Pagination>,
 ) -> (Vec<SocketEntry>, Option<u64>) {
     let offset = pagination.map_or(0, |p| p.offset as usize);
-    let page_size = pagination.map_or(50, |p| p.page_size as usize);
+    let page_size = pagination.map_or(50, |p| p.page_size.get() as usize);
 
     let slice: Vec<SocketEntry> = entries.into_iter().skip(offset).collect();
     let next_offset = if slice.len() > page_size {
