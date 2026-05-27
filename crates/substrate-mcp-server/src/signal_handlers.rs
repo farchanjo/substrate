@@ -151,7 +151,7 @@ async fn terminate_subprocesses_on_shutdown(
 ) {
     use substrate_domain::{
         ports::subprocess::{SignalTarget, SubprocessSignalName},
-        value_objects::ClientId,
+        value_objects::{ClientId, PageSize},
     };
 
     // Enumerate all live handles. Use a synthetic client-id; the port's list
@@ -163,8 +163,9 @@ async fn terminate_subprocesses_on_shutdown(
         reason = "static string 'shutdown' always satisfies ClientId pattern [A-Za-z0-9._-]{1,64}"
     )]
     let client_id = ClientId::parse("shutdown").expect("static client_id parse cannot fail");
+    let page_size = PageSize::new_static(500);
 
-    let handles = match port.list(&client_id, None, None, 500).await {
+    let handles = match port.list(&client_id, None, None, page_size).await {
         Ok((h, _)) => h,
         Err(e) => {
             tracing::warn!(error = %e, "subprocess list during shutdown failed; skipping cascade");
@@ -201,7 +202,7 @@ async fn terminate_subprocesses_on_shutdown(
     }
 
     // SIGKILL survivors.
-    let Ok((post_drain, _)) = port.list(&client_id, None, None, 500).await else {
+    let Ok((post_drain, _)) = port.list(&client_id, None, None, page_size).await else {
         return;
     };
 
@@ -227,7 +228,7 @@ async fn terminate_subprocesses_on_shutdown(
     //
     // Re-list because the previous SIGKILL pass may have lagged; cancel
     // is idempotent on already-terminal handles.
-    let Ok((final_handles, _)) = port.list(&client_id, None, None, 500).await else {
+    let Ok((final_handles, _)) = port.list(&client_id, None, None, page_size).await else {
         tracing::info!(
             "subprocess cascade termination complete (tmp-cleanup skipped — list failed)"
         );

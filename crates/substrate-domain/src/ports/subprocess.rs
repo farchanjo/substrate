@@ -20,6 +20,7 @@ use crate::subprocess::handle::SubprocessHandle;
 use crate::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
 use crate::subprocess::request::SubprocessRequest;
 use crate::subprocess::state::SubprocessState;
+use crate::value_objects::pagination::PageSize;
 use crate::value_objects::{ClientId, JobId};
 
 // Re-export CancelSignal so callers of this port do not need to import fs_index.
@@ -75,7 +76,7 @@ pub trait SubprocessPort: Send + Sync {
         client_id: &ClientId,
         state_filter: Option<&[SubprocessState]>,
         page_cursor: Option<&str>,
-        page_size: u32,
+        page_size: PageSize,
     ) -> SubstrateResult<(Vec<SubprocessHandle>, Option<String>)>;
 
     /// Cancels a running subprocess by triggering the cascade kill chain.

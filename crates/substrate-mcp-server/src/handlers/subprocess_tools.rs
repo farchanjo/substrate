@@ -38,6 +38,7 @@ use substrate_domain::{
     subprocess::request::SubprocessRequest,
     subprocess::state::SubprocessState,
     value_objects::JobId,
+    value_objects::pagination::PageSize,
 };
 
 use crate::handlers::dispatcher::DispatchedResponse;
@@ -125,6 +126,11 @@ pub(crate) async fn handle_subprocess_spawn(
 // ---- subprocess_list --------------------------------------------------------
 
 /// Request type for `subprocess.list`.
+///
+/// `page_size` is `Option<u32>` on the wire so the handler can distinguish
+/// "caller omitted the field" (apply `PageSize::default()`) from "caller sent 0"
+/// (return `SUBSTRATE_INVALID_ARGUMENT`). The port boundary always receives a
+/// validated [`PageSize`] per ADR-0060.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct SubprocessListRequest {
@@ -132,9 +138,12 @@ pub(crate) struct SubprocessListRequest {
     pub(crate) state_filter: Option<Vec<SubprocessState>>,
     /// Opaque pagination cursor from a previous response.
     pub(crate) page_cursor: Option<String>,
-    /// Maximum entries to return (default 50).
-    #[serde(default = "default_page_size")]
-    pub(crate) page_size: u32,
+    /// Maximum entries to return (1..=10 000, default 50 per ADR-0060).
+    ///
+    /// `None` when the field is absent from the JSON — the handler substitutes
+    /// `PageSize::default()`. An explicit `0` or value above 10 000 returns
+    /// `SUBSTRATE_INVALID_ARGUMENT`.
+    pub(crate) page_size: Option<u32>,
     /// Caller client identifier for cross-client scoping.
     pub(crate) client_id: Option<String>,
 }
@@ -144,14 +153,10 @@ impl Default for SubprocessListRequest {
         Self {
             state_filter: None,
             page_cursor: None,
-            page_size: default_page_size(),
+            page_size: None,
             client_id: None,
         }
     }
-}
-
-const fn default_page_size() -> u32 {
-    50
 }
 
 /// Dispatches `subprocess.list` — list live subprocess handles. See substrate skill.
@@ -172,6 +177,13 @@ pub(crate) async fn handle_subprocess_list(
             })?
         };
 
+    // ADR-0060: convert Option<u32> → PageSize at the inbound boundary.
+    // Absent field → PageSize::default() (50). Explicit 0 or > 10 000 → INVALID_ARGUMENT.
+    let page_size = match req.page_size {
+        Some(n) => PageSize::try_from(n)?,
+        None => PageSize::default(),
+    };
+
     let state_filter_ref: Option<Vec<SubprocessState>> = req.state_filter;
     let state_slice: Option<&[SubprocessState]> = state_filter_ref.as_deref();
     let (handles, next_cursor) = port
@@ -179,7 +191,7 @@ pub(crate) async fn handle_subprocess_list(
             &client_id,
             state_slice,
             req.page_cursor.as_deref(),
-            req.page_size,
+            page_size,
         )
         .await?;
 
@@ -569,43 +581,42 @@ mod tests {
             request::SubprocessRequest,
             state::SubprocessState,
         },
-        value_objects::{ClientId, JobId, ProcessGroup},
+        value_objects::{ClientId, JobId, ProcessGroup, pagination::PageSize},
     };
 
     use super::*;
 
-    // ---- Change 3: Default impl unit tests ----------------------------------
+    // ---- ADR-0060 / ADR-0061: Default impl unit tests -----------------------
 
+    /// `SubprocessListRequest::default()` must have `page_size: None` on the wire
+    /// struct (the handler converts None → PageSize::default() = 50).
     #[test]
-    fn subprocess_list_request_default_uses_page_size_fn() {
+    fn subprocess_list_request_default_page_size_is_none() {
         let req = SubprocessListRequest::default();
-        assert_eq!(
-            req.page_size, 50,
-            "Default::default() must honor default_page_size()"
+        assert!(
+            req.page_size.is_none(),
+            "Default::default() must produce page_size=None so the handler applies PageSize::default()"
         );
         assert!(req.state_filter.is_none());
         assert!(req.page_cursor.is_none());
         assert!(req.client_id.is_none());
     }
 
-    /// Deserialising from `{}` (empty JSON object) must also produce page_size=50.
-    ///
-    /// This confirms that `#[serde(deny_unknown_fields, default)]` on the struct
-    /// falls back to the manual `Default` impl (and therefore `default_page_size()`)
-    /// for absent fields, rather than to `0u32::default()`.
+    /// Deserialising from `{}` (empty JSON object) must produce `page_size: None`
+    /// so the handler path applies `PageSize::default()` = 50.
     #[test]
-    fn subprocess_list_request_serde_empty_object_uses_page_size_fn() {
+    fn subprocess_list_request_serde_empty_object_page_size_is_none() {
         let req: SubprocessListRequest =
             serde_json::from_str("{}").expect("deserialise empty object");
-        assert_eq!(
-            req.page_size, 50,
-            "serde default for empty {{}} must honour default_page_size()"
+        assert!(
+            req.page_size.is_none(),
+            "serde default for empty {{}} must produce page_size=None"
         );
     }
 
-    /// Deserialising from `null` must also produce page_size=50 (handler fast-path).
+    /// Deserialising from `null` must produce `page_size: None` (handler fast-path).
     #[test]
-    fn subprocess_list_request_handler_null_uses_page_size_fn() {
+    fn subprocess_list_request_handler_null_page_size_is_none() {
         let args = serde_json::Value::Null;
         let req = if args.is_null() || args == serde_json::Value::Object(serde_json::Map::default())
         {
@@ -613,10 +624,32 @@ mod tests {
         } else {
             serde_json::from_value(args).expect("should not reach")
         };
-        assert_eq!(
-            req.page_size, 50,
-            "handler null-path must produce page_size=50"
+        assert!(
+            req.page_size.is_none(),
+            "handler null-path must produce page_size=None"
         );
+    }
+
+    /// `PageSize` conversion: None → default 50, Some(valid) → Ok, Some(0) → Err.
+    #[test]
+    fn page_size_conversion_from_option() {
+        let default_ps = match None::<u32> {
+            Some(n) => PageSize::try_from(n).expect("valid"),
+            None => PageSize::default(),
+        };
+        assert_eq!(default_ps.get(), 50, "None maps to PageSize::default() = 50");
+
+        let explicit_ps = match Some(200_u32) {
+            Some(n) => PageSize::try_from(n).expect("valid"),
+            None => PageSize::default(),
+        };
+        assert_eq!(explicit_ps.get(), 200);
+
+        let zero_result: Result<PageSize, _> = match Some(0_u32) {
+            Some(n) => PageSize::try_from(n),
+            None => Ok(PageSize::default()),
+        };
+        assert!(zero_result.is_err(), "page_size=0 must be rejected");
     }
 
     // ---- Change 4: handler integration tests (stub SubprocessPort) ----------
@@ -661,21 +694,12 @@ mod tests {
             _client_id: &ClientId,
             _state_filter: Option<&[SubprocessState]>,
             _page_cursor: Option<&str>,
-            page_size: u32,
+            page_size: PageSize,
         ) -> SubstrateResult<(Vec<SubprocessHandle>, Option<String>)> {
-            // Fail loudly in tests if the caller passes page_size=0 so regressions
-            // produce a clear, actionable error rather than a silent empty Vec.
-            if page_size == 0 {
-                return Err(SubstrateError::InternalError {
-                    reason: "page_size=0 reached stub port — \
-                             SubprocessListRequest Default bug (page_size must be 50)"
-                        .to_owned(),
-                    correlation_id: None,
-                });
-            }
+            // PageSize guarantees > 0 at the type level — no runtime check needed.
             let handles: Vec<SubprocessHandle> = vec![self.handle.clone()]
                 .into_iter()
-                .take(page_size as usize)
+                .take(page_size.get() as usize)
                 .collect();
             Ok((handles, None))
         }
@@ -716,9 +740,8 @@ mod tests {
 
     /// `Value::Null` input must produce the one registered handle.
     ///
-    /// Regression guard for the `page_size=0` bug: before the fix,
-    /// `Default::default()` produced `page_size=0`, causing `iter().take(0)` to
-    /// yield an empty Vec even when handles existed.
+    /// ADR-0060: absent page_size → PageSize::default() = 50 → port receives
+    /// a valid PageSize, never zero.
     #[tokio::test]
     async fn handle_subprocess_list_null_args_returns_existing_handle() {
         let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
@@ -737,9 +760,7 @@ mod tests {
         assert_eq!(
             handles.len(),
             1,
-            "Value::Null input must return 1 handle; got {}. \
-             (page_size=0 regression: Default::default() must use \
-             default_page_size()=50, not u32::default()=0)",
+            "Value::Null input must return 1 handle; got {}",
             handles.len()
         );
     }
@@ -766,9 +787,7 @@ mod tests {
         assert_eq!(
             handles.len(),
             1,
-            "empty-object input must return 1 handle; got {}. \
-             (page_size=0 regression: serde default for missing field must use \
-             default_page_size()=50, not u32::default()=0)",
+            "empty-object input must return 1 handle; got {}",
             handles.len()
         );
     }
@@ -798,6 +817,46 @@ mod tests {
             "explicit page_size=500 must return all 1 available handle; got {}",
             handles.len()
         );
+    }
+
+    /// ADR-0060: explicit `page_size=0` must return `SUBSTRATE_INVALID_ARGUMENT`.
+    #[tokio::test]
+    async fn handle_subprocess_list_page_size_zero_returns_invalid_argument() {
+        let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
+        let client_id = test_client_id();
+
+        let args = json!({ "page_size": 0 });
+        let err = handle_subprocess_list(args, port, client_id)
+            .await
+            .expect_err("page_size=0 must return Err(InvalidArgument)");
+
+        assert_eq!(
+            err.code(),
+            "SUBSTRATE_INVALID_ARGUMENT",
+            "page_size=0 must produce SUBSTRATE_INVALID_ARGUMENT; got {:?}",
+            err.code()
+        );
+    }
+
+    /// ADR-0060: absent `page_size` field defaults to 50 and succeeds.
+    #[tokio::test]
+    async fn handle_subprocess_list_absent_page_size_defaults_to_fifty() {
+        let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
+        let client_id = test_client_id();
+
+        // No page_size field in the JSON.
+        let args = json!({ "state_filter": null });
+        let resp = handle_subprocess_list(args, port, client_id)
+            .await
+            .expect("absent page_size must default to 50 and succeed");
+
+        let handles = resp
+            .structured_content
+            .get("handles")
+            .and_then(|v| v.as_array())
+            .expect("structured_content must contain a handles array");
+
+        assert_eq!(handles.len(), 1, "absent page_size → default 50 → 1 handle returned");
     }
 }
 

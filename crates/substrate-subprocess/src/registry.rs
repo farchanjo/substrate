@@ -40,6 +40,7 @@ use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, Subproce
 use substrate_domain::subprocess::request::{CaptureKind, SubprocessRequest};
 use substrate_domain::subprocess::state::SubprocessState;
 use substrate_domain::subprocess::supervisor::RestartPolicy;
+use substrate_domain::value_objects::pagination::PageSize;
 use substrate_domain::value_objects::{ClientId, JobId, ProcessGroup};
 
 use substrate_policy::Allowlist;
@@ -980,10 +981,9 @@ impl SubprocessPort for SubprocessRegistry {
         _client_id: &ClientId,
         _state_filter: Option<&[SubprocessState]>,
         _page_cursor: Option<&str>,
-        page_size: u32,
+        page_size: PageSize,
     ) -> SubstrateResult<(Vec<SubprocessHandle>, Option<String>)> {
-        debug_assert!(page_size > 0, "page_size=0 is a caller contract violation");
-        let page_size = (page_size as usize).min(500);
+        let page_size = (page_size.get() as usize).min(500);
         let handles: Vec<SubprocessHandle> = self
             .handles
             .iter()
