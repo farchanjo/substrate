@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: accepted
+accepted_date: 2026-05-27
 date: 2026-05-27
 deciders: [com.archanjo]
 consulted: []
