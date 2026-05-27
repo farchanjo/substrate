@@ -7,8 +7,10 @@ default:
     @just --list
 
 # Build the optimised release binary (LTO + panic=abort + strip per ADR-0014).
+# `--features subprocess` is required for the subprocess.* MCP tool surface;
+# omitting it ships a binary missing subprocess_spawn/list/cancel/result/signal/search.
 build-release:
-    cargo build --workspace --release --bin substrate
+    cargo build --workspace --release --bin substrate --features substrate-mcp-server/subprocess
 
 # Build everything (workspace, all targets) in dev profile.
 build:
