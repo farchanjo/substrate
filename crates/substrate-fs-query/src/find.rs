@@ -77,6 +77,19 @@ pub struct FsFindRequest {
     pub page_cursor: Option<String>,
 }
 
+impl Default for FsFindRequest {
+    fn default() -> Self {
+        Self {
+            root: String::new(),
+            pattern: default_glob(),
+            max_depth: default_max_depth(),
+            modified_since: None,
+            page_size: default_page_size(),
+            page_cursor: None,
+        }
+    }
+}
+
 fn default_glob() -> String {
     "*".to_owned()
 }
@@ -676,5 +689,31 @@ mod tests {
             matches!(err, SubstrateError::PathOutsideAllowlist { .. }),
             "expected PathOutsideAllowlist but got: {err:?}"
         );
+    }
+
+    // ---- ADR-0061: FsFindRequest Default contract tests ---------------------
+
+    /// `FsFindRequest::default()` must initialize `max_depth` and `page_size` to
+    /// match the `#[serde(default = "fn")]` values, not Rust zero-values.
+    ///
+    /// Regression guard: if `#[derive(Default)]` were used instead of a manual
+    /// impl, both fields would be `0`.
+    #[test]
+    fn fs_find_request_default_honors_serde_defaults() {
+        let req = FsFindRequest::default();
+        assert_eq!(
+            req.max_depth, DEFAULT_MAX_DEPTH,
+            "Default::default() must use default_max_depth()={DEFAULT_MAX_DEPTH}, not 0"
+        );
+        assert_eq!(
+            req.page_size, DEFAULT_PAGE_SIZE,
+            "Default::default() must use default_page_size()={DEFAULT_PAGE_SIZE}, not 0"
+        );
+        assert_eq!(
+            req.pattern, "*",
+            "Default pattern must match default_glob()"
+        );
+        assert!(req.modified_since.is_none());
+        assert!(req.page_cursor.is_none());
     }
 }
