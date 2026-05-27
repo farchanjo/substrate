@@ -115,7 +115,7 @@ pub(crate) async fn handle_subprocess_spawn(
 // ---- subprocess_list --------------------------------------------------------
 
 /// Request type for `subprocess.list`.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct SubprocessListRequest {
     /// Restrict results to these states; `None` returns all states.
@@ -127,6 +127,17 @@ pub(crate) struct SubprocessListRequest {
     pub(crate) page_size: u32,
     /// Caller client identifier for cross-client scoping.
     pub(crate) client_id: Option<String>,
+}
+
+impl Default for SubprocessListRequest {
+    fn default() -> Self {
+        Self {
+            state_filter: None,
+            page_cursor: None,
+            page_size: default_page_size(),
+            client_id: None,
+        }
+    }
 }
 
 const fn default_page_size() -> u32 {
@@ -526,6 +537,258 @@ pub(crate) async fn handle_subprocess_signal(
         structured_content: structured,
         hints,
     })
+}
+
+// ---- Unit tests -------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use time::OffsetDateTime;
+
+    use substrate_domain::{
+        SubstrateError, SubstrateResult,
+        ports::subprocess::{
+            CancelSignal, SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName,
+        },
+        subprocess::{
+            errors::SubprocessError,
+            handle::SubprocessHandle,
+            pagination::{SubprocessSearchRequest, SubprocessSearchResult},
+            request::SubprocessRequest,
+            state::SubprocessState,
+        },
+        value_objects::{ClientId, JobId, ProcessGroup},
+    };
+
+    use super::*;
+
+    // ---- Change 3: Default impl unit tests ----------------------------------
+
+    #[test]
+    fn subprocess_list_request_default_uses_page_size_fn() {
+        let req = SubprocessListRequest::default();
+        assert_eq!(
+            req.page_size, 50,
+            "Default::default() must honor default_page_size()"
+        );
+        assert!(req.state_filter.is_none());
+        assert!(req.page_cursor.is_none());
+        assert!(req.client_id.is_none());
+    }
+
+    /// Deserialising from `{}` (empty JSON object) must also produce page_size=50.
+    ///
+    /// This confirms that `#[serde(deny_unknown_fields, default)]` on the struct
+    /// falls back to the manual `Default` impl (and therefore `default_page_size()`)
+    /// for absent fields, rather than to `0u32::default()`.
+    #[test]
+    fn subprocess_list_request_serde_empty_object_uses_page_size_fn() {
+        let req: SubprocessListRequest =
+            serde_json::from_str("{}").expect("deserialise empty object");
+        assert_eq!(
+            req.page_size, 50,
+            "serde default for empty {{}} must honour default_page_size()"
+        );
+    }
+
+    /// Deserialising from `null` must also produce page_size=50 (handler fast-path).
+    #[test]
+    fn subprocess_list_request_handler_null_uses_page_size_fn() {
+        let args = serde_json::Value::Null;
+        let req = if args.is_null() || args == serde_json::Value::Object(serde_json::Map::default())
+        {
+            SubprocessListRequest::default()
+        } else {
+            serde_json::from_value(args).expect("should not reach")
+        };
+        assert_eq!(
+            req.page_size, 50,
+            "handler null-path must produce page_size=50"
+        );
+    }
+
+    // ---- Change 4: handler integration tests (stub SubprocessPort) ----------
+
+    /// Minimal `SubprocessPort` stub that returns a fixed one-element list from
+    /// `list()`. All other methods are unreachable — they are not exercised here.
+    struct OneHandlePort {
+        handle: SubprocessHandle,
+    }
+
+    impl OneHandlePort {
+        fn new() -> Self {
+            let job_id = JobId::now_v7();
+            let process_group =
+                ProcessGroup::new(100, 100).expect("valid ProcessGroup for test stub");
+            Self {
+                handle: SubprocessHandle {
+                    job_id,
+                    process_group,
+                    state: SubprocessState::Running,
+                    started_at: OffsetDateTime::now_utc(),
+                    exit_code: None,
+                    stream_chunks_dropped: 0,
+                    tmp_files: Vec::new(),
+                },
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SubprocessPort for OneHandlePort {
+        async fn spawn(
+            &self,
+            _req: SubprocessRequest,
+            _cancel: &dyn CancelSignal,
+        ) -> Result<SubprocessHandle, SubprocessError> {
+            unreachable!("spawn not exercised by this test")
+        }
+
+        async fn list(
+            &self,
+            _client_id: &ClientId,
+            _state_filter: Option<&[SubprocessState]>,
+            _page_cursor: Option<&str>,
+            page_size: u32,
+        ) -> SubstrateResult<(Vec<SubprocessHandle>, Option<String>)> {
+            // Fail loudly in tests if the caller passes page_size=0 so regressions
+            // produce a clear, actionable error rather than a silent empty Vec.
+            if page_size == 0 {
+                return Err(SubstrateError::InternalError {
+                    reason: "page_size=0 reached stub port — \
+                             SubprocessListRequest Default bug (page_size must be 50)"
+                        .to_owned(),
+                    correlation_id: None,
+                });
+            }
+            let handles: Vec<SubprocessHandle> = vec![self.handle.clone()]
+                .into_iter()
+                .take(page_size as usize)
+                .collect();
+            Ok((handles, None))
+        }
+
+        async fn cancel(&self, _job_id: &JobId, _force: bool) -> SubstrateResult<SubprocessState> {
+            unreachable!("cancel not exercised by this test")
+        }
+
+        async fn result(
+            &self,
+            _job_id: &JobId,
+            _wait_ms: u32,
+            _include_aggregates: bool,
+        ) -> SubstrateResult<SubprocessResult> {
+            unreachable!("result not exercised by this test")
+        }
+
+        async fn signal(
+            &self,
+            _job_id: &JobId,
+            _signal_name: SubprocessSignalName,
+            _target: SignalTarget,
+        ) -> SubstrateResult<()> {
+            unreachable!("signal not exercised by this test")
+        }
+
+        async fn search(
+            &self,
+            _req: SubprocessSearchRequest,
+        ) -> Result<SubprocessSearchResult, SubprocessError> {
+            unreachable!("search not exercised by this test")
+        }
+    }
+
+    fn test_client_id() -> ClientId {
+        ClientId::parse("test-client").expect("valid test ClientId")
+    }
+
+    /// `Value::Null` input must produce the one registered handle.
+    ///
+    /// Regression guard for the `page_size=0` bug: before the fix,
+    /// `Default::default()` produced `page_size=0`, causing `iter().take(0)` to
+    /// yield an empty Vec even when handles existed.
+    #[tokio::test]
+    async fn handle_subprocess_list_null_args_returns_existing_handle() {
+        let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
+        let client_id = test_client_id();
+
+        let resp = handle_subprocess_list(Value::Null, port, client_id)
+            .await
+            .expect("handle_subprocess_list must not Err for valid stub");
+
+        let handles = resp
+            .structured_content
+            .get("handles")
+            .and_then(|v| v.as_array())
+            .expect("structured_content must contain a handles array");
+
+        assert_eq!(
+            handles.len(),
+            1,
+            "Value::Null input must return 1 handle; got {}. \
+             (page_size=0 regression: Default::default() must use \
+             default_page_size()=50, not u32::default()=0)",
+            handles.len()
+        );
+    }
+
+    /// `Value::Object(Map::default())` (empty JSON object `{}`) must also return
+    /// the registered handle. This is the second shape the handler fast-path
+    /// recognises as "no arguments provided".
+    #[tokio::test]
+    async fn handle_subprocess_list_empty_object_args_returns_existing_handle() {
+        let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
+        let client_id = test_client_id();
+
+        let args = Value::Object(serde_json::Map::default());
+        let resp = handle_subprocess_list(args, port, client_id)
+            .await
+            .expect("handle_subprocess_list must not Err for empty-object args");
+
+        let handles = resp
+            .structured_content
+            .get("handles")
+            .and_then(|v| v.as_array())
+            .expect("structured_content must contain a handles array");
+
+        assert_eq!(
+            handles.len(),
+            1,
+            "empty-object input must return 1 handle; got {}. \
+             (page_size=0 regression: serde default for missing field must use \
+             default_page_size()=50, not u32::default()=0)",
+            handles.len()
+        );
+    }
+
+    /// Explicit `page_size` in the request must be honoured — guards that the fix
+    /// did not break the explicit-override path.
+    #[tokio::test]
+    async fn handle_subprocess_list_explicit_page_size_is_honoured() {
+        let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
+        let client_id = test_client_id();
+
+        let args = json!({ "page_size": 500 });
+        let resp = handle_subprocess_list(args, port, client_id)
+            .await
+            .expect("handle_subprocess_list must not Err for explicit page_size");
+
+        let handles = resp
+            .structured_content
+            .get("handles")
+            .and_then(|v| v.as_array())
+            .expect("structured_content must contain a handles array");
+
+        // Stub holds 1 handle total; page_size=500 is above that so we get 1.
+        assert_eq!(
+            handles.len(),
+            1,
+            "explicit page_size=500 must return all 1 available handle; got {}",
+            handles.len()
+        );
+    }
 }
 
 // ---- Base64 helper ----------------------------------------------------------

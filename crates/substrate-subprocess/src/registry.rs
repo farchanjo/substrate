@@ -982,6 +982,7 @@ impl SubprocessPort for SubprocessRegistry {
         _page_cursor: Option<&str>,
         page_size: u32,
     ) -> SubstrateResult<(Vec<SubprocessHandle>, Option<String>)> {
+        debug_assert!(page_size > 0, "page_size=0 is a caller contract violation");
         let page_size = (page_size as usize).min(500);
         let handles: Vec<SubprocessHandle> = self
             .handles
