@@ -9,7 +9,7 @@
 //!       pattern (string, "*") — glob;
 //!       max_depth (u32, 16) — recursion limit;
 //!       modified_since (RFC3339, null) — mtime filter;
-//!       page_size (u32, 50) — entries per page, max 500;
+//!       page_size (u32, 50) — entries per page, max 500; absent → default 50 (ADR-0060);
 //!       page_cursor (string, null) — pagination token
 //! RETURNS: {matches:[{path,size,mtime}], next_cursor?}
 //! NEXT: fs.read, fs.stat
@@ -32,7 +32,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use substrate_domain::{JailedPath, PathJailPort, SubstrateError, SubstrateResult};
+use substrate_domain::{
+    value_objects::PageSize,
+    JailedPath,
+    PathJailPort,
+    SubstrateError,
+    SubstrateResult,
+};
 
 #[cfg(unix)]
 use libc;
@@ -40,11 +46,12 @@ use libc;
 use crate::hint_helpers::build_hints;
 use crate::response::{FsQueryDeps, ToolResponse};
 
-/// Maximum allowed page size for `fs.find` (ADR-0008).
-const MAX_PAGE_SIZE: u32 = 500;
-
-/// Default page size for `fs.find`.
-const DEFAULT_PAGE_SIZE: u32 = 50;
+/// Domain-level page-size cap for `fs.find` (ADR-0008 / ADR-0060).
+///
+/// ADR-0060 defines `PageSize::MAX = 10_000` at the domain boundary; `fs.find`
+/// applies an additional handler-level cap of 500 because large trees incur
+/// significant I/O in `spawn_blocking`.
+const FS_FIND_PAGE_SIZE_CAP: u32 = 500;
 
 /// Default maximum recursion depth.
 const DEFAULT_MAX_DEPTH: u32 = 16;
@@ -69,9 +76,12 @@ pub struct FsFindRequest {
     /// are returned. `None` disables mtime filtering.
     pub modified_since: Option<String>,
 
-    /// Number of entries per page (1–500, default 50).
-    #[serde(default = "default_page_size")]
-    pub page_size: u32,
+    /// Number of entries per page (1–500).
+    ///
+    /// Absent or `null` → default 50 (ADR-0060). Explicit `0` or value above
+    /// [`PageSize::MAX`] (10 000) → `INVALID_ARGUMENT`. Values above 500 are
+    /// silently capped to 500 at the handler level (ADR-0008).
+    pub page_size: Option<u32>,
 
     /// Opaque cursor from a previous response; `None` fetches from the start.
     pub page_cursor: Option<String>,
@@ -84,7 +94,7 @@ impl Default for FsFindRequest {
             pattern: default_glob(),
             max_depth: default_max_depth(),
             modified_since: None,
-            page_size: default_page_size(),
+            page_size: None,
             page_cursor: None,
         }
     }
@@ -95,9 +105,6 @@ fn default_glob() -> String {
 }
 const fn default_max_depth() -> u32 {
     DEFAULT_MAX_DEPTH
-}
-const fn default_page_size() -> u32 {
-    DEFAULT_PAGE_SIZE
 }
 
 /// A single matching entry emitted by `fs.find`.
@@ -134,7 +141,13 @@ pub async fn handle_fs_find(
     deps: &FsQueryDeps,
     cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
-    let page_size = req.page_size.clamp(1, MAX_PAGE_SIZE);
+    // ADR-0060: absent → default; explicit zero or out-of-range → INVALID_ARGUMENT.
+    // Handler-level cap of FS_FIND_PAGE_SIZE_CAP (500) applied after domain validation
+    // to limit spawn_blocking I/O cost (ADR-0008).
+    let page_size: u32 = match req.page_size {
+        Some(n) => PageSize::try_from(n)?.get().min(FS_FIND_PAGE_SIZE_CAP),
+        None => PageSize::default().get().min(FS_FIND_PAGE_SIZE_CAP),
+    };
 
     // Validate the cursor offset.
     let skip_count: usize = if let Some(ref cursor_str) = req.page_cursor {
@@ -578,7 +591,7 @@ mod tests {
             pattern: "*".to_owned(),
             max_depth: 1,
             modified_since: None,
-            page_size: 50,
+            page_size: Some(50),
             page_cursor: None,
         };
         let resp = handle_fs_find(req, &deps, CancellationToken::new())
@@ -602,7 +615,7 @@ mod tests {
             pattern: "*.txt".to_owned(),
             max_depth: 1,
             modified_since: None,
-            page_size: 50,
+            page_size: Some(50),
             page_cursor: None,
         };
         let resp = handle_fs_find(req, &deps, CancellationToken::new())
@@ -625,7 +638,7 @@ mod tests {
             pattern: "[invalid".to_owned(),
             max_depth: 1,
             modified_since: None,
-            page_size: 50,
+            page_size: Some(50),
             page_cursor: None,
         };
         let result = handle_fs_find(req, &deps, CancellationToken::new()).await;
@@ -679,7 +692,7 @@ mod tests {
             pattern: "*".to_owned(),
             max_depth: 1,
             modified_since: None,
-            page_size: 50,
+            page_size: Some(50),
             page_cursor: None,
         };
         let err = handle_fs_find(req, &deps, CancellationToken::new())
@@ -693,11 +706,11 @@ mod tests {
 
     // ---- ADR-0061: FsFindRequest Default contract tests ---------------------
 
-    /// `FsFindRequest::default()` must initialize `max_depth` and `page_size` to
-    /// match the `#[serde(default = "fn")]` values, not Rust zero-values.
+    /// `FsFindRequest::default()` must initialize `max_depth` to the serde default
+    /// and `page_size` to `None` (absent → domain default 50 per ADR-0060).
     ///
     /// Regression guard: if `#[derive(Default)]` were used instead of a manual
-    /// impl, both fields would be `0`.
+    /// impl, `max_depth` would be `0` instead of `DEFAULT_MAX_DEPTH`.
     #[test]
     fn fs_find_request_default_honors_serde_defaults() {
         let req = FsFindRequest::default();
@@ -705,9 +718,9 @@ mod tests {
             req.max_depth, DEFAULT_MAX_DEPTH,
             "Default::default() must use default_max_depth()={DEFAULT_MAX_DEPTH}, not 0"
         );
-        assert_eq!(
-            req.page_size, DEFAULT_PAGE_SIZE,
-            "Default::default() must use default_page_size()={DEFAULT_PAGE_SIZE}, not 0"
+        assert!(
+            req.page_size.is_none(),
+            "Default page_size must be None (absent → domain default 50 per ADR-0060)"
         );
         assert_eq!(
             req.pattern, "*",
@@ -715,5 +728,44 @@ mod tests {
         );
         assert!(req.modified_since.is_none());
         assert!(req.page_cursor.is_none());
+    }
+
+    /// Explicit `page_size = 0` must return `INVALID_ARGUMENT` per ADR-0060.
+    #[tokio::test]
+    async fn find_page_size_zero_returns_invalid_argument() {
+        let tmp = TempDir::new().expect("tempdir");
+        let deps = make_deps();
+        let req = FsFindRequest {
+            root: tmp.path().to_string_lossy().into_owned(),
+            pattern: "*".to_owned(),
+            max_depth: 1,
+            modified_since: None,
+            page_size: Some(0),
+            page_cursor: None,
+        };
+        let err = handle_fs_find(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
+    }
+
+    /// Absent `page_size` must use domain default (50) and complete successfully.
+    #[tokio::test]
+    async fn find_absent_page_size_defaults_to_fifty() {
+        let tmp = TempDir::new().expect("tempdir");
+        let deps = make_deps();
+        let req = FsFindRequest {
+            root: tmp.path().to_string_lossy().into_owned(),
+            pattern: "*".to_owned(),
+            max_depth: 1,
+            modified_since: None,
+            page_size: None,
+            page_cursor: None,
+        };
+        let resp = handle_fs_find(req, &deps, CancellationToken::new())
+            .await
+            .expect("absent page_size must use default and succeed");
+        // The handler must return a valid response (structured content present).
+        assert!(resp.structured_content["matches"].is_array());
     }
 }
