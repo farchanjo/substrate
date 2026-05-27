@@ -55,6 +55,14 @@ impl PageSize {
     /// required. The `None` arm `panic!` is a compile-time error, never reached.
     pub const DEFAULT: Self = Self::new_static(50);
 
+    /// Default page size for line-based pagination (100), matching the historical
+    /// `Pagination::default_page_size()` value from ADR-0057.
+    ///
+    /// Distinct from [`DEFAULT`](Self::DEFAULT) (which is 50 and applies to
+    /// list-style operations). `Pagination`-based operations (subprocess result,
+    /// search, network TCP/UDP list) use 100 lines per page as the baseline.
+    pub const DEFAULT_PAGINATION: Self = Self::new_static(100);
+
     /// Constructs a [`PageSize`] from a compile-time-known constant.
     ///
     /// Intended for use in `const` initializers where the argument is a
