@@ -6,6 +6,16 @@
 //!
 //! Tool descriptions are thin one-liners per the ADR-0007 2026-05-22 amendment;
 //! full narrative arc lives in the companion `subprocess.md` tool-card document.
+//!
+//! # Request Default Contract (ADR-0061)
+//!
+//! Every request struct in this module that participates in the
+//! `is_null() || empty_object` shortcut MUST implement `Default` manually
+//! (not via `#[derive(Default)]`). The manual impl MUST match every
+//! `#[serde(default = "fn")]` field override.
+//!
+//! Currently: [`SubprocessListRequest`] uses this shortcut.
+//! Enforced by: `docs/arch/policies/request_default_invariants.rego`
 
 #![cfg(feature = "subprocess")]
 #![allow(

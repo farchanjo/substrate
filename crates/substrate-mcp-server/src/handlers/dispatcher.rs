@@ -1,6 +1,19 @@
 //! Central tool dispatcher — routes incoming MCP `tools/call` requests to the
 //! appropriate adapter handler per ADR-0022.
 //!
+//! # Request Default Contract (ADR-0061)
+//!
+//! Every request struct in this module that participates in the
+//! `is_null() || empty_object` shortcut MUST implement `Default` manually
+//! (not via `#[derive(Default)]`). The manual impl MUST match every
+//! `#[serde(default = "fn")]` field override.
+//!
+//! Currently: the local `Req` struct in `handle_job_list` uses this shortcut.
+//! Its fields are all `Option<T>` with `#[serde(default)]` (standard, no custom fn),
+//! so `derive(Default)` is safe there. If `page_size` or another serde-fn-defaulted
+//! field is added in the future, replace `#[derive(Default)]` with a manual impl.
+//! Enforced by: `docs/arch/policies/request_default_invariants.rego`
+//!
 //! Every tool name is a static, compile-time constant matched here. Bucket B/C
 //! tools follow the inline-vs-job decision policy from ADR-0040. Bucket A/D
 //! tools execute inline and return immediately.
