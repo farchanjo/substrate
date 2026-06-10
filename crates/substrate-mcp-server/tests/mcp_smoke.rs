@@ -160,8 +160,17 @@ fn initialize_returns_protocol_2025_11_25_and_capabilities() {
 
 // ---- tools/list test ---------------------------------------------------------
 
+/// Expected `tools/list` length. The four always-on tools proc_stats,
+/// proc_top, sys_mem, and sys_cpu were added to the registry in addition to the
+/// original 41; the `subprocess` feature contributes six more
+/// (spawn/list/cancel/result/signal/search).
+#[cfg(not(feature = "subprocess"))]
+const EXPECTED_TOOLS: usize = 45;
+#[cfg(feature = "subprocess")]
+const EXPECTED_TOOLS: usize = 51;
+
 #[test]
-fn tools_list_returns_41_tools() {
+fn tools_list_returns_expected_tool_count() {
     let temp = TempDir::new().unwrap();
     let root = temp.path().canonicalize().unwrap();
     write_config(&root, &root);
@@ -197,7 +206,12 @@ fn tools_list_returns_41_tools() {
     let resp = recv(&mut reader);
 
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 41, "expected 41 tools, found {}", tools.len());
+    assert_eq!(
+        tools.len(),
+        EXPECTED_TOOLS,
+        "expected {EXPECTED_TOOLS} tools, found {}",
+        tools.len()
+    );
 
     let mut guard = child_arc.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(c) = guard.as_mut() {

@@ -358,17 +358,13 @@ async fn then_buffers_drained(world: &mut SubstrateWorld) {
         return;
     }
     // The cascade kill chain (step 5 per ADR-0053) drains ring buffers before
-    // transitioning to a terminal state. If the prior Then step confirmed a
-    // terminal state, the drain is complete.
-    //
-    // Structural verification: the cancel completed (non-zero elapsed time).
-    let elapsed_ms: u64 = world
-        .context
-        .get(KEY_CANCEL_ELAPSED_MS)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    // transitioning to a terminal state. The preceding terminal-state Then step
+    // already asserts the drain completed; here we confirm the cancel path ran
+    // and its duration was recorded. Elapsed time is NOT lower-bounded: a prompt
+    // SIGTERM on an already-exiting child completes in well under 1 ms, which
+    // truncates to 0 — a `> 0` assertion would be flaky on fast hosts.
     assert!(
-        elapsed_ms > 0,
-        "expected non-zero elapsed time after cancel (buffers not drained?); got 0 ms"
+        world.context.contains_key(KEY_CANCEL_ELAPSED_MS),
+        "cancel elapsed time was not recorded — the cancel path did not run"
     );
 }
