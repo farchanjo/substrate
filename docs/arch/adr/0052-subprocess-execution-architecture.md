@@ -344,3 +344,50 @@ for `Running` when no probe is configured), `Restarting` (transient between exit
 and re-spawn). Backward compatible: omitting all new fields preserves the original
 one-shot semantics defined by this ADR. See [ADR-0056](0056-subprocess-supervisor-semantics.md)
 for the full contract.
+
+## Amendment 2026-06-10: check-to-exec TOCTOU invariant
+
+Layer 5 above describes binary-path and `cwd` allowlist validation, but it left
+the bind between the *validated* path and the *executed* path implicit. A
+symlink swap performed between the allowlist check and the `exec` call could
+redirect execution to a path outside the allowlist (a check-to-exec TOCTOU
+window, analogous to the filesystem TOCTOU class covered by
+[ADR-0035](0035-path-safety-hardening.md) but for the subprocess binary and
+working directory rather than an `fs.*` path argument). This amendment records
+the invariant that closes that window. It documents the behavior shipped in
+commit `4bbf4fb`; it does not change the Layer 5 control set.
+
+**Invariant — exec the canonicalized binary and the canonical cwd captured at
+allowlist-check time.** `spawn_supervised` MUST construct the
+`tokio::process::Command` from the canonicalized binary path that was matched
+against `security.subprocess_binary_allowlist`, and MUST set the child working
+directory to the canonical `cwd` path that passed the Layer 1/Layer 2 jail —
+both captured at check time. The raw, caller-supplied binary string and `cwd`
+string are NOT re-resolved at exec time. Because the canonical paths are
+resolved once and then used verbatim for `exec`, a symlink (or directory)
+swapped in after the allowlist check cannot redirect execution: the kernel
+opens the already-resolved target, not the attacker-substituted link.
+
+Concretely:
+
+- The binary path is canonicalized through the PathJail; the resulting
+  canonical `PathBuf` is the value passed to `Command::new`. A mismatch between
+  the canonical path and any allowlist entry is rejected with
+  `SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED` before the command is built.
+- The `cwd` is canonicalized through the same jail; the canonical `PathBuf` is
+  the value passed to `Command::current_dir`. The raw argument is never passed
+  to `current_dir`.
+- The capture of the canonical binary path and canonical cwd, the allowlist
+  comparison, and the `Command` construction occur in a single synchronous
+  span with no intervening `await` that re-reads the filesystem path, so no
+  swap can interleave between the check and the bind.
+
+This invariant is enforced in `crates/substrate-subprocess` and SHOULD be
+asserted by the subprocess Rego invariants (`subprocess_invariants.rego` /
+`subprocess_supervisor_invariants.rego`) and by a Gherkin feature exercising a
+binary-symlink swap after the allowlist check.
+
+Cross-references: [ADR-0004](0004-security-model.md) — Layer 5 binary/cwd
+allowlist; [ADR-0035](0035-path-safety-hardening.md) — filesystem TOCTOU class
+and kernel-atomic resolution that this invariant mirrors for the subprocess
+exec path.

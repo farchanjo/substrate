@@ -6,7 +6,7 @@ consulted: []
 informed: []
 ---
 
-# ADR-0008 — MCP Feature Usage Map
+# ADR-0008 — MCP Features Map
 
 ## Context and Problem Statement
 
@@ -53,8 +53,12 @@ Chosen option: "Full feature matrix", because the features are interdependent (e
 | sys.uptime | true | false | true | false |
 | sys.df | true | false | true | false |
 | sys.uname | true | false | true | false |
+| sys.hostname | true | false | true | false |
+| sys.load_average | true | false | true | true |
 | text.search | true | false | true | false |
 | text.count_lines | true | false | true | false |
+| text.head | true | false | true | false |
+| text.tail | true | false | true | false |
 | archive.tar.create | false | false | false | false |
 | archive.tar.extract | false | false | false | false |
 | archive.zip.create | false | false | false | false |
@@ -62,6 +66,30 @@ Chosen option: "Full feature matrix", because the features are interdependent (e
 | archive.gzip.compress | false | false | false | false |
 | archive.gzip.decompress | false | false | false | false |
 | archive.hash | true | false | true | false |
+| job.status | true | false | true | false |
+| job.result | true | false | true | false |
+| job.list | true | false | true | false |
+| job.cancel | false | false | true | false |
+| net.tcp_list | true | false | true | true |
+| net.udp_list | true | false | true | true |
+| net.tcp_stats | true | false | true | true |
+| net.connection_count | true | false | true | true |
+| subprocess.spawn | false | **true** | false | true |
+| subprocess.signal | false | **true** | false | false |
+| subprocess.list | true | false | true | true |
+| subprocess.result | true | false | true | false |
+| subprocess.search | true | false | true | false |
+| subprocess.cancel | false | false | true | false |
+
+The `job.*`, `net.*`, and `subprocess.*` rows above were added by the
+2026-06-10 amendment to cover the job, network-info, and subprocess bounded
+contexts introduced by [ADR-0040](0040-async-job-control-plane.md),
+[ADR-0058](0058-network-socket-introspection.md), and
+[ADR-0052](0052-subprocess-execution-architecture.md). `subprocess.spawn` and
+`subprocess.signal` carry `destructiveHint: true` and `openWorldHint: true`
+(spawn executes arbitrary allowlisted binaries) in parity with `proc.signal`;
+`net.*` introspection rows mirror `proc.list` (volatile live state, hence
+`openWorldHint: true`).
 
 ### outputSchema via schemars
 
@@ -241,3 +269,35 @@ Tool *results* still use cursor pagination (per [ADR-0007](0007-tool-card-narrat
 - ADR-0032: Signal Safety — cancellation and shutdown signal propagation that interacts with in-flight tool calls.
 - ADR-0033: Elicitation Security Model — threat model and rate-limit policy for elicitation flows.
 - ADR-0037: Audit Logging — cross-cutting audit-log concern referenced in the annotation exception above.
+- [ADR-0060](0060-page-size-value-object-at-domain-port-boundary.md): PageSize value object — domain-port pagination bound (`1..=10000`) that the per-tool handler cap layers on top of.
+
+## Amendments
+
+### 2026-06-10 — Pagination layering reconciled with ADR-0060
+
+The "Pagination Defaults and Cursor Encoding" section above states a maximum
+page size of 500 and a default of 50. [ADR-0060](0060-page-size-value-object-at-domain-port-boundary.md)
+later introduced a shared `PageSize` value object at the domain-port boundary
+with a wider bound. The two are NOT in conflict; they enforce limits at
+different layers. This amendment records which layer owns which bound.
+
+- **Domain layer (ADR-0060).** The `PageSize` value object validates
+  `MIN = 1`, `MAX = 10_000`, `DEFAULT = 50`. A request with `page_size = 0` or
+  `page_size > 10_000` is rejected with `SUBSTRATE_INVALID_ARGUMENT` before any
+  handler-level clamp is applied. A second associated default,
+  `DEFAULT_PAGINATION = 100`, is used by line- and record-oriented operations
+  (subprocess result, search, network TCP/UDP list).
+- **Handler / protocol layer (this ADR).** After domain validation succeeds,
+  each paginated handler clamps the validated value down to a per-tool ceiling
+  via `.get().min(cap)`. The ceilings are: `fs.find`, `proc.list`, and
+  `text.search` clamp to 500; `fs.read_dir` clamps to 5_000. The TOML
+  `[protocol] max_page_size` (default 500) and `[protocol] default_page_size`
+  (default 50) configure this layer. Consequently a request with
+  `page_size` in `501..=10_000` is accepted by the domain VO and silently
+  clamped down to the per-tool ceiling rather than rejected.
+
+In other words: the domain `PageSize` bound (`1..=10000`) is the outer
+validation gate (reject-if-outside); the handler/protocol cap (500, or 5_000
+for `fs.read_dir`) is the inner clamp (silently reduce). The "Maximum page
+size: 500" figure in the section above is the handler/protocol clamp for
+`fs.find`/`proc.list`/`text.search`, not the domain VO ceiling.
