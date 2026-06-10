@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{
-    Capabilities, ClientId, JobState, SubstrateError, jobs::entry::JobEntry,
+    Capabilities, ClientId, JobState, PageSize, SubstrateError, jobs::entry::JobEntry,
     ports::job_registry::JobResult, value_objects::JobId,
 };
 
@@ -459,6 +459,14 @@ mod descriptions {
         "Deliver POSIX signal to PID. KILL/TERM/STOP need elicitation_confirmed. See substrate skill."
     }
 
+    pub(super) const fn proc_stats() -> &'static str {
+        "Per-PID CPU%, memory, and thread counters with delta sampling. See substrate skill."
+    }
+
+    pub(super) const fn proc_top() -> &'static str {
+        "Top processes ranked by CPU or memory, paginated. See substrate skill."
+    }
+
     // ---- system-info --------------------------------------------------------
 
     pub(super) const fn sys_uname() -> &'static str {
@@ -483,6 +491,14 @@ mod descriptions {
 
     pub(super) const fn sys_info() -> &'static str {
         "Return one-shot snapshot of OS, memory, CPU, and disk. See substrate skill."
+    }
+
+    pub(super) const fn sys_mem() -> &'static str {
+        "Return physical and swap memory totals, used, and available. See substrate skill."
+    }
+
+    pub(super) const fn sys_cpu() -> &'static str {
+        "Return per-core and aggregate CPU utilization via delta sampling. See substrate skill."
     }
 
     // ---- text-processing ----------------------------------------------------
@@ -653,22 +669,14 @@ struct JobListRequest {
     cursor: Option<String>,
 }
 
-/// Returns the static list of all 41 substrate tools (45 with `subprocess` feature).
-///
-/// Each entry carries a thin description (<= 100 chars) plus a schemars-derived
-/// `inputSchema`. The companion `substrate` skill body at
-/// `~/.claude/skills/substrate/SKILL.md` holds the full reference (buckets,
-/// errors, config, rules, skip routing), auto-primed via the `mcp__substrate__`
-/// trigger family.
-#[must_use]
-pub(crate) fn tool_registry() -> Vec<Tool> {
-    /// Builds a tool entry with a real JSON Schema from type `T` and a narrative-arc description.
-    fn make<T: schemars::JsonSchema + 'static>(name: &'static str, desc: &'static str) -> Tool {
-        Tool::new(name, desc, schema_for::<T>())
-    }
+/// Builds a tool entry with a real JSON Schema from type `T` and a narrative-arc description.
+fn make<T: schemars::JsonSchema + 'static>(name: &'static str, desc: &'static str) -> Tool {
+    Tool::new(name, desc, schema_for::<T>())
+}
 
+/// filesystem-query BC (read-side) tool cards.
+fn registry_fs_query() -> Vec<Tool> {
     vec![
-        // ---- filesystem-query BC (read-side) ---------------------------------
         make::<substrate_fs_query::read_dir::FsReadDirRequest>(
             "fs_read_dir",
             descriptions::fs_read_dir(),
@@ -677,7 +685,12 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
         make::<substrate_fs_query::find::FsFindRequest>("fs_find", descriptions::fs_find()),
         make::<substrate_fs_query::read::FsReadRequest>("fs_read", descriptions::fs_read()),
         make::<substrate_fs_query::hash::FsHashRequest>("fs_hash", descriptions::fs_hash()),
-        // ---- filesystem-mutation BC (write-side) -----------------------------
+    ]
+}
+
+/// filesystem-mutation BC (write-side) tool cards.
+fn registry_fs_mutation() -> Vec<Tool> {
+    vec![
         make::<substrate_fs_mutation::mkdir::FsMkdirRequest>("fs_mkdir", descriptions::fs_mkdir()),
         make::<substrate_fs_mutation::write::FsWriteRequest>("fs_write", descriptions::fs_write()),
         make::<substrate_fs_mutation::copy::FsCopyRequest>("fs_copy", descriptions::fs_copy()),
@@ -698,14 +711,29 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             descriptions::fs_symlink(),
         ),
         make::<substrate_fs_mutation::touch::FsTouchRequest>("fs_touch", descriptions::fs_touch()),
-        // ---- process BC ------------------------------------------------------
+    ]
+}
+
+/// process BC tool cards (includes `proc_stats` and `proc_top` per ADR-0051).
+fn registry_process() -> Vec<Tool> {
+    vec![
         make::<substrate_process::list::ProcListRequest>("proc_list", descriptions::proc_list()),
         make::<substrate_process::tree::ProcTreeRequest>("proc_tree", descriptions::proc_tree()),
         make::<substrate_process::signal::ProcSignalRequest>(
             "proc_signal",
             descriptions::proc_signal(),
         ),
-        // ---- system-info BC (no caller-supplied parameters) ------------------
+        make::<substrate_process::stats::ProcStatsRequest>(
+            "proc_stats",
+            descriptions::proc_stats(),
+        ),
+        make::<substrate_process::ProcTopRequest>("proc_top", descriptions::proc_top()),
+    ]
+}
+
+/// system-info BC tool cards (`sys_mem` and `sys_cpu` take no parameters per ADR-0050).
+fn registry_system_info() -> Vec<Tool> {
+    vec![
         Tool::new("sys_uname", descriptions::sys_uname(), schema_empty()),
         Tool::new("sys_hostname", descriptions::sys_hostname(), schema_empty()),
         Tool::new("sys_uptime", descriptions::sys_uptime(), schema_empty()),
@@ -716,7 +744,14 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             schema_empty(),
         ),
         Tool::new("sys_info", descriptions::sys_info(), schema_empty()),
-        // ---- text-processing BC ----------------------------------------------
+        Tool::new("sys_mem", descriptions::sys_mem(), schema_empty()),
+        Tool::new("sys_cpu", descriptions::sys_cpu(), schema_empty()),
+    ]
+}
+
+/// text-processing BC tool cards.
+fn registry_text() -> Vec<Tool> {
+    vec![
         make::<substrate_text::search::SearchParams>("text_search", descriptions::text_search()),
         make::<substrate_text::count_lines::CountLinesParams>(
             "text_count_lines",
@@ -724,7 +759,12 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
         ),
         make::<substrate_text::head::HeadParams>("text_head", descriptions::text_head()),
         make::<substrate_text::tail::TailParams>("text_tail", descriptions::text_tail()),
-        // ---- archive BC ------------------------------------------------------
+    ]
+}
+
+/// archive BC tool cards.
+fn registry_archive() -> Vec<Tool> {
+    vec![
         make::<substrate_archive::tar_create::TarCreateRequest>(
             "archive_tar_create",
             descriptions::archive_tar_create(),
@@ -753,49 +793,59 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             "archive_hash",
             descriptions::archive_hash(),
         ),
-        // ---- job control-plane -----------------------------------------------
+    ]
+}
+
+/// job control-plane tool cards.
+fn registry_jobs() -> Vec<Tool> {
+    vec![
         make::<JobStatusRequest>("job_status", descriptions::job_status()),
         make::<JobResultRequest>("job_result", descriptions::job_result()),
         make::<JobCancelRequest>("job_cancel", descriptions::job_cancel()),
         make::<JobListRequest>("job_list", descriptions::job_list()),
-        // ---- subprocess BC (feature-gated) -----------------------------------
-        #[cfg(feature = "subprocess")]
+    ]
+}
+
+/// subprocess BC tool cards (compiled only with the `subprocess` feature).
+#[cfg(feature = "subprocess")]
+fn registry_subprocess() -> Vec<Tool> {
+    vec![
         Tool::new(
             "subprocess_spawn",
             descriptions::subprocess_spawn(),
             schema_subprocess_spawn(),
         ),
-        #[cfg(feature = "subprocess")]
         Tool::new(
             "subprocess_list",
             descriptions::subprocess_list(),
             schema_subprocess_list(),
         ),
-        #[cfg(feature = "subprocess")]
         Tool::new(
             "subprocess_cancel",
             descriptions::subprocess_cancel(),
             schema_subprocess_cancel(),
         ),
-        #[cfg(feature = "subprocess")]
         Tool::new(
             "subprocess_result",
             descriptions::subprocess_result(),
             schema_subprocess_result(),
         ),
-        #[cfg(feature = "subprocess")]
         Tool::new(
             "subprocess_signal",
             descriptions::subprocess_signal(),
             schema_subprocess_signal(),
         ),
-        #[cfg(feature = "subprocess")]
         Tool::new(
             "subprocess_search",
             descriptions::subprocess_search(),
             schema_subprocess_search(),
         ),
-        // ---- network-info BC (always-on) ------------------------------------
+    ]
+}
+
+/// network-info BC tool cards (always-on; Noop on unsupported platforms).
+fn registry_network() -> Vec<Tool> {
+    vec![
         Tool::new(
             "net_tcp_list",
             descriptions::net_tcp_list(),
@@ -817,6 +867,32 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
             schema_empty(),
         ),
     ]
+}
+
+/// Returns the static list of all 47 substrate tools (53 with `subprocess` feature).
+///
+/// Each entry carries a thin description (<= 100 chars) plus a schemars-derived
+/// `inputSchema`. The companion `substrate` skill body at
+/// `~/.claude/skills/substrate/SKILL.md` holds the full reference (buckets,
+/// errors, config, rules, skip routing), auto-primed via the `mcp__substrate__`
+/// trigger family.
+///
+/// Assembled from per-BC helpers so each builder stays well under the
+/// `too_many_lines` threshold (ADR-0024 method-length convention).
+#[must_use]
+pub(crate) fn tool_registry() -> Vec<Tool> {
+    let mut tools = Vec::new();
+    tools.extend(registry_fs_query());
+    tools.extend(registry_fs_mutation());
+    tools.extend(registry_process());
+    tools.extend(registry_system_info());
+    tools.extend(registry_text());
+    tools.extend(registry_archive());
+    tools.extend(registry_jobs());
+    #[cfg(feature = "subprocess")]
+    tools.extend(registry_subprocess());
+    tools.extend(registry_network());
+    tools
 }
 
 // ---- SubstrateService -------------------------------------------------------
@@ -919,20 +995,26 @@ impl SubstrateService {
     /// {
     ///   "error": {
     ///     "code": "SUBSTRATE_*",
-    ///     "message": "...",
+    ///     "message_en_us": "...",
     ///     "recovery_hint": "...",
     ///     "correlation_id": "<uuidv7>"
     ///   }
     /// }
     /// ```
     ///
-    /// Flat root fields (`code`, `message`, `recovery_hint`) are retained for
-    /// backward-compat with step paths that inspect root-level keys.
-    /// The `data` sub-object mirrors the JSON-RPC `error.data` shape (ADR-0010).
+    /// Per ADR-0010 the canonical human-readable field is `message_en_us`. A
+    /// `message` alias is retained alongside it for backward-compat with step
+    /// paths that still inspect `message`. Flat root fields (`code`,
+    /// `message_en_us`, `recovery_hint`) are retained for root-level assertions.
+    /// The `data` sub-object mirrors the JSON-RPC `error.data` shape (ADR-0010);
+    /// its `correlation_id` key is OMITTED entirely when the domain error carries
+    /// none, rather than serialized as JSON `null`.
     fn error_result(err: &SubstrateError) -> CallToolResult {
-        // Always emit a non-empty correlation_id so Gherkin steps that assert
-        // the UUIDv7 pattern pass even when the domain error was constructed
-        // without one (e.g. adapters that set correlation_id: None).
+        let message = err.to_string();
+
+        // Always emit a non-empty correlation_id in the nested `error` block so
+        // Gherkin steps that assert the UUIDv7 pattern pass even when the domain
+        // error was constructed without one (e.g. adapters that set None).
         let correlation_id_str = err.correlation_id().map_or_else(
             || uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string(),
             |u| u.to_string(),
@@ -949,27 +1031,38 @@ impl SubstrateService {
             serde_json::Value::Null
         };
 
+        // `data` sub-object: include `correlation_id` ONLY when the error carries
+        // one — omit the key entirely (not `null`) per ADR-0010.
+        let mut data = serde_json::Map::new();
+        data.insert("code".to_owned(), Value::String(err.code().to_owned()));
+        data.insert("message_en_us".to_owned(), Value::String(message.clone()));
+        data.insert("message".to_owned(), Value::String(message.clone()));
+        data.insert(
+            "recovery_hint".to_owned(),
+            Value::String(err.recovery_hint().to_owned()),
+        );
+        if let Some(id) = err.correlation_id() {
+            data.insert("correlation_id".to_owned(), Value::String(id.to_string()));
+        }
+
         let structured = serde_json::json!({
             // Flat root fields (backward-compat with root-level assertions)
             "code": err.code(),
-            "message": err.to_string(),
+            "message_en_us": message.clone(),
+            "message": message.clone(),
             "recovery_hint": err.recovery_hint(),
             // Nested `error` object — primary path for cucumber assertions:
             // result.structuredContent.error.{code,recovery_hint,correlation_id}
             "error": {
                 "code": err.code(),
-                "message": err.to_string(),
+                "message_en_us": message.clone(),
+                "message": message,
                 "recovery_hint": err.recovery_hint(),
                 "correlation_id": correlation_id_str,
                 "offending_field": offending_field_val,
             },
             // `data` sub-object mirrors JSON-RPC error.data shape (ADR-0010)
-            "data": {
-                "code": err.code(),
-                "message": err.to_string(),
-                "recovery_hint": err.recovery_hint(),
-                "correlation_id": err.correlation_id().map(|u| u.to_string()),
-            },
+            "data": Value::Object(data),
         });
         let mut result = CallToolResult::structured_error(structured);
         result.content = vec![Content::text(format!(
@@ -1167,7 +1260,7 @@ impl ServerHandler for SubstrateService {
         }
     }
 
-    /// Handles `tools/list` — returns the static tool registry (38 tools, single page).
+    /// Handles `tools/list` — returns the static tool registry in a single page.
     ///
     /// Pagination cursor is accepted but ignored; all tools fit in one response.
     #[instrument(skip(self, _request, _context))]
@@ -1424,29 +1517,48 @@ impl ServerHandler for SubstrateService {
     }
 
     /// Handles `tasks/list` — delegates to `JobRegistryPort::list`.
-    #[instrument(skip(self, _request, context))]
+    ///
+    /// Consumes the inbound base64url-opaque `cursor` from `PaginatedRequestParams`
+    /// (decoded via [`super::dispatcher::decode_page_cursor`]) so follow-up pages
+    /// resume from the prior offset instead of restarting at 0, and emits a
+    /// matching opaque `next_cursor` via [`super::dispatcher::encode_page_cursor`]
+    /// — byte-identical to the `job_list` control plane (ADR-0008).
+    #[instrument(skip(self, request, context))]
     fn list_tasks(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListTasksResult, McpErrorData>> + Send + '_ {
         async move {
             let client_id = Self::client_id_from_context(&context);
-            match self.dispatcher.jobs.list(&client_id, None).await {
+            let cursor = match request.and_then(|r| r.cursor) {
+                Some(token) => match super::dispatcher::decode_page_cursor(&token) {
+                    Ok(c) => Some(c),
+                    Err(err) => {
+                        return Err(McpErrorData::invalid_params(
+                            format!("invalid tasks/list cursor: {err}"),
+                            None,
+                        ));
+                    },
+                },
+                None => None,
+            };
+            // ADR-0060: `tasks/list` exposes no `page_size` on the wire; substitute
+            // the domain default (50). The registry caps the effective page at 500.
+            match self
+                .dispatcher
+                .jobs
+                .list(&client_id, cursor, PageSize::default())
+                .await
+            {
                 Ok(page) => {
                     let tasks: Vec<Task> = page.jobs.iter().map(Self::job_entry_to_task).collect();
-                    // Encode cursor bytes to UTF-8 string for the MCP wire format.
-                    // The registry stores cursor payload as UTF-8 JSON bytes (see
-                    // `encode_cursor` in `substrate-jobs`); converting to String is
-                    // infallible for well-formed cursors.
                     // `ListTasksResult` is #[non_exhaustive]; use the named
                     // constructor then mutate the optional cursor field.
                     let mut result = ListTasksResult::new(tasks);
-                    result.next_cursor = page.next_cursor.and_then(|c| {
-                        // Cursor bytes are UTF-8 JSON produced by `encode_cursor`
-                        // in substrate-jobs; conversion is infallible for valid cursors.
-                        String::from_utf8(c.into_bytes()).ok()
-                    });
+                    result.next_cursor = page
+                        .next_cursor
+                        .map(|c| super::dispatcher::encode_page_cursor(c.as_bytes()));
                     Ok(result)
                 },
                 Err(err) => Err(McpErrorData::internal_error(
@@ -1563,13 +1675,14 @@ mod tests {
 
     #[test]
     fn tool_registry_count() {
-        // 5 fs-query + 8 fs-mutation + 3 process + 6 sys-info + 4 text +
-        // 7 archive + 4 job + 4 network-info = 41 base.
-        // +6 subprocess when feature enabled = 47.
+        // 5 fs-query + 8 fs-mutation + 5 process + 8 sys-info + 4 text +
+        // 7 archive + 4 job + 4 network-info = 45 base.
+        // (process adds proc_stats + proc_top; sys-info adds sys_mem + sys_cpu.)
+        // +6 subprocess when feature enabled = 51.
         // The dispatch match arms in `dispatcher.rs` define the authoritative
         // count; this test pins parity between the registry and the dispatcher.
         let tools = tool_registry();
-        let expected = if cfg!(feature = "subprocess") { 47 } else { 41 };
+        let expected = if cfg!(feature = "subprocess") { 51 } else { 45 };
         assert_eq!(
             tools.len(),
             expected,

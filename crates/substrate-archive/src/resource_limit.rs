@@ -9,10 +9,75 @@
 //!
 //! Default ceiling: 100 MiB (`DEFAULT_MAX_OUTPUT_BYTES`).
 
+use std::path::Path;
+
 use substrate_domain::{SubstrateError, SubstrateResult};
 
 /// Default maximum output size for decompression: 100 MiB.
 pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Default per-archive aggregate ceiling for extraction output: 1 GiB.
+///
+/// Guards against an archive whose total uncompressed payload (sum across all
+/// members) would exhaust memory or disk even if no single member exceeds the
+/// per-entry ceiling. Used as the `max_bytes` for the aggregate
+/// [`DecompressGuard`] threaded through tar/zip extraction.
+pub const DEFAULT_MAX_EXTRACT_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Maximum input size for whole-file gzip compression: 1 GiB.
+///
+/// Sources larger than this are rejected with `SUBSTRATE_RESOURCE_LIMIT` rather
+/// than being read fully into the heap. Streaming chunked compression keeps peak
+/// memory bounded below this limit for accepted inputs.
+pub const MAX_COMPRESS_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Free-space cushion kept above the requested write size (4 KiB).
+///
+/// Prevents racing to exactly zero free space, which can break filesystem
+/// journal operations even when the data write itself would fit.
+const FREE_SPACE_CUSHION_BYTES: u64 = 4 * 1024;
+
+/// Checks that `path`'s filesystem has at least `required_bytes +
+/// FREE_SPACE_CUSHION_BYTES` available before any extraction or compression
+/// write is attempted (ADR-0033 disk-space preflight).
+///
+/// `path` should be an existing directory (e.g. the extraction root or the
+/// destination's parent); the target file need not exist yet. The blocking
+/// `statvfs(3)` syscall runs inside `spawn_blocking` per ADR-0003.
+///
+/// # Errors
+///
+/// - [`SubstrateError::StorageFull`] — available space is below the requirement.
+/// - [`SubstrateError::InternalError`] — the `statvfs` call failed unexpectedly.
+pub async fn check_disk_space(path: &Path, required_bytes: u64) -> SubstrateResult<()> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || check_disk_space_sync(&path, required_bytes))
+        .await
+        .map_err(|e| SubstrateError::InternalError {
+            reason: format!("spawn_blocking join error in disk-space preflight: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?
+}
+
+fn check_disk_space_sync(path: &Path, required_bytes: u64) -> SubstrateResult<()> {
+    use nix::sys::statvfs::statvfs;
+
+    let stat = statvfs(path).map_err(|e| SubstrateError::InternalError {
+        reason: format!("statvfs failed for {}: {e}", path.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+
+    let available: u64 = u64::from(stat.blocks_available()) * stat.block_size();
+    let needed = required_bytes.saturating_add(FREE_SPACE_CUSHION_BYTES);
+
+    if available < needed {
+        return Err(SubstrateError::StorageFull {
+            path: path.display().to_string(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        });
+    }
+    Ok(())
+}
 
 /// Streaming resource-limit guard for decompression output.
 ///
@@ -108,5 +173,24 @@ mod tests {
         let mut guard = DecompressGuard::new(512);
         let err = guard.record(1024).unwrap_err();
         assert!(matches!(err, SubstrateError::ResourceLimit { .. }));
+    }
+
+    #[tokio::test]
+    async fn disk_space_passes_for_zero_bytes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        check_disk_space(dir.path(), 0)
+            .await
+            .expect("zero-byte preflight should pass on a real filesystem");
+    }
+
+    #[tokio::test]
+    async fn disk_space_fails_for_implausible_request() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Request more bytes than any real filesystem can hold.
+        let err = check_disk_space(dir.path(), u64::MAX - 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SubstrateError::StorageFull { .. }));
+        assert_eq!(err.code(), "SUBSTRATE_STORAGE_FULL");
     }
 }

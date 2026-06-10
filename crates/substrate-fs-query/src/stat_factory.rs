@@ -433,7 +433,14 @@ fn macos_stat_impl(path: &JailedPath) -> SubstrateResult<FileStat> {
     // For size we use `std::fs::symlink_metadata` — ATTR_FILE_DATALENGTH would
     // require adding a `fileattr` field to the request. This is a one-extra-
     // syscall cost that a future Wave can eliminate by expanding the attrlist.
-    let size_bytes = std::fs::symlink_metadata(path.as_path()).map_or(0, |m| m.len());
+    //
+    // TOCTOU guard: if the file disappears (or becomes inaccessible) between the
+    // `getattrlist` call above and this `symlink_metadata`, propagate the real
+    // error instead of silently reporting `size_bytes = 0`, which would
+    // misrepresent a vanished file as a zero-length one.
+    let size_bytes = std::fs::symlink_metadata(path.as_path())
+        .map(|m| m.len())
+        .map_err(|e| macos_size_io_err(&e, path))?;
 
     Ok(FileStat {
         size_bytes,
@@ -443,6 +450,31 @@ fn macos_stat_impl(path: &JailedPath) -> SubstrateResult<FileStat> {
         modified_at: secs_to_datetime(mtime_sec),
         accessed_at: secs_to_datetime(atime_sec),
     })
+}
+
+/// Maps a `std::io::Error` from the size-fetch `symlink_metadata` call to a
+/// [`SubstrateError`], preserving the `NotFound` / `PermissionDenied` distinction.
+///
+/// Used by [`macos_stat_impl`] so a file vanishing between the `getattrlist`
+/// syscall and the follow-up size `stat` surfaces as a proper error rather than
+/// a silent `size_bytes = 0`.
+#[cfg(target_os = "macos")]
+fn macos_size_io_err(e: &std::io::Error, path: &JailedPath) -> SubstrateError {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::NotFound => SubstrateError::NotFound {
+            resource: path.to_string(),
+            correlation_id: None,
+        },
+        ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
+            path: path.to_string(),
+            correlation_id: None,
+        },
+        _ => SubstrateError::IoError {
+            path: path.to_string(),
+            correlation_id: None,
+        },
+    }
 }
 
 /// Reads a `u32` (native-endian) from `buf` at byte offset `offset` using an

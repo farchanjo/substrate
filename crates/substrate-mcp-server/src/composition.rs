@@ -426,7 +426,7 @@ mod tests {
         let page = components
             .dispatcher
             .jobs
-            .list(&client, None)
+            .list(&client, None, substrate_domain::PageSize::default())
             .await
             .expect("real job registry must list, not error from a null stub");
         assert!(page.jobs.is_empty(), "fresh registry has no jobs");

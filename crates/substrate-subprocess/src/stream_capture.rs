@@ -129,14 +129,19 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
 
             // Cancellation arm (biased: checked first on each poll).
             () = handle.cancel.cancelled() => {
-                // Flush any accumulated bytes, then exit.
+                // Flush any accumulated bytes, then exit. The chunk's byte_offset
+                // is the offset of its FIRST byte (running total minus the pending
+                // length), matching the threshold/timer flush arms — passing the
+                // raw running total would mis-report the offset by one chunk length.
                 if !accumulated.is_empty() {
                     flush_chunk(
                         &accumulated,
                         stream,
                         &handle,
                         &sender,
-                        byte_offset,
+                        byte_offset.saturating_sub(
+                            u64::try_from(accumulated.len()).unwrap_or(u64::MAX),
+                        ),
                     );
                 }
                 break;
@@ -147,15 +152,20 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 match n {
                     Ok(0) => {
                         // EOF: flush accumulated bytes, then finalize the TmpFileWriter.
+                        // The final chunk's byte_offset is the offset of its FIRST
+                        // byte (running total minus the pending length), matching the
+                        // threshold/timer flush arms. Passing the raw running total
+                        // here mis-reported the last chunk's offset by one chunk length.
                         if !accumulated.is_empty() {
                             flush_chunk(
                                 &accumulated,
                                 stream,
                                 &handle,
                                 &sender,
-                                byte_offset,
+                                byte_offset.saturating_sub(
+                                    u64::try_from(accumulated.len()).unwrap_or(u64::MAX),
+                                ),
                             );
-                            // byte_offset update omitted: loop exits immediately after.
                         }
                         finalize_on_eof(tmp_writer.as_ref(), stream, &handle).await;
                         break;

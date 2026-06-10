@@ -17,16 +17,17 @@ use crate::{
     response::{ProcessDeps, ToolResponse},
     scanner::ProcessScannerPort,
 };
-use substrate_domain::{SubstrateError, SubstrateResult};
+use substrate_domain::{PageSize, SubstrateError, SubstrateResult};
 
 /// Hard cap on processes returned in a single response (defense in depth).
 const MAX_PROCESSES: usize = 10_000;
 
-/// Default page size per ADR-0008.
-const DEFAULT_PAGE_SIZE: usize = 100;
-
-/// Maximum page size per ADR-0008.
-const MAX_PAGE_SIZE: usize = 1_000;
+/// Handler-level page-size cap per ADR-0008 (max 500), applied after domain
+/// [`PageSize`] validation (which permits up to `PageSize::MAX` = 10 000).
+///
+/// This realigns `proc.list` to the ADR-0008 contract (default 50, max 500);
+/// the previous local constants drifted to default 100 / max 1000.
+const PROC_LIST_PAGE_SIZE_CAP: u32 = 500;
 
 /// Input parameters for `proc.list`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -46,9 +47,14 @@ pub struct ProcListRequest {
     #[serde(default)]
     pub parent_pid_filter: Option<u32>,
 
-    /// Page size (default 100, max 1000).
+    /// Page size on the wire (default 50, max 500 per ADR-0008 / ADR-0060).
+    ///
+    /// `Option<u32>` so the handler distinguishes an absent field (apply
+    /// [`PageSize::default`]) from an explicit `0` (rejected with
+    /// `SUBSTRATE_INVALID_ARGUMENT`). The value is converted into a validated
+    /// [`PageSize`] at the handler boundary before pagination.
     #[serde(default)]
-    pub page_size: Option<usize>,
+    pub page_size: Option<u32>,
 
     /// Zero-based page index (default 0).
     #[serde(default)]
@@ -108,10 +114,14 @@ pub async fn handle_proc_list(
     all.truncate(MAX_PROCESSES);
 
     let total_matching = all.len();
-    let page_size = req
-        .page_size
-        .unwrap_or(DEFAULT_PAGE_SIZE)
-        .min(MAX_PAGE_SIZE);
+    // ADR-0060: convert Option<u32> → PageSize at the handler boundary, then apply
+    // the ADR-0008 handler cap (500). Absent field → PageSize::default() (50);
+    // explicit 0 or > PageSize::MAX → SUBSTRATE_INVALID_ARGUMENT.
+    let page_size_u32 = match req.page_size {
+        Some(n) => PageSize::try_from(n)?.get().min(PROC_LIST_PAGE_SIZE_CAP),
+        None => PageSize::default().get().min(PROC_LIST_PAGE_SIZE_CAP),
+    };
+    let page_size = page_size_u32 as usize;
     let page = req.page.unwrap_or(0);
 
     let start = page.saturating_mul(page_size);

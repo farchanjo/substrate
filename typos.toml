@@ -1,0 +1,31 @@
+# typos.toml — spell-check configuration for substrate.
+# Domain terms, crate names, and technical identifiers that typos would
+# otherwise flag as misspellings are listed here.
+# See: https://github.com/crate-ci/typos/blob/master/docs/reference.md
+
+[default.extend-words]
+# Crockford base-32 alphabet (uppercase variant used in UUIDv7 encoding)
+crockford = "crockford"
+# xinpcb appears in generated XPC / macOS kernel headers referenced in tests
+xinpcb = "xinpcb"
+# crate name: thiserror (not "thiserror")
+thiserror = "thiserror"
+# crate name: figment (not "figment")
+figment = "figment"
+# crate name: rmcp (not "rmcp")
+rmcp = "rmcp"
+# crate name: nextest (not "nextest")
+nextest = "nextest"
+# tokio async runtime
+tokio = "tokio"
+# crate name: tracing (not "tracing")
+tracing = "tracing"
+# bounded-context abbreviation used in directory names and code
+bc = "bc"
+# POSIX term used in ADRs and domain docs
+openat = "openat"
+openat2 = "openat2"
+# macOS VFS flag name
+nofollow = "nofollow"
+# UUIDv7 — intentional digit suffix
+uuidv7 = "uuidv7"

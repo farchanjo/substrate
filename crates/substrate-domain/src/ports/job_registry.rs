@@ -12,6 +12,7 @@ use crate::errors::{SubstrateError, SubstrateResult};
 use crate::jobs::bucket::JobBucket;
 use crate::jobs::entry::JobEntry;
 use crate::jobs::state::JobState;
+use crate::value_objects::pagination::PageSize;
 use crate::value_objects::{ClientId, IdempotencyKey, JobId, PageCursor};
 
 /// Inbound port for submitting and managing async jobs per ADR-0040.
@@ -75,7 +76,12 @@ pub trait JobRegistryPort: Send + Sync {
     /// Returns a paginated list of jobs visible to the requesting client.
     ///
     /// Cross-client visibility is forbidden: each client sees only its own jobs.
-    /// Pagination uses base64-opaque cursors per ADR-0008 (page size 50, max 500).
+    /// Pagination uses base64-opaque cursors per ADR-0008 (max 500).
+    ///
+    /// `page_size` is a validated [`PageSize`] value object per ADR-0060. The
+    /// `job_list` and `tasks/list` MCP surfaces do not expose `page_size` on the
+    /// wire, so the handler substitutes [`PageSize::default`] (50); the adapter
+    /// caps the effective page at 500 (ADR-0008).
     ///
     /// # Errors
     ///
@@ -84,6 +90,7 @@ pub trait JobRegistryPort: Send + Sync {
         &self,
         client_id: &ClientId,
         cursor: Option<PageCursor>,
+        page_size: PageSize,
     ) -> SubstrateResult<JobPage>;
 }
 

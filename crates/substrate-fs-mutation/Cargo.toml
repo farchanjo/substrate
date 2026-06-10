@@ -9,15 +9,20 @@ description = "Write-side filesystem adapter (fs.mkdir, fs.write, fs.copy, fs.re
 [lints]
 workspace = true
 
+# `fs-index` is a marker feature only. Production code gated by this feature
+# touches the index exclusively through the domain port `Arc<dyn FsIndexPort>`
+# (re-exported from `substrate-domain`), so it pulls in NO adapter crate. The
+# concrete `substrate-fs-index` adapter is a test-only dev-dependency used to
+# build a real index in `#[cfg(test)]` setups. Keeping it out of `[dependencies]`
+# preserves the adapter→adapter prohibition (ADR-0022 Rule 3 / hexagonal_layering.rego).
 [features]
 default = []
-fs-index = ["dep:substrate-fs-index"]
+fs-index = []
 
 [dependencies]
 substrate-domain = { path = "../substrate-domain" }
 substrate-policy = { path = "../substrate-policy" }
 schemars = { workspace = true }
-substrate-fs-index = { path = "../substrate-fs-index", optional = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
@@ -33,6 +38,10 @@ base64-simd = { workspace = true }
 simdutf8 = { workspace = true }
 
 [dev-dependencies]
+# Test-only: concrete index adapter used by `#[cfg(test)]` setups to build a
+# real `Arc<dyn FsIndexPort>` for the `fs-index` feature. Never linked into
+# production builds; production code depends solely on the domain port.
+substrate-fs-index = { path = "../substrate-fs-index" }
 rstest = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }

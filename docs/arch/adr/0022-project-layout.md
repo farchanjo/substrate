@@ -237,6 +237,37 @@ original allow-list:
 Both are accepted on hexagonal grounds (no I/O, no runtime, no syscalls) and
 the Rego policy `hexagonal_layering.rego` is updated alongside this amendment.
 
+## Amendment — 2026-06-10 — Layering corrections (network-info, subprocess net, fs-index test-only)
+
+Three layering clarifications are recorded here and reflected in
+`policies/hexagonal_layering.rego`:
+
+- **`substrate-network-info` classified as an adapter.** The network-info
+  bounded-context crate was previously unclassified by the Rego taxonomy. It is
+  an adapter on the same footing as the other bounded-context crates: it may
+  depend on `substrate-domain` (+ `substrate-policy`) and MUST NOT depend on any
+  other adapter crate. It is now a member of `_adapter_crates`.
+- **`substrate-subprocess` tokio net is a documented Rule-5 exception
+  ([ADR-0056](0056-subprocess-supervisor-semantics.md)).** Rule 5 reserves the
+  tokio `net` feature for `substrate-mcp-server`. `substrate-subprocess` is
+  granted a single, narrow exception: it MAY activate tokio `net`, but ONLY
+  through its optional `outbound-net` Cargo feature, used for active TCP
+  connect health-probes. The exception is encoded narrowly in the policy — it
+  fires solely for `substrate-subprocess` and only for a dependency token
+  carrying the explicit `outbound-net` feature marker. A bare `tokio/net` on
+  `substrate-subprocess` (net without the `outbound-net` gate), and tokio `net`
+  on every other non-server adapter, remain denied.
+- **`substrate-fs-mutation` depends on the domain `FsIndexPort` only;
+  `substrate-fs-index` is test-only.** Production code in `substrate-fs-mutation`
+  touches the index exclusively through the domain port
+  `Arc<dyn FsIndexPort>` (re-exported from `substrate-domain`). The `fs-index`
+  Cargo feature is now a pure marker feature (no `dep:` activation): it gates the
+  optional `index` field on `FsMutationDeps` and the `write_through` call sites,
+  all of which are domain-port-only. The concrete `substrate-fs-index` adapter
+  has been moved to `[dev-dependencies]`, used solely by `#[cfg(test)]` setups to
+  build a real index. This removes the adapter→adapter dependency that Rule 3
+  prohibits while preserving the production write-through behavior.
+
 ## Links
 
 - Related: [ADR-0002](0002-bounded-contexts.md)
@@ -244,3 +275,4 @@ the Rego policy `hexagonal_layering.rego` is updated alongside this amendment.
 - Related: [ADR-0040](0040-async-job-control-plane.md) — introduced `substrate-jobs`
 - Related: [ADR-0041](0041-filesystem-index-native-tiers.md) — introduced `substrate-fs-index`
 - Related: [ADR-0032](0032-signal-safety.md) — introduced `substrate-signal-sys`
+- Related: [ADR-0056](0056-subprocess-supervisor-semantics.md) — `substrate-subprocess` `outbound-net` Rule-5 exception

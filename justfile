@@ -73,6 +73,11 @@ ci-clippy:
 ci-nextest:
     cargo nextest run --locked --workspace --no-fail-fast
 
+# Run tests with the subprocess feature enabled (mirrors CI job: nextest-subprocess).
+# Required to exercise subprocess.* tools and their cucumber integration scenarios.
+ci-nextest-subprocess:
+    cargo nextest run --locked -p substrate-mcp-server --features subprocess --no-fail-fast
+
 # Dependency advisories + license + source check (mirrors CI job: deny).
 ci-deny:
     cargo deny --locked check
@@ -110,7 +115,7 @@ ci-shear:
     cargo shear
 
 # Run all CI gates sequentially (full local CI run).
-ci: ci-fmt ci-clippy ci-nextest ci-deny ci-audit ci-semver ci-coverage ci-bench ci-spec ci-mermaid ci-typos ci-shear
+ci: ci-fmt ci-clippy ci-nextest ci-nextest-subprocess ci-deny ci-audit ci-semver ci-coverage ci-bench ci-spec ci-mermaid ci-typos ci-shear
 
 # ---------------------------------------------------------------------------
 

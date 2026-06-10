@@ -23,6 +23,7 @@ use tracing::instrument;
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::hints_helpers::build_inline_hints;
+use crate::resource_limit::MAX_COMPRESS_INPUT_BYTES;
 use crate::response::{ArchiveDeps, ToolResponse};
 use crate::tmp_path::TmpPath;
 
@@ -172,26 +173,25 @@ fn compress_file_blocking(
     tmp_path: &std::path::Path,
     level: u32,
 ) -> SubstrateResult<(u64, u64)> {
-    use std::io::Write as _;
+    use std::io::{Read as _, Write as _};
 
-    let data = std::fs::read(source).map_err(|e| {
-        use std::io::ErrorKind;
-        match e.kind() {
-            ErrorKind::NotFound => SubstrateError::NotFound {
-                resource: source.to_string_lossy().into_owned(),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            },
-            ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
-                path: source.to_string_lossy().into_owned(),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            },
-            _ => SubstrateError::IoError {
-                path: source.to_string_lossy().into_owned(),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            },
-        }
-    })?;
-    let source_bytes = data.len() as u64;
+    let mut in_file = std::fs::File::open(source).map_err(|e| map_open_error(source, &e))?;
+
+    // Size gate (fix-4): reject sources above the 1 GiB ceiling instead of
+    // reading the whole file into the heap. Streaming below keeps peak memory
+    // bounded at one chunk for accepted inputs.
+    let source_bytes = in_file
+        .metadata()
+        .map_err(|e| map_open_error(source, &e))?
+        .len();
+    if source_bytes > MAX_COMPRESS_INPUT_BYTES {
+        return Err(SubstrateError::ResourceLimit {
+            detail: format!(
+                "source ({source_bytes} bytes) exceeds gzip-compress input limit ({MAX_COMPRESS_INPUT_BYTES} bytes)"
+            ),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        });
+    }
 
     let level = flate2::Compression::new(level.min(9));
     let out_file = std::fs::File::create(tmp_path).map_err(|e| SubstrateError::IoError {
@@ -199,12 +199,25 @@ fn compress_file_blocking(
         correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
     let mut encoder = flate2::write::GzEncoder::new(out_file, level);
-    encoder
-        .write_all(&data)
-        .map_err(|e| SubstrateError::IoError {
-            path: format!("gzip encode: {e}"),
-            correlation_id: Some(uuid::Uuid::now_v7()),
-        })?;
+
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = in_file
+            .read(&mut buf)
+            .map_err(|e| SubstrateError::IoError {
+                path: format!("{}: {e}", source.display()),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+        if n == 0 {
+            break;
+        }
+        encoder
+            .write_all(&buf[..n])
+            .map_err(|e| SubstrateError::IoError {
+                path: format!("gzip encode: {e}"),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+    }
     encoder.finish().map_err(|e| SubstrateError::IoError {
         path: format!("gzip finish: {e}"),
         correlation_id: Some(uuid::Uuid::now_v7()),
@@ -212,6 +225,25 @@ fn compress_file_blocking(
 
     let compressed_bytes = std::fs::metadata(tmp_path).map_or(0, |m| m.len());
     Ok((source_bytes, compressed_bytes))
+}
+
+/// Maps a source-open `std::io::Error` to the appropriate [`SubstrateError`].
+fn map_open_error(source: &std::path::Path, e: &std::io::Error) -> SubstrateError {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::NotFound => SubstrateError::NotFound {
+            resource: source.to_string_lossy().into_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        },
+        ErrorKind::PermissionDenied => SubstrateError::PermissionDenied {
+            path: source.to_string_lossy().into_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        },
+        _ => SubstrateError::IoError {
+            path: source.to_string_lossy().into_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        },
+    }
 }
 
 // ---- Tests -------------------------------------------------------------------

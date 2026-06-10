@@ -233,36 +233,45 @@ impl TmpFileWriter {
     ///
     /// Returns [`SubprocessError::SpawnFailed`] if flush or rename fails.
     pub async fn finalize(&self) -> Result<PathBuf, SubprocessError> {
-        // Fast path: already finalized (idempotent second call).
+        // Fast path WITHOUT the lock: already finalized (cheap idempotent second call).
+        if self.finalized.load(Ordering::Acquire) {
+            return Ok(self.final_path.clone());
+        }
+
+        // Hold the file mutex across the entire flush+rename critical section. This
+        // is the serialization point: concurrent finalize() callers are ordered by
+        // the mutex rather than racing a check-then-act on `finalized`. Acquiring the
+        // FD lock for the whole operation also guarantees no `write()` interleaves
+        // between flush and rename.
+        let mut guard = self.file.lock().await;
+
+        // Re-check INSIDE the lock: a prior holder may have completed the rename and
+        // set `finalized` while we waited for the mutex. Returning here is correct —
+        // the final file already exists.
         if self.finalized.load(Ordering::Acquire) {
             return Ok(self.final_path.clone());
         }
 
         // Flush and close the file before rename. Take the file out of the Option
-        // so the FD is closed before the rename syscall (required on Windows;
-        // also ensures clean POSIX semantics).
-        {
-            let mut guard = self.file.lock().await;
-            if let Some(mut f) = guard.take() {
-                f.flush().await.map_err(|e| SubprocessError::SpawnFailed {
-                    source: io::Error::other(format!(
-                        "TmpFileWriter: flush failed for {}: {e}",
-                        self.tmp_path.display()
-                    )),
-                })?;
-                // File is dropped here (guard.take() moved `f`); FD is closed.
-            }
-            // If guard holds None here it means a concurrent finalize already took
-            // the file.  The rename below will encounter ENOENT if the concurrent
-            // call already completed it; we treat that as success (idempotent).
+        // so the FD is closed before the rename syscall (required on Windows; also
+        // ensures clean POSIX semantics).
+        if let Some(mut f) = guard.take() {
+            f.flush().await.map_err(|e| SubprocessError::SpawnFailed {
+                source: io::Error::other(format!(
+                    "TmpFileWriter: flush failed for {}: {e}",
+                    self.tmp_path.display()
+                )),
+            })?;
+            // File is dropped here (guard.take() moved `f`); FD is closed.
         }
 
         // Atomic rename: both paths are under tmp_root, guaranteeing same filesystem.
+        // The mutex is held, so this is the sole rename for this writer.
         match tokio::fs::rename(&self.tmp_path, &self.final_path).await {
             Ok(()) => {},
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                // Transit file already renamed by a concurrent finalize call.
-                // Treat as success if the final path exists.
+                // Transit file absent. Treat as success only if the final path exists
+                // (e.g. an external rename already completed it); otherwise propagate.
                 if !tokio::fs::try_exists(&self.final_path)
                     .await
                     .unwrap_or(false)
@@ -287,8 +296,10 @@ impl TmpFileWriter {
             },
         }
 
-        // Mark finalized so subsequent calls return immediately.
+        // Mark finalized while still holding the lock so the next waiter observes it
+        // on its in-lock re-check and returns the final path without redundant I/O.
         self.finalized.store(true, Ordering::Release);
+        drop(guard);
         Ok(self.final_path.clone())
     }
 
@@ -394,16 +405,25 @@ impl TmpFileWriter {
             // Base path for numbered archives is the *final* path (human-visible name).
             let base = &self.final_path;
 
-            // Optionally unlink the oldest file that would be pushed beyond `keep_files`.
+            // Unlink the oldest file that would be pushed beyond `keep_files`.
+            //
+            // Attempt the async remove unconditionally and treat NotFound as success,
+            // rather than a blocking `Path::exists()` check-then-act. The previous form
+            // blocked the executor (std::fs metadata syscall in an async fn, ADR-0003
+            // zone violation) AND was a TOCTOU race: the file could vanish between the
+            // exists() probe and the remove. The remove-and-ignore-NotFound form is
+            // both non-blocking and race-free.
             let overflow_n = u32::from(keep) + 1;
             let overflow_path = numbered(base, overflow_n);
-            if overflow_path.exists() {
-                tokio::fs::remove_file(&overflow_path).await.map_err(|e| {
-                    io::Error::other(format!(
+            match tokio::fs::remove_file(&overflow_path).await {
+                Ok(()) => {},
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+                Err(e) => {
+                    return Err(io::Error::other(format!(
                         "TmpFileWriter::rotate_if_needed: unlink overflow {}: {e}",
                         overflow_path.display()
-                    ))
-                })?;
+                    )));
+                },
             }
 
             // Shift: .log.(keep-1) → .log.keep  …  .log.1 → .log.2

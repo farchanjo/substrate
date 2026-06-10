@@ -2,10 +2,21 @@
 //!
 //! Delivers a POSIX signal to a target process. Enforces (in order):
 //!   1. Dry-run gate: first-pass returns preview, no OS mutation.
-//!   2. Elicitation gate (ADR-0004 Layer 4 / ADR-0035): SIGKILL/SIGSTOP
-//!      require `elicitation_confirmed = true` before any PID probe.
+//!   2. Elicitation gate (ADR-0004 Layer 4 / ADR-0008 §Elicitation Matrix):
+//!      SIGKILL, SIGTERM, and SIGSTOP require `elicitation_confirmed = true`
+//!      before any PID probe.
 //!   3. PID allowlist check (ADR-0004 Layer 1): blocks PID 0, 1, 2.
-//!   4. PID existence check via `kill(pid, 0)`.
+//!   4. Signal delivery (attempts `kill(2)` immediately; ESRCH at this point
+//!      means the process exited between Gate 3 and delivery — a benign race
+//!      reported as `NotFound`).
+//!
+//! Note on TOCTOU (Gates 3 → delivery): there is an inherent race between any
+//! PID existence probe and actual signal delivery.  A proactive `kill(pid, 0)`
+//! check does not eliminate the window; it only shifts it.  To minimise the
+//! window, the implementation skips the existence pre-check and interprets
+//! `ESRCH` from the real `kill(pid, sig)` call directly.  The caller receives
+//! a `NotFound` error when the race occurs — the signal was never delivered,
+//! so no harm is done.
 //!
 //! Signal delivery uses `nix::sys::signal::kill` exclusively.
 //! `std::process::Command` and `tokio::process::Command` are forbidden (ADR-0044).
@@ -41,7 +52,7 @@ pub struct ProcSignalRequest {
     #[serde(default)]
     pub dry_run: Option<bool>,
 
-    /// Must be `true` for destructive signals (SIGKILL/SIGSTOP) after
+    /// Must be `true` for destructive signals (SIGKILL/SIGTERM/SIGSTOP) after
     /// the elicitation flow completes.
     #[serde(default)]
     pub elicitation_confirmed: Option<bool>,
@@ -80,31 +91,14 @@ fn parse_signal(s: &str) -> SubstrateResult<Signal> {
         })
 }
 
-/// Checks whether a PID exists by calling `kill(pid, 0)`.
-///
-/// Returns `Ok(true)` if the process exists, `Ok(false)` if `ESRCH`,
-/// and `Err` for any other OS error (e.g., `EPERM` means the process
-/// exists but we lack permission to signal it — which still means it exists).
-fn pid_exists(pid: Pid) -> SubstrateResult<bool> {
-    use nix::errno::Errno;
-    match nix::sys::signal::kill(pid, None) {
-        Ok(()) | Err(Errno::EPERM) => Ok(true), // EPERM: process exists; we just can't signal it
-        Err(Errno::ESRCH) => Ok(false),
-        Err(e) => Err(SubstrateError::InternalError {
-            reason: format!("kill(pid, 0) returned unexpected errno {e}"),
-            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
-        }),
-    }
-}
-
 /// Handles a `proc.signal` tool call.
 ///
-/// Gate order (ADR-0004 / ADR-0035):
+/// Gate order (ADR-0004 / ADR-0008):
 ///   1. Dry-run preview (returns early with no OS mutation when `dry_run != false`).
-///   2. Elicitation confirmation for destructive signals (SIGKILL/SIGSTOP).
+///   2. Elicitation confirmation for destructive signals (SIGKILL, SIGTERM, SIGSTOP).
 ///   3. PID allowlist check (blocks PID 0, 1, 2).
-///   4. PID existence probe via `kill(pid, 0)`.
-///   5. Signal delivery.
+///   4. Signal delivery — ESRCH from `kill(2)` is treated as `NotFound` (the
+///      process exited between Gate 3 and delivery; see module-level TOCTOU note).
 ///
 /// # Errors
 ///
@@ -113,7 +107,7 @@ fn pid_exists(pid: Pid) -> SubstrateResult<bool> {
 ///   `elicitation_confirmed = true`.
 /// - [`SubstrateError::PermissionDenied`] when the target PID is in the hard-blocked
 ///   list (0, 1, 2) or when the OS rejects the signal with `EPERM`.
-/// - [`SubstrateError::NotFound`] when the target PID does not exist (`ESRCH`).
+/// - [`SubstrateError::NotFound`] when `kill(2)` returns `ESRCH` (process not found).
 #[instrument(skip(deps), fields(pid = req.pid, signal = %req.signal, dry_run = ?req.dry_run))]
 pub async fn handle_proc_signal(
     req: ProcSignalRequest,
@@ -151,7 +145,7 @@ pub async fn handle_proc_signal(
     }
 
     // Gate 2: Elicitation gate for destructive signals (ADR-0004 Layer 4 /
-    // ADR-0035). Must fire BEFORE any PID existence probe so that destructive
+    // ADR-0008). Must fire BEFORE any PID existence probe so that destructive
     // intent is confirmed regardless of whether the target process exists.
     if is_destructive(sig) && req.elicitation_confirmed != Some(true) {
         // hints would be returned in an Ok response for a preview; for the
@@ -167,15 +161,12 @@ pub async fn handle_proc_signal(
     // confirmation prompt appears first for destructive signals on blocked PIDs.
     pid_allowlist::check_pid_allowed(req.pid)?;
 
-    // Gate 4: PID existence check via kill(2) sig=0.
-    if !pid_exists(pid)? {
-        return Err(SubstrateError::NotFound {
-            resource: format!("process PID {} does not exist", req.pid),
-            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
-        });
-    }
-
-    // Deliver the signal.
+    // Gate 4: Signal delivery. We deliver immediately rather than probing with
+    // kill(pid, 0) first — a pre-check would not eliminate the TOCTOU window
+    // between the probe and the real kill(2) call (the PID could be reused in
+    // that interval). Instead, we interpret ESRCH from the actual delivery as
+    // NotFound; the signal was never delivered in that case, so the outcome is
+    // safe.
     nix::sys::signal::kill(pid, sig).map_err(|e| {
         use nix::errno::Errno;
         match e {
@@ -264,23 +255,42 @@ mod tests {
     }
 
     #[test]
-    fn sigterm_is_not_classified_as_destructive() {
-        // SIGTERM is NOT in the destructive set per the feature spec
-        // (proc-signal-sigkill-requires-elicitation.feature, Scenario 3):
-        // "SIGTERM does not require elicitation".
-        // Validate via the policy function directly to avoid actually
-        // delivering SIGTERM to the test process.
+    fn sigterm_is_classified_as_destructive() {
+        // ADR-0004 Layer 4 and ADR-0008 §Elicitation Matrix require SIGTERM
+        // to trigger elicitation alongside SIGKILL and SIGSTOP.
         use nix::sys::signal::Signal;
         assert!(
-            !crate::signal_policy::is_destructive(Signal::SIGTERM),
-            "SIGTERM must not be classified as destructive"
+            crate::signal_policy::is_destructive(Signal::SIGTERM),
+            "SIGTERM must be classified as destructive (ADR-0004 / ADR-0008)"
+        );
+    }
+
+    #[tokio::test]
+    async fn sigterm_without_elicitation_returns_confirmation_required() {
+        // SIGTERM is now in the elicitation-required set (ADR-0004 / ADR-0008).
+        // Sending it without elicitation_confirmed=true must return
+        // ConfirmationRequired — the signal must not be delivered.
+        let own_pid = std::process::id();
+        let req = ProcSignalRequest {
+            pid: own_pid,
+            signal: "SIGTERM".to_owned(),
+            dry_run: Some(false),
+            elicitation_confirmed: None,
+        };
+        let err = handle_proc_signal(req, deps())
+            .await
+            .expect_err("SIGTERM without elicitation must require confirmation");
+        assert!(
+            matches!(err, SubstrateError::ConfirmationRequired { .. }),
+            "expected ConfirmationRequired, got {err:?}"
         );
     }
 
     #[tokio::test]
     async fn nonexistent_pid_returns_not_found() {
         // PID u32::MAX - 1 is extremely unlikely to exist.
-        // Must use dry_run=false so the existence check (Gate 4) is reached.
+        // dry_run=false is required so Gate 4 (signal delivery) is reached and
+        // kill(2) returns ESRCH, which is mapped to NotFound.
         // SIGHUP is non-destructive so Gate 2 elicitation is skipped.
         let req = ProcSignalRequest {
             pid: u32::MAX - 1,

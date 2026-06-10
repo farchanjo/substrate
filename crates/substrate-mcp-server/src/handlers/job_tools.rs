@@ -22,7 +22,7 @@
 use std::time::Duration;
 
 use substrate_domain::{
-    JobRegistryPort, SubstrateResult,
+    JobRegistryPort, PageSize, SubstrateResult,
     jobs::entry::JobEntry,
     jobs::state::JobState,
     ports::job_registry::{JobPage, JobResult},
@@ -77,5 +77,7 @@ pub(crate) async fn handle_job_list(
     cursor: Option<PageCursor>,
 ) -> SubstrateResult<JobPage> {
     tracing::debug!(%client_id, "job_list called");
-    registry.list(client_id, cursor).await
+    // ADR-0060: `job_list` exposes no `page_size` on the wire; substitute the
+    // domain default (50). The registry caps the effective page at 500.
+    registry.list(client_id, cursor, PageSize::default()).await
 }

@@ -4,7 +4,7 @@
 //! [`TmpPath`]:
 //!
 //! 1. Call [`TmpPath::new_for`] to obtain a sibling temp path
-//!    `<target>.tmp.<crockford_uuid7>`.
+//!    `<target_parent>/<original_filename>.tmp.<crockford_uuid7>`.
 //! 2. Write to [`TmpPath::tmp_path`].
 //! 3. Call [`TmpPath::commit`] to atomically rename tmp → target.
 //!
@@ -57,7 +57,8 @@ pub fn crockford_base32(bytes: &[u8; 16]) -> String {
 
 /// RAII guard for a transactional temp file per ADR-0033.
 ///
-/// Constructs a sibling path `<target_dir>/<crockford_uuid7>.tmp` next to the
+/// Constructs a sibling path
+/// `<target_dir>/<original_filename>.tmp.<crockford_uuid7>` next to the
 /// final target. On drop, removes the temp file if [`commit`](TmpPath::commit)
 /// was not called (best-effort; ignores errors).
 #[derive(Debug)]
@@ -68,7 +69,7 @@ pub fn crockford_base32(bytes: &[u8; 16]) -> String {
 pub struct TmpPath {
     /// The intended final path.
     final_path: PathBuf,
-    /// The working temp path (`<parent>/<uuid7>.tmp`).
+    /// The working temp path (`<parent>/<original_filename>.tmp.<uuid7>`).
     tmp_path: PathBuf,
     /// Set to `true` after a successful [`commit`](TmpPath::commit).
     committed: bool,
@@ -77,13 +78,19 @@ pub struct TmpPath {
 impl TmpPath {
     /// Creates a new [`TmpPath`] for `target`.
     ///
-    /// The temp path is `<target_parent>/<crockford_uuid7>.tmp`.  The UUID is
-    /// generated at call time with [`Uuid::now_v7`].
+    /// The temp path is `<target_parent>/<original_filename>.tmp.<crockford_uuid7>`.
+    /// Preserving the original filename as a prefix satisfies ADR-0033 Step 2
+    /// and makes temp files immediately identifiable by their origin.
+    /// The UUID is generated at call time with [`Uuid::now_v7`].
     #[must_use]
     pub fn new_for(target: &Path) -> Self {
         let uuid = Uuid::now_v7();
         let suffix = crockford_base32(uuid.as_bytes());
-        let file_name = format!("{suffix}.tmp");
+        let base = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".to_owned());
+        let file_name = format!("{base}.tmp.{suffix}");
 
         let parent = target.parent().unwrap_or_else(|| Path::new("."));
         let tmp_path = parent.join(&file_name);

@@ -19,6 +19,9 @@
 //! Every entry path is validated by [`zip_slip_guard::validate_member_path`]
 //! and [`symlink_guard::reject_symlink_entry`] before any disk write.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -28,8 +31,12 @@ use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::hints_helpers::build_job_hints;
 use crate::manifest::{ArchiveEntry, ArchiveManifest};
+use crate::resource_limit::{
+    DEFAULT_MAX_EXTRACT_TOTAL_BYTES, DEFAULT_MAX_OUTPUT_BYTES, DecompressGuard, check_disk_space,
+};
 use crate::response::{ArchiveDeps, ToolResponse};
 use crate::symlink_guard::{EntryKind, reject_symlink_entry, validate_symlink_target};
+use crate::tmp_path::crockford_base32;
 use crate::zip_slip_guard::validate_member_path;
 
 /// Input parameters for `archive.tar.extract`.
@@ -94,7 +101,7 @@ pub async fn handle_archive_tar_extract(
 
     // Dry-run gate.
     if req.dry_run {
-        return produce_dry_run(&req, &jailed_archive, &jailed_dest, deps);
+        return produce_dry_run(&jailed_archive, &jailed_dest, deps).await;
     }
 
     if !req.confirmed {
@@ -109,17 +116,44 @@ pub async fn handle_archive_tar_extract(
         });
     }
 
-    let archive_clone = jailed_archive.as_path().to_path_buf();
-    let dest_clone = jailed_dest.as_path().to_path_buf();
-
-    let extracted_count = tokio::task::spawn_blocking(move || -> SubstrateResult<usize> {
-        extract_tar_blocking(&archive_clone, &dest_clone)
+    // Disk-space preflight (ADR-0033): the compressed archive size is a cheap
+    // lower bound on the uncompressed payload that will land in the staging dir.
+    let archive_for_meta = jailed_archive.as_path().to_path_buf();
+    let archive_size = tokio::task::spawn_blocking(move || {
+        std::fs::metadata(&archive_for_meta).map_or(0u64, |m| m.len())
     })
     .await
     .map_err(|e| SubstrateError::InternalError {
         reason: format!("spawn_blocking join error: {e}"),
         correlation_id: Some(uuid::Uuid::now_v7()),
-    })??;
+    })?;
+    check_disk_space(jailed_dest.as_path(), archive_size).await?;
+
+    let archive_clone = jailed_archive.as_path().to_path_buf();
+    let dest_clone = jailed_dest.as_path().to_path_buf();
+    // ADR-0037: bridge the async CancellationToken into the blocking extract via
+    // an `Arc<AtomicBool>`. A permit/token cannot cross into `spawn_blocking`, so
+    // the flag is flipped by an async watcher and polled at every entry boundary.
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let watcher_flag = Arc::clone(&cancel_flag);
+    let watch_cancel = cancel.clone();
+    let watcher = tokio::spawn(async move {
+        watch_cancel.cancelled().await;
+        watcher_flag.store(true, Ordering::SeqCst);
+    });
+
+    let blocking_flag = Arc::clone(&cancel_flag);
+    let extract_result = tokio::task::spawn_blocking(move || -> SubstrateResult<usize> {
+        extract_tar_blocking(&archive_clone, &dest_clone, &blocking_flag)
+    })
+    .await
+    .map_err(|e| SubstrateError::InternalError {
+        reason: format!("spawn_blocking join error: {e}"),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    });
+    watcher.abort();
+
+    let extracted_count = extract_result??;
 
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, false);
     let content = format!(
@@ -137,16 +171,22 @@ pub async fn handle_archive_tar_extract(
     Ok(ToolResponse::with_hints(content, structured_content, hints))
 }
 
-fn produce_dry_run(
-    _req: &TarExtractRequest,
+async fn produce_dry_run(
     jailed_archive: &JailedPath,
     jailed_dest: &JailedPath,
     deps: &ArchiveDeps,
 ) -> SubstrateResult<ToolResponse> {
-    let archive_path = jailed_archive.as_path();
-    let dest_root = jailed_dest.as_path();
+    let archive_path = jailed_archive.as_path().to_path_buf();
+    let dest_root = jailed_dest.as_path().to_path_buf();
 
-    let entries = scan_tar_members(archive_path, dest_root)?;
+    // The member scan performs blocking file I/O — run it off the executor
+    // (ADR-0003 async-zone B). The previous inline scan blocked the reactor.
+    let entries = tokio::task::spawn_blocking(move || scan_tar_members(&archive_path, &dest_root))
+        .await
+        .map_err(|e| SubstrateError::InternalError {
+            reason: format!("spawn_blocking join error: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })??;
     let manifest = ArchiveManifest::from_entries(entries);
 
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, true);
@@ -194,18 +234,15 @@ fn scan_tar_members(
 
         // Symlink guard — ADR-0035 two-tier validation:
         // safe (target stays within root) → allowed; escaping → PathTraversalBlocked.
-        let kind = match header.entry_type() {
-            tar::EntryType::Symlink => EntryKind::Symlink,
-            tar::EntryType::Regular | tar::EntryType::Continuous => EntryKind::File,
-            tar::EntryType::Directory => EntryKind::Directory,
-            _ => EntryKind::Other,
-        };
+        // Hard links (`EntryType::Link`) reference another path and are treated
+        // as symlinks for validation so they cannot escape the extraction root.
+        let kind = classify_entry(header.entry_type());
         if kind == EntryKind::Symlink {
             // For dry-run, validate the target without creating the link.
             let link_target = header
                 .link_name()
                 .map_err(|e| SubstrateError::EncodingError {
-                    detail: format!("tar symlink target: {e}"),
+                    detail: format!("tar link target: {e}"),
                     correlation_id: Some(uuid::Uuid::now_v7()),
                 })?
                 .unwrap_or_default();
@@ -226,43 +263,162 @@ fn scan_tar_members(
     Ok(entries)
 }
 
+/// Maps a `tar::EntryType` to the guard's `EntryKind`.
+///
+/// Hard links (`Link`) reference another in-archive path; like symlinks they are
+/// routed through target validation so a crafted entry cannot escape the root
+/// (ADR-0035). Devices, FIFOs, and other special types map to `Other` and are
+/// skipped during extraction.
+fn classify_entry(entry_type: tar::EntryType) -> EntryKind {
+    match entry_type {
+        tar::EntryType::Symlink | tar::EntryType::Link => EntryKind::Symlink,
+        tar::EntryType::Regular | tar::EntryType::Continuous => EntryKind::File,
+        tar::EntryType::Directory => EntryKind::Directory,
+        _ => EntryKind::Other,
+    }
+}
+
+/// Returns `true` when the first two bytes of `archive` are the gzip magic
+/// (`0x1f 0x8b`), independent of file extension. Falls back to the extension
+/// hint when the file cannot be probed.
+fn is_gzip_archive(archive: &std::path::Path) -> bool {
+    use std::io::Read as _;
+
+    if let Ok(mut f) = std::fs::File::open(archive) {
+        let mut magic = [0u8; 2];
+        if f.read_exact(&mut magic).is_ok() {
+            return magic == [0x1f, 0x8b];
+        }
+    }
+    archive
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("tgz"))
+}
+
 /// Synchronous TAR extraction inside `spawn_blocking`.
+///
+/// Extracts into a sibling staging directory `<dest>.tmp.<uuid7>` and atomically
+/// renames it onto `dest_root` only after the full archive succeeds (ADR-0033).
+/// On any error or cancellation the staging tree is removed so no partial tree
+/// is ever visible at `dest_root`.
 fn extract_tar_blocking(
     archive: &std::path::Path,
     dest_root: &std::path::Path,
+    cancel: &Arc<AtomicBool>,
 ) -> SubstrateResult<usize> {
-    let file = std::fs::File::open(archive).map_err(|_| SubstrateError::NotFound {
-        resource: archive.to_string_lossy().into_owned(),
+    let staging = make_staging_dir(dest_root)?;
+
+    let result = (|| -> SubstrateResult<usize> {
+        let file = std::fs::File::open(archive).map_err(|_| SubstrateError::NotFound {
+            resource: archive.to_string_lossy().into_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?;
+        // Detect gzip by magic bytes, not extension (ADR-0035 defense in depth).
+        if is_gzip_archive(archive) {
+            let decoder = flate2::read::GzDecoder::new(file);
+            let mut ar = tar::Archive::new(decoder);
+            extract_entries(&mut ar, &staging, cancel)
+        } else {
+            let mut ar = tar::Archive::new(file);
+            extract_entries(&mut ar, &staging, cancel)
+        }
+    })();
+
+    match result {
+        Ok(count) => {
+            commit_staging(&staging, dest_root)?;
+            Ok(count)
+        },
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Err(e)
+        },
+    }
+}
+
+/// Creates a sibling staging directory `<dest>.tmp.<uuid7>` for transactional
+/// extraction. The parent of `dest_root` must already exist (it was jailed).
+fn make_staging_dir(dest_root: &std::path::Path) -> SubstrateResult<std::path::PathBuf> {
+    let suffix = crockford_base32(uuid::Uuid::now_v7().as_bytes());
+    let dir_name = match dest_root.file_name().and_then(|n| n.to_str()) {
+        Some(name) => format!("{name}.tmp.{suffix}"),
+        None => format!("extract.tmp.{suffix}"),
+    };
+    let parent = dest_root
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let staging = parent.join(dir_name);
+    std::fs::create_dir_all(&staging).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", staging.display()),
         correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
+    Ok(staging)
+}
 
-    // Detect gzip by trying to read a gzip header lexically.
-    let is_gz = archive
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("tgz"));
+/// Atomically promotes the staging tree onto `dest_root`.
+///
+/// When `dest_root` already exists (the jail canonicalised an existing
+/// directory), its contents are merged from the staging tree entry-by-entry so
+/// the rename does not fail on a non-empty target.
+fn commit_staging(staging: &std::path::Path, dest_root: &std::path::Path) -> SubstrateResult<()> {
+    if std::fs::rename(staging, dest_root).is_ok() {
+        return Ok(());
+    }
+    // Target exists / is non-empty: merge children, then drop the staging dir.
+    merge_into(staging, dest_root)?;
+    let _ = std::fs::remove_dir_all(staging);
+    Ok(())
+}
 
-    let extracted_count = if is_gz {
-        let decoder = flate2::read::GzDecoder::new(file);
-        let mut ar = tar::Archive::new(decoder);
-        extract_entries(&mut ar, dest_root)?
-    } else {
-        let mut ar = tar::Archive::new(file);
-        extract_entries(&mut ar, dest_root)?
-    };
-
-    Ok(extracted_count)
+/// Recursively moves the children of `src` into `dst`, creating directories as
+/// needed and renaming leaf entries.
+fn merge_into(src: &std::path::Path, dst: &std::path::Path) -> SubstrateResult<()> {
+    std::fs::create_dir_all(dst).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", dst.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    for entry in std::fs::read_dir(src).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", src.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })? {
+        let entry = entry.map_err(|e| SubstrateError::IoError {
+            path: format!("readdir: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() && to.exists() {
+            merge_into(&from, &to)?;
+        } else {
+            std::fs::rename(&from, &to).map_err(|e| SubstrateError::IoError {
+                path: format!("{}: {e}", to.display()),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn extract_entries<R: std::io::Read>(
     ar: &mut tar::Archive<R>,
     dest_root: &std::path::Path,
+    cancel: &Arc<AtomicBool>,
 ) -> SubstrateResult<usize> {
+    // Aggregate ceiling across the whole archive guards against many-member
+    // bombs whose individual entries each stay below the per-entry limit.
+    let mut total_guard = DecompressGuard::new(DEFAULT_MAX_EXTRACT_TOTAL_BYTES);
     let mut count = 0usize;
     for entry_result in ar.entries().map_err(|e| SubstrateError::IoError {
         path: format!("tar entries: {e}"),
         correlation_id: Some(uuid::Uuid::now_v7()),
     })? {
+        // ADR-0037: poll cancellation at each entry boundary.
+        if cancel.load(Ordering::SeqCst) {
+            return Err(SubstrateError::Cancelled {
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            });
+        }
         let mut entry = entry_result.map_err(|e| SubstrateError::IoError {
             path: format!("tar entry read: {e}"),
             correlation_id: Some(uuid::Uuid::now_v7()),
@@ -274,91 +430,114 @@ fn extract_entries<R: std::io::Read>(
 
         // Zip Slip guard (Tar Slip).
         let resolved = validate_member_path(dest_root, &member_path)?;
-
-        // Symlink guard — ADR-0035 two-tier validation:
-        // safe (target stays within root) → create symlink; escaping → PathTraversalBlocked.
-        let kind = match entry.header().entry_type() {
-            tar::EntryType::Symlink => EntryKind::Symlink,
-            tar::EntryType::Regular | tar::EntryType::Continuous => EntryKind::File,
-            tar::EntryType::Directory => EntryKind::Directory,
-            _ => EntryKind::Other,
-        };
+        let kind = classify_entry(entry.header().entry_type());
 
         if kind == EntryKind::Directory {
-            std::fs::create_dir_all(&resolved).map_err(|e| SubstrateError::IoError {
-                path: format!("{}: {e}", resolved.display()),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })?;
+            create_dir_all_mapped(&resolved)?;
         } else if kind == EntryKind::Symlink {
-            // Validate and restore the symlink (ADR-0004 §symlink-validation).
-            let link_target = entry
-                .header()
-                .link_name()
-                .map_err(|e| SubstrateError::EncodingError {
-                    detail: format!("tar symlink target: {e}"),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?
-                .unwrap_or_default();
-            validate_symlink_target(dest_root, &resolved, &link_target)?;
-            if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
-                    path: format!("{}: {e}", parent.display()),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
-            }
-            // SAFETY: This is not `unsafe` in Rust terms; the function is safe.
-            // The symlink target is validated above — it cannot escape extraction_root.
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&*link_target, &resolved).map_err(|e| {
-                SubstrateError::IoError {
-                    path: format!("{}: {e}", resolved.display()),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                }
-            })?;
-            #[cfg(windows)]
-            {
-                // Windows symlinks require separate file/dir variants; skip for now.
-                // TODO: implement Windows symlink support when required.
-                let _ = link_target;
-                return Err(SubstrateError::InternalError {
-                    reason: "symlink extraction not supported on Windows".to_owned(),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                });
-            }
+            extract_symlink_entry(&mut entry, dest_root, &resolved)?;
+        } else if kind == EntryKind::File {
+            extract_file_entry(&mut entry, &resolved, &mut total_guard)?;
         } else {
-            // Transactional write via TmpPath (ADR-0033).
-            use crate::tmp_path::TmpPath;
-            if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| SubstrateError::IoError {
-                    path: format!("{}: {e}", parent.display()),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
-            }
-            let tmp = TmpPath::new_for(&resolved);
-            {
-                let mut out =
-                    std::fs::File::create(tmp.tmp_path()).map_err(|e| SubstrateError::IoError {
-                        path: format!("{}: {e}", tmp.tmp_path().display()),
-                        correlation_id: Some(uuid::Uuid::now_v7()),
-                    })?;
-                std::io::copy(&mut entry, &mut out).map_err(|e| SubstrateError::IoError {
-                    path: format!("{}: {e}", resolved.display()),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
-            }
-            // Sync commit (blocking context).
-            std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| {
-                SubstrateError::IoError {
-                    path: format!("{}: {e}", resolved.display()),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                }
-            })?;
-            // Prevent Drop from removing the now-renamed file.
-            std::mem::forget(tmp);
+            // Devices, FIFOs, and other special types are skipped.
+            continue;
         }
         count += 1;
     }
     Ok(count)
+}
+
+/// Creates a directory tree, mapping I/O failures to [`SubstrateError::IoError`].
+fn create_dir_all_mapped(path: &std::path::Path) -> SubstrateResult<()> {
+    std::fs::create_dir_all(path).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", path.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })
+}
+
+/// Validates and restores a symlink (or hard-linked) member (ADR-0004 §symlink-validation).
+fn extract_symlink_entry<R: std::io::Read>(
+    entry: &mut tar::Entry<'_, R>,
+    dest_root: &std::path::Path,
+    resolved: &std::path::Path,
+) -> SubstrateResult<()> {
+    let link_target = entry
+        .header()
+        .link_name()
+        .map_err(|e| SubstrateError::EncodingError {
+            detail: format!("tar link target: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?
+        .unwrap_or_default();
+    validate_symlink_target(dest_root, resolved, &link_target)?;
+    if let Some(parent) = resolved.parent() {
+        create_dir_all_mapped(parent)?;
+    }
+    // The link target is validated above — it cannot escape extraction_root.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&*link_target, resolved).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", resolved.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    #[cfg(windows)]
+    {
+        let _ = link_target;
+        return Err(SubstrateError::InternalError {
+            reason: "symlink extraction not supported on Windows".to_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        });
+    }
+    Ok(())
+}
+
+/// Streams a regular file member to disk in bounded chunks, recording every
+/// chunk against `total_guard` (per-entry + aggregate ceiling) and committing
+/// via a transactional tmp rename (ADR-0033 / fix-1 zip-bomb guard).
+fn extract_file_entry<R: std::io::Read>(
+    entry: &mut tar::Entry<'_, R>,
+    resolved: &std::path::Path,
+    total_guard: &mut DecompressGuard,
+) -> SubstrateResult<()> {
+    use crate::tmp_path::TmpPath;
+    use std::io::{Read as _, Write as _};
+
+    if let Some(parent) = resolved.parent() {
+        create_dir_all_mapped(parent)?;
+    }
+    let mut entry_guard = DecompressGuard::new(DEFAULT_MAX_OUTPUT_BYTES);
+    let tmp = TmpPath::new_for(resolved);
+    {
+        let mut out =
+            std::fs::File::create(tmp.tmp_path()).map_err(|e| SubstrateError::IoError {
+                path: format!("{}: {e}", tmp.tmp_path().display()),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = entry.read(&mut buf).map_err(|e| SubstrateError::IoError {
+                path: format!("tar entry data: {e}"),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+            if n == 0 {
+                break;
+            }
+            // Per-entry then aggregate ceiling: either overflow aborts extraction.
+            entry_guard.record(n as u64)?;
+            total_guard.record(n as u64)?;
+            out.write_all(&buf[..n])
+                .map_err(|e| SubstrateError::IoError {
+                    path: format!("{}: {e}", resolved.display()),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                })?;
+        }
+    }
+    std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", resolved.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    // Prevent Drop from removing the now-renamed file.
+    std::mem::forget(tmp);
+    Ok(())
 }
 
 // ---- Tests -------------------------------------------------------------------

@@ -10,10 +10,20 @@
 #   platform-shim : substrate-fs-index-macos-sys, substrate-signal-sys
 #                   (thin OS-abstraction shims; may import domain; MUST NOT import adapter crates)
 #   adapter       : substrate-fs-query, substrate-fs-mutation, substrate-fs-index,
-#                   substrate-process, substrate-system-info, substrate-text,
-#                   substrate-archive, substrate-jobs
+#                   substrate-process, substrate-system-info, substrate-network-info,
+#                   substrate-text, substrate-archive, substrate-jobs,
+#                   substrate-subprocess
 #                   (MUST NOT depend on each other; allowed: domain + policy)
 #   server        : substrate-mcp-server       (only crate allowed to depend on all)
+#
+# Rule-5 exception (ADR-0056, documented in ADR-0022):
+#   substrate-subprocess MAY activate the tokio net feature, but ONLY through its
+#   own optional `outbound-net` Cargo feature, used for the active health-probe
+#   path (TCP connect-checks). The exception is encoded narrowly: it fires solely
+#   for crate_name == "substrate-subprocess" AND a dependency token that carries
+#   the explicit `outbound-net` feature marker (e.g. "outbound-net:tokio/net").
+#   A bare "tokio/net" on substrate-subprocess (net without the outbound-net gate)
+#   and tokio net for EVERY other non-server adapter remain denied.
 #
 # Input shape:
 #   {
@@ -55,6 +65,16 @@
 #   FAIL — non-server crate pulls in tokio net feature (detected by "tokio" + "net" marker)
 #   input = {"crate_name":"substrate-fs-query","dependencies":["substrate-domain","tokio/net"],"allowed_external":["tokio/net"]}
 #   expected deny: "substrate-fs-query: only substrate-mcp-server may activate tokio net feature"
+#
+#   PASS — substrate-network-info classified as adapter, depends on domain + policy
+#   input = {"crate_name":"substrate-network-info","dependencies":["substrate-domain","substrate-policy","tokio"],"allowed_external":["tokio"]}
+#
+#   PASS — substrate-subprocess activates tokio net ONLY via its outbound-net feature (ADR-0056)
+#   input = {"crate_name":"substrate-subprocess","dependencies":["substrate-domain","substrate-policy","outbound-net:tokio/net"],"allowed_external":["tokio/net"]}
+#
+#   FAIL — substrate-subprocess pulls tokio net WITHOUT the outbound-net gate (bare net not exempt)
+#   input = {"crate_name":"substrate-subprocess","dependencies":["substrate-domain","tokio/net"],"allowed_external":["tokio/net"]}
+#   expected deny: "substrate-subprocess: only substrate-mcp-server may activate tokio net feature"
 
 package substrate.hexagonal
 
@@ -87,6 +107,7 @@ _adapter_crates := {
     "substrate-fs-index",
     "substrate-process",
     "substrate-system-info",
+    "substrate-network-info",
     "substrate-text",
     "substrate-archive",
     "substrate-jobs",
@@ -186,13 +207,30 @@ deny contains msg if {
 # ---------------------------------------------------------------------------
 # Rule 5: only substrate-mcp-server may activate the tokio net feature
 # Detected via the "tokio/net" feature-path notation in the dependency list.
+#
+# Documented exception (ADR-0056, recorded in ADR-0022): substrate-subprocess
+# MAY activate tokio net, but ONLY through its optional `outbound-net` Cargo
+# feature (active TCP connect health-probes). The exception is encoded narrowly
+# by `_is_outbound_net_exception`: it fires solely for substrate-subprocess and
+# only for a dependency token carrying the explicit "outbound-net:" marker.
+# Bare "tokio/net" on substrate-subprocess, and tokio net on any other
+# non-server adapter, are still denied.
 # ---------------------------------------------------------------------------
+
+# True when this net activation is the documented ADR-0056 exception: the crate
+# is substrate-subprocess AND the dependency token is gated behind the
+# `outbound-net` feature (encoded as the "outbound-net:" prefix marker).
+_is_outbound_net_exception(crate_name, dep) if {
+    crate_name == "substrate-subprocess"
+    contains(dep, "outbound-net:")
+}
 
 deny contains msg if {
     not _is_server(input.crate_name)
     dep := input.dependencies[_]
     contains(dep, "tokio")
     contains(dep, "net")
+    not _is_outbound_net_exception(input.crate_name, dep)
     msg := sprintf(
         "%s: only substrate-mcp-server may activate tokio net feature",
         [input.crate_name],

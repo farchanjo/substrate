@@ -25,12 +25,13 @@
 )]
 
 use std::ffi::{CStr, CString};
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::allowlist::Allowlist;
+use crate::nfc;
 
 // ---- macOS-specific constants -----------------------------------------------
 
@@ -88,6 +89,74 @@ fn fd_to_canonical_path(fd: libc::c_int) -> SubstrateResult<PathBuf> {
     Ok(PathBuf::from(path_str))
 }
 
+/// Opens `dir` as a directory descriptor with `O_NOFOLLOW_ANY`, rejecting any
+/// symlink component along the way.
+///
+/// Opening a directory requires only directory read/execute permission, which
+/// is independent of the *target file's* mode. This lets the jail verify
+/// containment of write-only or read-restricted files without ever needing
+/// read access to the target itself (the bug fixed here previously used
+/// `O_RDONLY` on the target and wrongly rejected such paths).
+fn open_dir_nofollow(dir: &Path) -> SubstrateResult<OwnedFd> {
+    let cstr = path_to_cstring(dir)?;
+    // SAFETY: `libc::openat` is a standard macOS C ABI syscall.
+    //   - `AT_FDCWD` resolves `dir` relative to the current working directory.
+    //   - `cstr.as_ptr()` is valid for the call duration.
+    //   - `O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC` is a safe flag
+    //     combination; no file content is read and the fd is not inherited.
+    // No pointer escapes this call.
+    let fd = unsafe {
+        libc::openat(
+            libc::AT_FDCWD,
+            cstr.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | O_NOFOLLOW_ANY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        return Err(map_openat_errno(errno, dir));
+    }
+    // SAFETY: `fd` is a valid descriptor just opened above; `OwnedFd` owns it
+    // and closes it on drop. No other owner exists.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// Confirms `filename` exists directly under `dir_fd` and is not itself a
+/// symlink, using `fstatat(AT_SYMLINK_NOFOLLOW)`.
+///
+/// `O_NOFOLLOW_ANY` on the parent-directory open rejects symlinks up to and
+/// including the parent, but not a symlink as the *final* component. This
+/// check closes that hole without following the link.
+fn verify_final_component(
+    dir_fd: libc::c_int,
+    filename: &CStr,
+    raw_path: &Path,
+) -> SubstrateResult<()> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `dir_fd` is a live directory descriptor; `filename` is a valid
+    // NUL-terminated C string; `&mut st` points to a stack-allocated `stat`.
+    // `AT_SYMLINK_NOFOLLOW` makes `fstatat` stat the link itself, never follow.
+    let ret = unsafe {
+        libc::fstatat(
+            dir_fd,
+            filename.as_ptr(),
+            &raw mut st,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if ret < 0 {
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        return Err(map_openat_errno(errno, raw_path));
+    }
+    if (st.st_mode & libc::S_IFMT) == libc::S_IFLNK {
+        return Err(SubstrateError::SymlinkEscape {
+            path: raw_path.display().to_string(),
+            correlation_id: None,
+        });
+    }
+    Ok(())
+}
+
 // ---- ONoFollowAnyJail -------------------------------------------------------
 
 /// Tier-1 macOS path-jail adapter backed by `openat(O_NOFOLLOW_ANY)`.
@@ -121,42 +190,14 @@ impl substrate_domain::PathJailPort for ONoFollowAnyJail {
             });
         }
 
-        let candidate_cstr = path_to_cstring(raw_path)?;
+        // Recover the kernel-canonical path (resolves APFS firmlinks, CWD)
+        // without requiring read permission on the target file.
+        let canonical = resolve_canonical_nofollow(raw_path)?;
 
-        // Call openat(AT_FDCWD, path, O_RDONLY | O_NOFOLLOW_ANY | O_CLOEXEC).
-        //
-        // SAFETY: `libc::openat` is a standard POSIX/macOS C ABI syscall.
-        //   - `libc::AT_FDCWD` is the sentinel for "relative to CWD".
-        //   - `candidate_cstr.as_ptr()` is valid for the call duration.
-        //   - `O_RDONLY | O_NOFOLLOW_ANY | O_CLOEXEC` is a safe flag combination.
-        // No pointer escapes this call. `O_NOFOLLOW_ANY` causes the kernel to
-        // return `ELOOP` on any symlink component, atomically closing the TOCTOU
-        // window without any race.
-        let fd = unsafe {
-            libc::openat(
-                libc::AT_FDCWD,
-                candidate_cstr.as_ptr(),
-                libc::O_RDONLY | O_NOFOLLOW_ANY | libc::O_CLOEXEC,
-            )
-        };
-
-        if fd < 0 {
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            return Err(map_openat_errno(errno, raw_path));
-        }
-
-        // Take ownership of the fd so it is closed on drop.
-        // SAFETY: `fd` is a valid descriptor just opened above; `OwnedFd` owns it.
-        let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
-
-        // Recover the kernel-canonical path (resolves APFS firmlinks, CWD).
-        let canonical = fd_to_canonical_path(fd)?;
-
-        // Drop fd after we have the path. `OwnedFd` closes on drop.
-        drop(owned_fd);
-
-        // Verify canonical is within the allowlist_root.
-        if !canonical.starts_with(allowlist_root.as_path()) {
+        // Verify canonical is within the allowlist_root. Both sides are
+        // normalized to NFC (ADR-0035 §Decision 6) so an NFD-encoded
+        // canonical path still matches an NFC-encoded root.
+        if !nfc::is_contained(&canonical, allowlist_root.as_path()) {
             return Err(SubstrateError::PathOutsideAllowlist {
                 path: canonical.display().to_string(),
                 correlation_id: None,
@@ -166,6 +207,28 @@ impl substrate_domain::PathJailPort for ONoFollowAnyJail {
         // Final cross-check against the full allowlist set.
         self.allowlist.jail(canonical)
     }
+}
+
+/// Resolves the kernel-canonical path of `raw_path` while rejecting every
+/// symlink component, WITHOUT requiring read permission on the target.
+///
+/// Strategy: open the *parent directory* with `O_NOFOLLOW_ANY` (needs only
+/// directory permission, independent of the target file mode), confirm the
+/// final component exists and is not a symlink via `fstatat`, then derive the
+/// canonical path from the parent's `F_GETPATH` plus the final component. When
+/// `raw_path` has no parent (filesystem root), open it directly as a directory.
+fn resolve_canonical_nofollow(raw_path: &Path) -> SubstrateResult<PathBuf> {
+    let Some(file_name) = raw_path.file_name() else {
+        // No final component (e.g. "/"): open the path itself as a directory.
+        let dir_fd = open_dir_nofollow(raw_path)?;
+        return fd_to_canonical_path(dir_fd.as_raw_fd());
+    };
+    let parent = raw_path.parent().unwrap_or_else(|| Path::new("/"));
+    let dir_fd = open_dir_nofollow(parent)?;
+    let name_cstr = path_to_cstring(Path::new(file_name))?;
+    verify_final_component(dir_fd.as_raw_fd(), &name_cstr, raw_path)?;
+    let parent_canonical = fd_to_canonical_path(dir_fd.as_raw_fd())?;
+    Ok(parent_canonical.join(file_name))
 }
 
 /// Maps `errno` values from `openat(2)` with `O_NOFOLLOW_ANY` to `SubstrateError`.
@@ -326,5 +389,41 @@ mod tests {
                 || code == "SUBSTRATE_SYMLINK_ESCAPE",
             "unexpected code: {code}"
         );
+    }
+
+    /// A write-only file (mode 0o200, no read permission) within root must be
+    /// accepted. The previous `O_RDONLY`-on-target implementation rejected such
+    /// paths with EACCES; the parent-directory technique fixes that.
+    #[test]
+    fn allows_write_only_file_within_root() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use substrate_domain::PathJailPort as _;
+
+        let (dir, jail, root_jailed) = make_jail();
+        let canonical_dir = match std::fs::canonicalize(dir.path()) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        if !canonical_dir.starts_with(root_jailed.as_path()) {
+            return;
+        }
+
+        let file = canonical_dir.join("write_only.bin");
+        std::fs::write(&file, b"x").expect("seed file");
+        // Drop read permission: owner write only.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o200))
+            .expect("chmod write-only");
+
+        let result = jail.jail(&root_jailed, &file);
+        match result {
+            Ok(jailed) => assert!(jailed.as_path().starts_with(root_jailed.as_path())),
+            // O_NOFOLLOW_ANY unavailable on macOS < 12 → IoError is acceptable.
+            Err(e) if e.code() == "SUBSTRATE_IO_ERROR" => {},
+            Err(e) => panic!(
+                "write-only file within root must be allowed, got: {e} ({code})",
+                code = e.code()
+            ),
+        }
     }
 }

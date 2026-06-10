@@ -35,6 +35,7 @@
 
 mod allowlist;
 mod jail_factory;
+mod nfc;
 mod userspace_jail;
 
 #[cfg(target_os = "linux")]

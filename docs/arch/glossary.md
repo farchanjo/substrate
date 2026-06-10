@@ -76,6 +76,7 @@ mindmap
       structured content
       hint
       tool card
+      tool naming convention
 ```
 
 ---
@@ -601,6 +602,19 @@ The complete description record for a single MCP tool: narrative-arc description
 (prose layer), argument JSON Schema, output schema, and structured hints
 (programmatic layer). Tool cards are the primary artifact designed for 10B model
 comprehension. See [ADR-0007](adr/0007-tool-card-narrative-arc.md).
+
+## tool naming convention
+
+Every substrate tool has two forms of its name that refer to the same entity:
+the *logical name* (`<bc>.<verb>`, e.g. `fs.find`, `proc.signal`) used in
+spec artifacts, ADRs, Gherkin scenarios, CUE schemas, Rego policies, and
+tool-card prose; and the *wire name* (`<bc>_<verb>`, e.g. `fs_find`,
+`proc_signal`) used in the MCP `tools/list` and `tools/call` protocol fields
+and in Rust source code string literals. The mapping is deterministic and
+one-to-one: replace every `.` in the logical name with `_` to obtain the wire
+name. The wire names are frozen and authoritative for the MCP protocol; the
+logical names are authoritative for domain semantics and ubiquitous language.
+See [ADR-0062](adr/0062-tool-naming-convention.md).
 
 ## value object
 

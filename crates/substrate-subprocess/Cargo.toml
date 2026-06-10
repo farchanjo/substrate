@@ -42,4 +42,5 @@ libc = "0.2"
 tempfile = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
+tokio-test = { workspace = true }
 filetime = "0.2"

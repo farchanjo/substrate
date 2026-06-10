@@ -28,6 +28,9 @@ Feature: proc.signal blocks signals to privileged and system PIDs
 
   Scenario: Signaling a PID within the allowlist succeeds
     Given the host has a running process with pid=5000 within the allowed PID range
-    When the client calls proc.signal with pid=5000 and signal="SIGTERM" and elicitation_confirmed=false
+    # SIGTERM is in the elicitation-required set (ADR-0004 Layer 4, ADR-0008
+    # Elicitation Matrix); elicitation_confirmed=true isolates the PID-allowlist
+    # permission boundary under test from the elicitation gate.
+    When the client calls proc.signal with pid=5000 and signal="SIGTERM" and elicitation_confirmed=true
     Then the signal SIGTERM is sent to process pid=5000
     And no SUBSTRATE_PERMISSION_DENIED error is returned

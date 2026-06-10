@@ -106,8 +106,15 @@ const fn default_max_depth() -> u32 {
 /// A single matching entry emitted by `fs.find`.
 #[derive(Debug, Clone, Serialize)]
 pub struct FindEntry {
-    /// Jailed path to the matching file or directory.
+    /// Jailed path to the matching file or directory (lossy UTF-8 for the wire).
     pub path: String,
+    /// Raw OS path used to mint a byte-faithful pagination cursor.
+    ///
+    /// Not serialized: `path` is the wire representation (lossy), whereas the
+    /// cursor anchor must preserve the exact bytes so the next page's skip
+    /// comparison matches the walker's `Path::cmp` sort for non-UTF-8 paths.
+    #[serde(skip)]
+    pub raw_path: std::path::PathBuf,
     /// File size in bytes; `null` for directories.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
@@ -145,11 +152,14 @@ pub async fn handle_fs_find(
         None => PageSize::default().get().min(FS_FIND_PAGE_SIZE_CAP),
     };
 
-    // Validate the cursor offset.
-    let skip_count: usize = if let Some(ref cursor_str) = req.page_cursor {
-        decode_cursor(cursor_str)?
-    } else {
-        0
+    // Decode the path-anchor cursor (ADR-0008). `None` starts from the root;
+    // `Some(anchor)` resumes immediately after the entry whose path equals
+    // `anchor` in the deterministic walk order. The anchor is the raw OS path
+    // (not a lossy string) so the skip comparison matches the walker's
+    // `Path::cmp` sort byte-for-byte, including non-UTF-8 paths.
+    let anchor: Option<std::path::PathBuf> = match req.page_cursor {
+        Some(ref cursor_str) => Some(decode_cursor(cursor_str)?),
+        None => None,
     };
 
     // Parse modified_since filter.
@@ -257,13 +267,25 @@ pub async fn handle_fs_find(
 
     let max_depth = req.max_depth as usize;
     let cancel_clone = cancel.clone();
+    // Move the decoded anchor into the blocking walker; it is not needed again
+    // in the async scope.
+    let anchor_for_walk = anchor;
 
     let walker_handle = tokio::task::spawn_blocking(move || {
         let mut walker = WalkBuilder::new(jailed_root.as_path());
         walker
             .max_depth(Some(max_depth))
             .follow_links(false)
-            .hidden(false);
+            // An OS tool must list every file, including hidden and gitignored
+            // ones. `WalkBuilder` enables the .gitignore / .ignore / hidden
+            // filters by default, which would silently omit matching files.
+            // Disable the entire standard-filter set so the walk is exhaustive.
+            .standard_filters(false)
+            .hidden(false)
+            // Deterministic, lexicographically sorted walk order so the
+            // path-anchor cursor (ADR-0008) resumes from a fixed point across
+            // pages even as entries are created or removed between requests.
+            .sort_by_file_path(std::path::Path::cmp);
 
         for result in walker.build() {
             // Cancel-safety: check before each directory entry.
@@ -280,6 +302,18 @@ pub async fn handle_fs_find(
             };
 
             let path = entry.path();
+
+            // Path-anchor pagination (ADR-0008): skip every entry up to and
+            // including the previous page's anchor. The comparison uses
+            // `Path::cmp` — the SAME ordering `sort_by_file_path` sorts on — so
+            // the skip is byte-exact even for non-UTF-8 paths (a lossy-string
+            // compare could diverge from the byte order and skip/duplicate an
+            // entry across a page boundary).
+            if let Some(ref anchor_path) = anchor_for_walk
+                && path.cmp(anchor_path) != std::cmp::Ordering::Greater
+            {
+                continue;
+            }
 
             // Explicit symlink loop detection: `ignore::WalkBuilder` with
             // follow_links(false) does NOT detect cycles. For each symlink entry,
@@ -342,6 +376,7 @@ pub async fn handle_fs_find(
 
             let item = FindEntry {
                 path: path.to_string_lossy().into_owned(),
+                raw_path: path.to_path_buf(),
                 size_bytes,
                 modified_at,
                 is_dir,
@@ -354,23 +389,29 @@ pub async fn handle_fs_find(
         }
     });
 
-    // Collect up to (skip_count + page_size + 1) entries to detect next page.
-    let mut all_entries: Vec<FindEntry> = Vec::new();
-    let target = skip_count + page_size as usize + 1;
+    // The walker already skips past the previous anchor, so collect at most
+    // (page_size + 1) entries: the extra entry signals that a next page exists.
+    // `saturating_add` guards against overflow instead of wrapping (release) or
+    // aborting (debug) — see ADR-0008.
+    let mut page_entries: Vec<FindEntry> = Vec::new();
+    let target = (page_size as usize).saturating_add(1);
 
     loop {
         tokio::select! {
             biased;
-            () = cancel.cancelled() => {
-                return Err(SubstrateError::Cancelled { correlation_id: None });
-            }
             entry = rx.recv() => {
                 match entry {
                     None => break,
-                    Some(Err(e)) => return Err(e),
+                    Some(Err(e)) => {
+                        // Drop the receiver and join the walker so the blocking
+                        // task is not leaked on the error path.
+                        drop(rx);
+                        let _ = walker_handle.await;
+                        return Err(e);
+                    }
                     Some(Ok(e)) => {
-                        all_entries.push(e);
-                        if all_entries.len() >= target {
+                        page_entries.push(e);
+                        if page_entries.len() >= target {
                             // Drop the receiver to signal the walker to stop.
                             drop(rx);
                             break;
@@ -378,21 +419,27 @@ pub async fn handle_fs_find(
                     }
                 }
             }
+            () = cancel.cancelled() => {
+                // Abort the blocking walker so its JoinHandle is not leaked
+                // when we early-return on cancellation (ADR-0037).
+                walker_handle.abort();
+                return Err(SubstrateError::Cancelled { correlation_id: None });
+            }
         }
     }
 
     // Await the blocking task to ensure OS resources are released.
     let _ = walker_handle.await;
 
-    let has_more = all_entries.len() > skip_count + page_size as usize;
-    let page: Vec<FindEntry> = all_entries
-        .into_iter()
-        .skip(skip_count)
-        .take(page_size as usize)
-        .collect();
+    let has_more = page_entries.len() > page_size as usize;
+    page_entries.truncate(page_size as usize);
+    let page = page_entries;
 
+    // ADR-0008: the next cursor anchors on the last returned entry's raw path
+    // (byte-faithful, so the next page's skip matches the walker's `Path::cmp`
+    // sort even for non-UTF-8 paths).
     let next_cursor = if has_more {
-        Some(encode_cursor(skip_count + page_size as usize))
+        page.last().map(|last| encode_cursor(&last.raw_path))
     } else {
         None
     };
@@ -448,12 +495,41 @@ fn walker_err_to_substrate(err: &ignore::Error) -> SubstrateError {
 
 // ---- Cursor helpers ---------------------------------------------------------
 
-fn encode_cursor(offset: usize) -> String {
+// ADR-0008: cursors are stable + opaque. `fs.find` uses a *path-anchor* cursor:
+// the cursor encodes the RAW bytes of the path of the last entry returned on
+// the previous page. The next page re-walks the tree in a deterministic order
+// (`sort_by_file_path(Path::cmp)`) and skips every entry whose path is not
+// `Greater` than the anchor under the SAME `Path::cmp` ordering, then returns
+// the following `page_size` entries.
+//
+// Encoding the raw OS bytes (rather than a lossy UTF-8 string) keeps the skip
+// byte-exact for non-UTF-8 paths: a lossy-string anchor compared with string
+// order can diverge from the walker's byte-order sort and skip or duplicate an
+// entry across a page boundary.
+//
+// Anchoring on the entry path (rather than a positional offset into a
+// non-deterministic walk order) keeps pagination consistent when files are
+// created, deleted, or renamed between page requests: a positional offset
+// would shift every subsequent entry, whereas a path anchor resumes from a
+// fixed point in the sort ordering.
+
+/// Encodes a path-anchor cursor as base64-opaque text (ADR-0008).
+///
+/// `anchor` is the path of the last entry returned on the current page; the
+/// next page resumes immediately after it. The raw OS path bytes are encoded
+/// (not a lossy UTF-8 string) so the cursor is byte-faithful.
+fn encode_cursor(anchor: &std::path::Path) -> String {
     use base64_simd::STANDARD;
-    STANDARD.encode_to_string(offset.to_le_bytes().as_ref())
+    STANDARD.encode_to_string(path_to_bytes(anchor))
 }
 
-fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
+/// Decodes a path-anchor cursor produced by [`encode_cursor`] into a raw path.
+///
+/// # Errors
+///
+/// Returns [`SubstrateError::InvalidArgument`] when the cursor is not valid
+/// base64.
+fn decode_cursor(cursor: &str) -> SubstrateResult<std::path::PathBuf> {
     use base64_simd::STANDARD;
     let bytes =
         STANDARD
@@ -463,14 +539,35 @@ fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
                 reason: "malformed cursor (invalid base64)".to_owned(),
                 correlation_id: None,
             })?;
-    let arr: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| SubstrateError::InvalidArgument {
-            offending_field: "page_cursor".to_owned(),
-            reason: "malformed cursor (wrong length)".to_owned(),
-            correlation_id: None,
-        })?;
-    Ok(usize::from_le_bytes(arr))
+    Ok(bytes_to_path(bytes))
+}
+
+/// Borrows the raw OS bytes of a path. On Unix this is the exact `OsStr` byte
+/// content (the same bytes `Path::cmp` orders on); elsewhere it falls back to
+/// the lossy UTF-8 bytes.
+fn path_to_bytes(path: &std::path::Path) -> std::borrow::Cow<'_, [u8]> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        std::borrow::Cow::Borrowed(path.as_os_str().as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::borrow::Cow::Owned(path.to_string_lossy().into_owned().into_bytes())
+    }
+}
+
+/// Reconstructs a path from raw OS bytes produced by [`path_to_bytes`].
+fn bytes_to_path(bytes: Vec<u8>) -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        std::path::PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 fn parse_modified_since(s: &str) -> Result<u64, String> {
@@ -643,9 +740,25 @@ mod tests {
 
     #[tokio::test]
     async fn cursor_round_trip() {
-        let encoded = encode_cursor(42);
+        let anchor = std::path::Path::new("/tmp/some/deep/path/file.txt");
+        let encoded = encode_cursor(anchor);
         let decoded = decode_cursor(&encoded).expect("decode");
-        assert_eq!(decoded, 42);
+        assert_eq!(decoded, anchor);
+    }
+
+    /// A non-UTF-8 path must round-trip through the cursor byte-for-byte so the
+    /// next page's `Path::cmp` skip stays consistent with the walker's sort.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cursor_round_trip_non_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        // 0xFF 0xFE is invalid UTF-8; a lossy String anchor would corrupt it.
+        let anchor = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/\xff\xfe/file"));
+        let encoded = encode_cursor(&anchor);
+        let decoded = decode_cursor(&encoded).expect("decode");
+        assert_eq!(decoded, anchor, "non-UTF-8 anchor must round-trip exactly");
+        // The decoded anchor must compare equal under `Path::cmp` (the sort Ord).
+        assert_eq!(decoded.cmp(&anchor), std::cmp::Ordering::Equal);
     }
 
     #[tokio::test]
