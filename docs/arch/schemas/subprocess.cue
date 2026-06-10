@@ -6,9 +6,10 @@
 //   ADR-0052 — subprocess bounded context decision
 //   ADR-0053 — process lifecycle cascade contract (setsid, PR_SET_PDEATHSIG, watchdog pipe)
 //   ADR-0054 — subprocess stdout/stderr stream multiplex via notifications/progress
+//   ADR-0056 — subprocess supervisor semantics (#RestartPolicy, #HealthProbe, #LogRotation)
 //   ADR-0057 — subprocess output pagination and search
 //
-// Dependency on shared kernel: #JobId (job.cue) for the job_id field.
+// Dependency on shared kernel: #JobId and #PageSize (job.cue / shared_kernel.cue).
 package schemas
 
 // #SubprocessState enumerates the lifecycle states of a spawned child process.
@@ -92,9 +93,11 @@ package schemas
 // It is stored in the JobRegistry under the job_id and updated on every state
 // transition. The handle is the authoritative record for a single spawn invocation.
 #SubprocessHandle: {
-	// job_id is the UUIDv7 that correlates this handle with the async job entry,
-	// the MCP progressToken, and the correlation_id in audit events.
-	job_id: string & =~"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+	// job_id is the UUIDv7 (Crockford base32, 26 chars) that correlates this handle
+	// with the async job entry, the MCP progressToken, and the correlation_id in
+	// audit events. Aliases #JobId so the ADR-0040 triple-equality holds at the
+	// schema level (job_id == progressToken == correlation_id).
+	job_id: #JobId
 
 	// pid is the OS process ID of the spawned child. Always >= 2 to exclude
 	// the init process and kernel threads from the allowable range.
@@ -206,8 +209,9 @@ package schemas
 // for subprocess stdout and stderr output per ADR-0054. Chunks are numbered
 // per-stream (not globally) and include a byte offset for reassembly.
 #StreamChunk: {
-	// job_id correlates the chunk with its originating SubprocessHandle.
-	job_id: string & =~"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+	// job_id (Crockford base32, 26 chars) correlates the chunk with its originating
+	// SubprocessHandle. Aliases #JobId per ADR-0040 triple-equality.
+	job_id: #JobId
 
 	// stream identifies whether the chunk originates from standard output or
 	// standard error of the child process.
@@ -310,8 +314,10 @@ package schemas
 	offset: int & >=0
 
 	// page_size is the maximum number of lines to return in this page.
-	// Default 100; hard ceiling 10000.
-	page_size: int & >=1 & <=10000 | *100
+	// Reuses the shared #PageSize domain bounds (1..=10000 per ADR-0060) but
+	// overrides the default to 100 — the PageSize::DEFAULT_PAGINATION constant used
+	// by line- and record-oriented tools (subprocess.result/subprocess.search).
+	page_size: #PageSize | *100
 
 	// order controls traversal direction. Default Tail (most-recent-first).
 	order: #Order | *"Tail"
@@ -324,8 +330,8 @@ package schemas
 // When pagination is set the line-decomposed fields (stdout_lines, stderr_lines, etc.) are
 // populated in #SubprocessResult and the aggregate blobs are omitted.
 #SubprocessResultRequest: {
-	// job_id identifies the target job.
-	job_id: string & =~"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+	// job_id identifies the target job (Crockford base32, 26 chars; aliases #JobId).
+	job_id: #JobId
 
 	// pagination, when present, enables line-based paged retrieval of captured output.
 	// Absent preserves original full-aggregate behavior.
@@ -336,8 +342,8 @@ package schemas
 // #SubprocessSearchRequest submits a regex search across captured subprocess output
 // per ADR-0057. Results are line-oriented and optionally paginated.
 #SubprocessSearchRequest: {
-	// job_id identifies the target job.
-	job_id: string & =~"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+	// job_id identifies the target job (Crockford base32, 26 chars; aliases #JobId).
+	job_id: #JobId
 
 	// pattern is the regex applied to each captured output line.
 	// Length: 1..1024 characters.

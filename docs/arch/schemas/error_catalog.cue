@@ -283,7 +283,7 @@ package schemas
 	SUBSTRATE_JAIL_DEGRADED_REFUSED: #ErrorEntry & {
 		code:              "SUBSTRATE_JAIL_DEGRADED_REFUSED"
 		http_jsonrpc_code: -32033
-		recovery_hint:     "Upgrade kernel to >= 5.6 (Linux) or macOS >= 11, or set security.refuse_degraded_jail = false."
+		recovery_hint:     "Upgrade kernel to >= 5.6 (Linux) or macOS >= 12, or set security.refuse_degraded_jail = false."
 		category:          "startup"
 	}
 	// Subprocess BC errors per ADR-0052 + ADR-0053 + ADR-0054 + ADR-0055

@@ -3,16 +3,19 @@ package schemas
 
 import "strings"
 
-// #ToolNamespace enumerates the six stable tool namespaces.
+// #ToolNamespace enumerates the eight stable tool namespaces.
 // The "job" namespace was added 2026-05-21 per ADR-0040 (async job control-plane).
-#ToolNamespace: "fs" | "proc" | "sys" | "text" | "archive" | "job"
+// The "subprocess" namespace was added per ADR-0052 and "net" per ADR-0058.
+#ToolNamespace: "fs" | "proc" | "sys" | "text" | "archive" | "job" | "subprocess" | "net"
 
 // #ToolBucket classifies every tool into a dispatch bucket per ADR-0040.
 // A_sync_inline: snapshot-instant, always synchronous (e.g. sys.uname, sys.info).
 // B_auto_mode: inline if below threshold, promoted to async job if above.
-// C_always_async: job dispatch is mandatory (e.g. archive.tar.create).
+// C_always_async: job dispatch is mandatory, no streaming (e.g. archive.tar.create).
 // D_sync_side_effect: fast commit, audit fire-and-forget (e.g. fs.mkdir, proc.signal).
-#ToolBucket: "A_sync_inline" | "B_auto_mode" | "C_always_async" | "D_sync_side_effect"
+// E_always_async_streaming: always async with streaming progress (subprocess.spawn
+// only) per the ADR-0040 2026-05-24 amendment and ADR-0052/ADR-0054.
+#ToolBucket: "A_sync_inline" | "B_auto_mode" | "C_always_async" | "D_sync_side_effect" | "E_always_async_streaming"
 
 // #ToolAnnotations carries MCP hint booleans that guide client behavior.
 // Defaults represent the safest posture (writable, non-destructive, non-idempotent, closed-world).
@@ -33,12 +36,16 @@ import "strings"
 // #ToolSpec is the aggregate root for a single registered MCP tool.
 // It binds identity, schema contracts, and behavioral annotations together.
 #ToolSpec: {
-	// name must follow <namespace>_<snake_case> and be non-empty.
-	// "job" namespace added 2026-05-21 per ADR-0040.
-	name: string & =~"^(fs|proc|sys|text|archive|job)_[a-z][a-z0-9_]*$"
+	// name must follow <namespace>_<snake_case> and be non-empty (wire form per
+	// ADR-0062). "job" namespace added 2026-05-21 per ADR-0040; "subprocess" per
+	// ADR-0052; "net" per ADR-0058.
+	name: string & =~"^(fs|proc|sys|text|archive|job|subprocess|net)_[a-z][a-z0-9_]*$"
 
-	// description is shown verbatim in client tool listings; capped at 900 chars.
-	description: string & strings.MaxRunes(900)
+	// description is the thin one-liner shown verbatim in client tool listings.
+	// Capped at 100 chars per the ADR-0007 2026-05-22 amendment (MCP + skill
+	// synergy): no USE/DOES/ARGS/RETURNS/NEXT/AVOID labels; the full lookup
+	// reference lives in the companion substrate skill.
+	description: string & strings.MaxRunes(100)
 
 	// namespace is derived from the name prefix; kept explicit for query convenience.
 	namespace: #ToolNamespace

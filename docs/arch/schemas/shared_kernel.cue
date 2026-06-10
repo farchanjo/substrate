@@ -69,3 +69,13 @@ package schemas
 // Tiers are ordered weakest-to-strongest: portable < sse2 < sse42 < avx2 < avx512.
 // "neon" is the ARM equivalent of avx2.
 #SimdTier: "avx512" | "avx2" | "sse42" | "sse2" | "neon" | "portable"
+
+// #PageSize is the shared pagination value object enforced at the domain port
+// boundary per ADR-0060. The domain range is 1..=10000 with a default of 50.
+// Handler-level per-tool caps (e.g. 500 for fs.find/proc.list/text.search per
+// ADR-0008) clamp the requested value DOWN after this domain validation; they
+// never widen the range. Line- and record-oriented tools (subprocess.result,
+// subprocess.search, net.tcp_list/udp_list) use a default of 100 (the
+// PageSize::DEFAULT_PAGINATION associated constant) rather than 50, while still
+// honoring the same 1..=10000 domain bounds.
+#PageSize: int & >=1 & <=10000 | *50
