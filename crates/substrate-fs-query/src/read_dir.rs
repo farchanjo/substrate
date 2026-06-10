@@ -88,7 +88,17 @@ pub async fn handle_fs_read_dir(
     deps: &FsQueryDeps,
     _cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
-    let page_size = req.page_size.clamp(1, MAX_PAGE_SIZE);
+    // Reject an explicit `page_size` of 0 instead of silently clamping it to 1
+    // (ADR-0008 / ADR-0060): a zero page size is a caller error, not a request
+    // for a single entry. The upper bound is still clamped to MAX_PAGE_SIZE.
+    if req.page_size == 0 {
+        return Err(SubstrateError::InvalidArgument {
+            offending_field: "page_size".to_owned(),
+            reason: format!("page_size must be in [1, {MAX_PAGE_SIZE}]; got 0"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        });
+    }
+    let page_size = req.page_size.min(MAX_PAGE_SIZE);
     let skip_count: usize = if let Some(ref cursor_str) = req.page_cursor {
         decode_cursor(cursor_str)?
     } else {
@@ -358,5 +368,22 @@ mod tests {
             cursor.is_some(),
             "expected next_cursor for 5 entries paged at 2"
         );
+    }
+
+    /// Explicit `page_size = 0` must return `INVALID_ARGUMENT`, not be clamped
+    /// to 1 (ADR-0008 / ADR-0060).
+    #[tokio::test]
+    async fn read_dir_page_size_zero_returns_invalid_argument() {
+        let tmp = TempDir::new().unwrap();
+        let deps = make_deps();
+        let req = FsReadDirRequest {
+            path: tmp.path().to_string_lossy().into_owned(),
+            page_size: 0,
+            page_cursor: None,
+        };
+        let err = handle_fs_read_dir(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
     }
 }

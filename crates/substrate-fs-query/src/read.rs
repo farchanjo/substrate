@@ -186,11 +186,11 @@ pub async fn handle_fs_read(
             reason = "read_len is bounded by INLINE_MAX_BYTES (1 MiB) which fits in usize on all supported targets"
         )]
         let mut buf = vec![0u8; read_len as usize];
-        let n = f
-            .read_exact(&mut buf)
+        // `read_exact` fills the entire buffer or returns an error; the byte
+        // count it yields is always `buf.len()`, so no truncation is required.
+        f.read_exact(&mut buf)
             .await
             .map_err(|e| map_io_err(e, &req.path))?;
-        buf.truncate(n);
         buf
     };
 

@@ -145,11 +145,12 @@ pub async fn handle_fs_find(
         None => PageSize::default().get().min(FS_FIND_PAGE_SIZE_CAP),
     };
 
-    // Validate the cursor offset.
-    let skip_count: usize = if let Some(ref cursor_str) = req.page_cursor {
-        decode_cursor(cursor_str)?
-    } else {
-        0
+    // Decode the path-anchor cursor (ADR-0008). `None` starts from the root;
+    // `Some(anchor)` resumes immediately after the entry whose path equals
+    // `anchor` in the deterministic lexicographic walk order.
+    let anchor: Option<String> = match req.page_cursor {
+        Some(ref cursor_str) => Some(decode_cursor(cursor_str)?),
+        None => None,
     };
 
     // Parse modified_since filter.
@@ -257,13 +258,25 @@ pub async fn handle_fs_find(
 
     let max_depth = req.max_depth as usize;
     let cancel_clone = cancel.clone();
+    // Move the decoded anchor into the blocking walker; it is not needed again
+    // in the async scope.
+    let anchor_for_walk = anchor;
 
     let walker_handle = tokio::task::spawn_blocking(move || {
         let mut walker = WalkBuilder::new(jailed_root.as_path());
         walker
             .max_depth(Some(max_depth))
             .follow_links(false)
-            .hidden(false);
+            // An OS tool must list every file, including hidden and gitignored
+            // ones. `WalkBuilder` enables the .gitignore / .ignore / hidden
+            // filters by default, which would silently omit matching files.
+            // Disable the entire standard-filter set so the walk is exhaustive.
+            .standard_filters(false)
+            .hidden(false)
+            // Deterministic, lexicographically sorted walk order so the
+            // path-anchor cursor (ADR-0008) resumes from a fixed point across
+            // pages even as entries are created or removed between requests.
+            .sort_by_file_path(std::path::Path::cmp);
 
         for result in walker.build() {
             // Cancel-safety: check before each directory entry.
@@ -280,6 +293,15 @@ pub async fn handle_fs_find(
             };
 
             let path = entry.path();
+
+            // Path-anchor pagination (ADR-0008): skip every entry up to and
+            // including the previous page's anchor. Comparing on the full path
+            // string matches the order the cursor was minted in.
+            if let Some(ref anchor_path) = anchor_for_walk {
+                if path.to_string_lossy().as_ref() <= anchor_path.as_str() {
+                    continue;
+                }
+            }
 
             // Explicit symlink loop detection: `ignore::WalkBuilder` with
             // follow_links(false) does NOT detect cycles. For each symlink entry,
@@ -354,23 +376,29 @@ pub async fn handle_fs_find(
         }
     });
 
-    // Collect up to (skip_count + page_size + 1) entries to detect next page.
-    let mut all_entries: Vec<FindEntry> = Vec::new();
-    let target = skip_count + page_size as usize + 1;
+    // The walker already skips past the previous anchor, so collect at most
+    // (page_size + 1) entries: the extra entry signals that a next page exists.
+    // `saturating_add` guards against overflow instead of wrapping (release) or
+    // aborting (debug) — see ADR-0008.
+    let mut page_entries: Vec<FindEntry> = Vec::new();
+    let target = (page_size as usize).saturating_add(1);
 
     loop {
         tokio::select! {
             biased;
-            () = cancel.cancelled() => {
-                return Err(SubstrateError::Cancelled { correlation_id: None });
-            }
             entry = rx.recv() => {
                 match entry {
                     None => break,
-                    Some(Err(e)) => return Err(e),
+                    Some(Err(e)) => {
+                        // Drop the receiver and join the walker so the blocking
+                        // task is not leaked on the error path.
+                        drop(rx);
+                        let _ = walker_handle.await;
+                        return Err(e);
+                    }
                     Some(Ok(e)) => {
-                        all_entries.push(e);
-                        if all_entries.len() >= target {
+                        page_entries.push(e);
+                        if page_entries.len() >= target {
                             // Drop the receiver to signal the walker to stop.
                             drop(rx);
                             break;
@@ -378,21 +406,25 @@ pub async fn handle_fs_find(
                     }
                 }
             }
+            () = cancel.cancelled() => {
+                // Abort the blocking walker so its JoinHandle is not leaked
+                // when we early-return on cancellation (ADR-0037).
+                walker_handle.abort();
+                return Err(SubstrateError::Cancelled { correlation_id: None });
+            }
         }
     }
 
     // Await the blocking task to ensure OS resources are released.
     let _ = walker_handle.await;
 
-    let has_more = all_entries.len() > skip_count + page_size as usize;
-    let page: Vec<FindEntry> = all_entries
-        .into_iter()
-        .skip(skip_count)
-        .take(page_size as usize)
-        .collect();
+    let has_more = page_entries.len() > page_size as usize;
+    page_entries.truncate(page_size as usize);
+    let page = page_entries;
 
+    // ADR-0008: the next cursor anchors on the last returned entry's path.
     let next_cursor = if has_more {
-        Some(encode_cursor(skip_count + page_size as usize))
+        page.last().map(|last| encode_cursor(&last.path))
     } else {
         None
     };
@@ -448,12 +480,34 @@ fn walker_err_to_substrate(err: &ignore::Error) -> SubstrateError {
 
 // ---- Cursor helpers ---------------------------------------------------------
 
-fn encode_cursor(offset: usize) -> String {
+// ADR-0008: cursors are stable + opaque. `fs.find` uses a *path-anchor* cursor:
+// the cursor encodes the lexicographic path of the last entry returned on the
+// previous page. The next page re-walks the tree in a deterministic (sorted)
+// order and skips every entry whose path is lexicographically less than or
+// equal to the anchor, then returns the following `page_size` entries.
+//
+// Anchoring on the entry path (rather than a positional offset into a
+// non-deterministic walk order) keeps pagination consistent when files are
+// created, deleted, or renamed between page requests: a positional offset
+// would shift every subsequent entry, whereas a path anchor resumes from a
+// fixed point in the lexical ordering.
+
+/// Encodes a path-anchor cursor as base64-opaque text (ADR-0008).
+///
+/// `anchor` is the lexicographic path of the last entry returned on the
+/// current page; the next page resumes immediately after it.
+fn encode_cursor(anchor: &str) -> String {
     use base64_simd::STANDARD;
-    STANDARD.encode_to_string(offset.to_le_bytes().as_ref())
+    STANDARD.encode_to_string(anchor.as_bytes())
 }
 
-fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
+/// Decodes a path-anchor cursor produced by [`encode_cursor`].
+///
+/// # Errors
+///
+/// Returns [`SubstrateError::InvalidArgument`] when the cursor is not valid
+/// base64 or does not decode to valid UTF-8.
+fn decode_cursor(cursor: &str) -> SubstrateResult<String> {
     use base64_simd::STANDARD;
     let bytes =
         STANDARD
@@ -463,14 +517,11 @@ fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
                 reason: "malformed cursor (invalid base64)".to_owned(),
                 correlation_id: None,
             })?;
-    let arr: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| SubstrateError::InvalidArgument {
-            offending_field: "page_cursor".to_owned(),
-            reason: "malformed cursor (wrong length)".to_owned(),
-            correlation_id: None,
-        })?;
-    Ok(usize::from_le_bytes(arr))
+    String::from_utf8(bytes).map_err(|_| SubstrateError::InvalidArgument {
+        offending_field: "page_cursor".to_owned(),
+        reason: "malformed cursor (anchor is not valid UTF-8)".to_owned(),
+        correlation_id: None,
+    })
 }
 
 fn parse_modified_since(s: &str) -> Result<u64, String> {
@@ -643,9 +694,10 @@ mod tests {
 
     #[tokio::test]
     async fn cursor_round_trip() {
-        let encoded = encode_cursor(42);
+        let anchor = "/tmp/some/deep/path/file.txt";
+        let encoded = encode_cursor(anchor);
         let decoded = decode_cursor(&encoded).expect("decode");
-        assert_eq!(decoded, 42);
+        assert_eq!(decoded, anchor);
     }
 
     #[tokio::test]
