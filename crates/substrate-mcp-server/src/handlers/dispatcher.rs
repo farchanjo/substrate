@@ -49,7 +49,7 @@ use tracing::instrument;
 
 use substrate_config::RuntimeConfig;
 use substrate_domain::{
-    ClientId, JailedPath, JobBucket, JobRegistryPort, SubstrateError, SubstrateResult,
+    ClientId, JailedPath, JobBucket, JobRegistryPort, PageSize, SubstrateError, SubstrateResult,
     ports::job_registry::JobSubmitRequest,
     value_objects::{IdempotencyKey, JobId},
 };
@@ -1372,7 +1372,12 @@ impl ToolDispatcher {
             Some(ref token) => Some(decode_page_cursor(token)?),
             None => None,
         };
-        let page = self.jobs.list(&client_id, cursor).await?;
+        // ADR-0060: `job_list` exposes no `page_size` on the wire; substitute the
+        // domain default (50). The registry caps the effective page at 500.
+        let page = self
+            .jobs
+            .list(&client_id, cursor, PageSize::default())
+            .await?;
         Ok(DispatchedResponse {
             content: format!("Listed {} job(s).", page.jobs.len()),
             structured_content: serde_json::json!({

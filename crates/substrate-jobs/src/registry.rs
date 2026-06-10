@@ -32,12 +32,17 @@ use substrate_domain::jobs::state::JobState;
 use substrate_domain::ports::job_registry::{
     JobPage, JobRegistryPort, JobResult, JobSubmitRequest,
 };
+use substrate_domain::value_objects::pagination::PageSize;
 use substrate_domain::value_objects::{ClientId, JobId, PageCursor};
 
 use crate::entry_state::JobSlot;
 use crate::notifier::ProgressNotifier;
 use crate::quota::QuotaGuard;
 use crate::ttl_gc;
+
+/// Handler-level page-size cap for `job_list` per ADR-0008 (max 500), applied
+/// after domain [`PageSize`] validation (which permits up to `PageSize::MAX`).
+const JOB_LIST_PAGE_SIZE_CAP: usize = 500;
 
 /// Opaque deduplication key for idempotent job submission.
 ///
@@ -565,14 +570,17 @@ impl JobRegistryPort for InMemoryJobRegistry {
     /// Returns a paginated list of jobs visible to the requesting client.
     ///
     /// Cursor format: base64url-encoded JSON `{"offset": N}` (opaque to callers).
-    /// Page size default 50, max 500 per ADR-0008.
+    /// `page_size` is a validated [`PageSize`] (ADR-0060); the effective page is
+    /// capped at 500 per ADR-0008.
     #[instrument(skip(self), fields(client_id = %client_id))]
     async fn list(
         &self,
         client_id: &ClientId,
         cursor: Option<PageCursor>,
+        page_size: PageSize,
     ) -> SubstrateResult<JobPage> {
-        let page_size: usize = 50;
+        // ADR-0008 handler cap: clamp the validated PageSize to 500 records.
+        let page_size = (page_size.get() as usize).min(JOB_LIST_PAGE_SIZE_CAP);
 
         // Decode cursor to a numeric offset.
         let offset = if let Some(c) = cursor {
@@ -781,7 +789,7 @@ mod tests {
         }
 
         let page = registry
-            .list(&client, None)
+            .list(&client, None, PageSize::default())
             .await
             .expect("list must succeed");
         let listed = page
@@ -1136,7 +1144,11 @@ mod ttl_tests {
 
         // After eviction: list must not contain the evicted job.
         let page = registry
-            .list(&client_id, None)
+            .list(
+                &client_id,
+                None,
+                substrate_domain::value_objects::pagination::PageSize::default(),
+            )
             .await
             .expect("list must succeed after GC");
         assert!(

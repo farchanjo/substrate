@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{
-    Capabilities, ClientId, JobState, SubstrateError, jobs::entry::JobEntry,
+    Capabilities, ClientId, JobState, PageSize, SubstrateError, jobs::entry::JobEntry,
     ports::job_registry::JobResult, value_objects::JobId,
 };
 
@@ -1543,7 +1543,14 @@ impl ServerHandler for SubstrateService {
                 },
                 None => None,
             };
-            match self.dispatcher.jobs.list(&client_id, cursor).await {
+            // ADR-0060: `tasks/list` exposes no `page_size` on the wire; substitute
+            // the domain default (50). The registry caps the effective page at 500.
+            match self
+                .dispatcher
+                .jobs
+                .list(&client_id, cursor, PageSize::default())
+                .await
+            {
                 Ok(page) => {
                     let tasks: Vec<Task> = page.jobs.iter().map(Self::job_entry_to_task).collect();
                     // `ListTasksResult` is #[non_exhaustive]; use the named

@@ -3,19 +3,21 @@
 //! `text.search` is Bucket-B auto-mode per ADR-0040: results below configured
 //! byte/match thresholds are returned inline; results above are promoted to an
 //! async job. Within an inline result set, cursor-based pagination per ADR-0008
-//! is used when the match count exceeds [`DEFAULT_PAGE_SIZE`].
+//! is used when the match count exceeds the effective [`PageSize`]
+//! (default 50, max 500).
 //!
 //! Cursors are opaque to the caller. Internally they encode the 0-based
 //! match index from which the next page starts, base64-encoded as a decimal
 //! ASCII string. This matches the `PageCursor` semantics in `substrate-domain`.
 
-use substrate_domain::{SubstrateError, SubstrateResult};
+use substrate_domain::{PageSize, SubstrateResult};
 
-/// Default number of match records returned per page.
-pub const DEFAULT_PAGE_SIZE: usize = 50;
-
-/// Maximum allowed page size requested by the caller.
-pub const MAX_PAGE_SIZE: usize = 500;
+/// Maximum allowed page size requested by the caller per ADR-0008.
+///
+/// Applied at the handler boundary after domain [`PageSize`] validation (which
+/// permits up to `PageSize::MAX` = 10 000). `text.search` caps the effective
+/// page at 500 records.
+pub const MAX_PAGE_SIZE: u32 = 500;
 
 /// A single line-match record produced by `text.search`.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -71,31 +73,30 @@ pub fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
 ///
 /// Returns a [`MatchPage`] whose `next_cursor` is `Some` when more pages remain.
 ///
+/// `page_size` is a validated [`PageSize`] (ADR-0060): it is guaranteed to be
+/// `>= 1`, so the historical zero-page infinite-loop hazard (fix #4, text-oom
+/// lane) is now eliminated by construction at the type level. The handler caps
+/// the effective `PageSize` at [`MAX_PAGE_SIZE`] (500) before calling this.
+///
 /// # Errors
 ///
-/// Returns `SUBSTRATE_INVALID_ARGUMENT` when `page_size` is zero.
-/// A zero page-size would produce an empty records slice on every call while
-/// always emitting a `next_cursor`, creating an infinite pagination loop for
-/// any caller that pages until `next_cursor` is `None` (fix #4, text-oom lane).
+/// Currently infallible for a valid `PageSize`, but returns `SubstrateResult`
+/// to preserve the call-site signature and allow future validation.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "public API takes ownership to allow callers to move the full match vec; changing to slice would break the call site idiom"
+)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Result return preserved for call-site stability and forward-compat; PageSize already guarantees non-zero at the type level"
 )]
 pub fn paginate(
     all_matches: Vec<MatchRecord>,
     skipped_binary_count: u64,
     cursor_offset: usize,
-    page_size: usize,
+    page_size: PageSize,
 ) -> SubstrateResult<MatchPage> {
-    if page_size == 0 {
-        return Err(SubstrateError::InvalidArgument {
-            offending_field: "page_size".to_owned(),
-            reason:
-                "page_size must be at least 1; a value of 0 produces an infinite pagination loop"
-                    .to_owned(),
-            correlation_id: None,
-        });
-    }
+    let page_size = page_size.get() as usize;
 
     let total = all_matches.len();
     let start = cursor_offset.min(total);
@@ -142,7 +143,7 @@ mod tests {
     #[test]
     fn first_page_has_no_next_cursor_when_within_size() {
         let records = make_records(10);
-        let page = paginate(records, 0, 0, 50).expect("valid page_size");
+        let page = paginate(records, 0, 0, PageSize::new_static(50)).expect("valid page_size");
         assert_eq!(page.records.len(), 10);
         assert!(page.next_cursor.is_none());
         assert_eq!(page.total_match_count, 10);
@@ -151,7 +152,7 @@ mod tests {
     #[test]
     fn first_page_returns_next_cursor_when_more_exist() {
         let records = make_records(100);
-        let page = paginate(records, 0, 0, 50).expect("valid page_size");
+        let page = paginate(records, 0, 0, PageSize::new_static(50)).expect("valid page_size");
         assert_eq!(page.records.len(), 50);
         assert_eq!(page.next_cursor, Some("50".to_owned()));
     }
@@ -159,19 +160,19 @@ mod tests {
     #[test]
     fn second_page_exhausts_remaining() {
         let records = make_records(75);
-        let page = paginate(records, 0, 50, 50).expect("valid page_size");
+        let page = paginate(records, 0, 50, PageSize::new_static(50)).expect("valid page_size");
         assert_eq!(page.records.len(), 25);
         assert!(page.next_cursor.is_none());
     }
 
     #[test]
-    fn zero_page_size_returns_invalid_argument() {
-        let records = make_records(10);
-        let err = paginate(records, 0, 0, 0).unwrap_err();
-        assert_eq!(
-            err.code(),
-            "SUBSTRATE_INVALID_ARGUMENT",
-            "page_size == 0 must return SUBSTRATE_INVALID_ARGUMENT"
+    fn zero_page_size_is_unrepresentable() {
+        // ADR-0060: `PageSize` cannot hold 0; `try_from(0)` is rejected at the
+        // boundary, so `paginate` can no longer receive a zero page size and the
+        // historical infinite-loop hazard is eliminated at the type level.
+        assert!(
+            PageSize::try_from(0_u32).is_err(),
+            "page_size == 0 must be rejected before reaching paginate"
         );
     }
 

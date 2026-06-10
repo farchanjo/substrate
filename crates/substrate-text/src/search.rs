@@ -34,11 +34,11 @@ use ignore::WalkBuilder;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use substrate_domain::{SubstrateError, SubstrateResult};
+use substrate_domain::{PageSize, SubstrateError, SubstrateResult};
 
 use crate::binary_detect;
 use crate::hints_helpers;
-use crate::pagination::{self, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MatchRecord};
+use crate::pagination::{self, MAX_PAGE_SIZE, MatchRecord};
 use crate::response::{TextDeps, ToolResponse};
 
 /// Number of lines processed between cancellation token checks.
@@ -65,8 +65,13 @@ pub struct SearchParams {
     /// Regular expression pattern to match against each line.
     pub pattern: String,
     /// Maximum number of results to return per page (default 50, max 500).
+    ///
+    /// `Option<u32>` on the wire (ADR-0060): an absent field applies
+    /// [`PageSize::default`]; an explicit `0` or a value above
+    /// [`PageSize::MAX`] returns `SUBSTRATE_INVALID_ARGUMENT`. The validated
+    /// [`PageSize`] is capped at [`MAX_PAGE_SIZE`] (500) before pagination.
     #[serde(default)]
-    pub page_size: Option<usize>,
+    pub page_size: Option<u32>,
     /// Opaque cursor from a previous `text.search` response for pagination.
     #[serde(default)]
     pub cursor: Option<String>,
@@ -90,16 +95,16 @@ pub async fn handle_text_search(
     deps: Arc<TextDeps>,
     cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
-    // Guard fix #4: page_size == 0 would produce an empty page with a
-    // `next_cursor` that never advances, creating an infinite pagination loop.
-    // Treat 0 as "use default" to match user intent (asking for all defaults).
-    let page_size = {
-        let raw = params
-            .page_size
-            .unwrap_or(DEFAULT_PAGE_SIZE)
-            .min(MAX_PAGE_SIZE);
-        if raw == 0 { DEFAULT_PAGE_SIZE } else { raw }
+    // ADR-0060: convert Option<u32> → PageSize at the handler boundary, then apply
+    // the ADR-0008 handler cap (MAX_PAGE_SIZE = 500). Absent field →
+    // PageSize::default() (50); explicit 0 or > PageSize::MAX →
+    // SUBSTRATE_INVALID_ARGUMENT. A validated PageSize is always >= 1, so the
+    // historical zero-page infinite-loop hazard (fix #4) is eliminated by type.
+    let page_size = match params.page_size {
+        Some(n) => PageSize::try_from(n)?.get().min(MAX_PAGE_SIZE),
+        None => PageSize::default().get().min(MAX_PAGE_SIZE),
     };
+    let page_size = PageSize::try_from(page_size)?;
 
     let cursor_offset = match &params.cursor {
         Some(c) => pagination::decode_cursor(c)?,
@@ -147,7 +152,9 @@ pub async fn handle_text_search(
     // is not.  Using `usize::MAX` as a fallback for the degenerate case where
     // `cursor_offset + page_size` would overflow is safe because the scan exits
     // early on match, so the allocator never sees the full count.
-    let max_matches = cursor_offset.saturating_add(page_size).saturating_add(1);
+    let max_matches = cursor_offset
+        .saturating_add(page_size.get() as usize)
+        .saturating_add(1);
 
     // Perform the blocking file scan on a blocking thread.
     // When the path is a directory, walk it recursively and scan each file.
@@ -187,7 +194,7 @@ pub async fn handle_text_search(
         "total_match_count": page.total_match_count,
         "skipped_binary_count": page.skipped_binary_count,
         "next_cursor": page.next_cursor,
-        "page_size": page_size,
+        "page_size": page_size.get(),
     });
 
     let hints = hints_helpers::build_search_hints(simd_tier, has_more);
