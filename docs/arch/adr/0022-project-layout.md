@@ -59,6 +59,7 @@ mcp-os/
     substrate-system-info/    # system-info bounded context
     substrate-text/           # text-processing bounded context
     substrate-archive/        # archive bounded context
+    substrate-network-info/   # network-info bounded context (ADR-0058)
     substrate-jobs/           # async job control-plane adapter (ADR-0040)
     substrate-signal-sys/     # platform shim: SIGPIPE disposition + signal safety (ADR-0032)
     substrate-mcp-server/     # binary: composition root, MCP transport
