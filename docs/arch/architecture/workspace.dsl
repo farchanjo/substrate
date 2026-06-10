@@ -82,6 +82,11 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             subprocessAdapter = container "substrate-subprocess" "Adapter for child process spawning: validates binary allowlist, env filtering, cascading kill, stdout/stderr stream multiplex (ADR-0054), and orphan prevention (PR_SET_PDEATHSIG / watchdog pipe, ADR-0053)." "Rust crate, opt-in (feature subprocess)" {
                 tags "Adapter" "OptionalFeature"
             }
+
+            // ADR-0058: network-info bounded context — net.tcp_list, net.udp_list, net.tcp_stats, net.connection_count.
+            networkInfo = container "substrate-network-info" "Adapter for network socket introspection: lists TCP/UDP sockets, aggregates per-connection stats, and resolves owner PIDs from kernel PCB tables (procfs on Linux, pcblist_n sysctl on macOS)." "Rust" {
+                tags "Adapter"
+            }
         }
 
         # External relationships
@@ -141,6 +146,11 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
         subprocessAdapter -> domain "Implements SubprocessPort"
         subprocessAdapter -> localOs "Spawns and signals child process groups on"
         subprocessAdapter -> mcpServer "Forwards stdout/stderr stream chunks as notifications/progress (ADR-0054 dispatcher task)"
+
+        # Network-info adapter relationships (ADR-0058)
+        mcpServer -> networkInfo "Routes network-info tool calls to"
+        networkInfo -> domain "Implements NetworkInfoPort from"
+        networkInfo -> localOs "Reads TCP/UDP socket tables from"
     }
 
     views {

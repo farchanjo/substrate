@@ -79,6 +79,12 @@ Fail(j) ==
     /\ state'    = [state EXCEPT ![j] = "Failed"]
     /\ UNCHANGED progress
 
+\* Client cancels a Pending job before worker pickup (ADR-0040 Pending→Cancelled edge).
+CancelPending(j) ==
+    /\ state[j] = "Pending"
+    /\ state'    = [state EXCEPT ![j] = "Cancelled"]
+    /\ UNCHANGED progress
+
 \* Client or shutdown cancels a Running job.
 Cancel(j) ==
     /\ state[j] = "Running"
@@ -106,6 +112,7 @@ Next ==
         \/ Tick(j)
         \/ Succeed(j)
         \/ Fail(j)
+        \/ CancelPending(j)
         \/ Cancel(j)
         \/ Timeout(j)
         \/ CancelTerminal(j)
