@@ -106,11 +106,18 @@ impl StreamChunkObserver for RmcpStreamNotifier {
 
         let chunk_base64 = base64_encode(&chunk.chunk);
         let chunk_bytes = chunk.chunk.len();
+        // ADR-0054 stream-chunk wire shape (packed inside `message`):
+        //   job_id, job_state="Running", stream, chunk_base64, seq, chunk_bytes.
+        // `seq` is the per-job per-stream monotonic counter (was previously emitted
+        // under the non-spec name `chunk_seq`). `byte_offset` is retained as an
+        // additive reassembly aid.
         let payload = json!({
+            "job_id": chunk.job_id,
+            "job_state": "Running",
             "stream": chunk.stream,
             "chunk_base64": chunk_base64,
+            "seq": chunk.seq,
             "chunk_bytes": chunk_bytes,
-            "chunk_seq": chunk.seq,
             "byte_offset": chunk.byte_offset,
         });
 
@@ -139,10 +146,23 @@ impl StreamChunkObserver for RmcpStreamNotifier {
             return;
         };
 
+        // ADR-0054 terminal-notification wire shape (packed inside `message`):
+        //   job_id, job_state=<terminal>, exit_code (i32|null), chunk_base64="",
+        //   chunk_bytes=0, seq (beyond all previous chunks).
+        //
+        // The `StreamChunkObserver::on_terminal` trait surface carries neither the
+        // child `exit_code` nor the terminal `seq`, so both keys are emitted as
+        // JSON `null` (ADR-0054 explicitly permits `exit_code: null` for killed or
+        // pre-exit-cancelled processes). The authoritative `exit_code` is always
+        // available via `subprocess.result`. Keys are present so clients can parse
+        // the terminal frame without a shape mismatch.
         let payload = json!({
+            "job_id": job_id,
+            "job_state": state,
+            "exit_code": null,
             "chunk_base64": "",
             "chunk_bytes": 0,
-            "job_state": state,
+            "seq": null,
         });
 
         let params = ProgressNotificationParam {

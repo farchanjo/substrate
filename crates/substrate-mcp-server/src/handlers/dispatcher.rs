@@ -1351,28 +1351,33 @@ impl ToolDispatcher {
         args: Value,
         client_id: ClientId,
     ) -> SubstrateResult<DispatchedResponse> {
+        // ADR-0008: the wire cursor is a base64url-opaque STRING, not the raw
+        // `Vec<u8>` array that `PageCursor`'s derived `Deserialize` would expect.
+        // Accept `cursor: Option<String>` here and decode it to `PageCursor`
+        // bytes so that the token we emit in `next_cursor` round-trips back into
+        // a follow-up `job_list` call. (Previously the inbound deserializer
+        // expected a JSON byte array while the response emitted a hex string, so
+        // every page > 1 failed with SUBSTRATE_INVALID_ARGUMENT.)
         #[derive(serde::Deserialize, Default)]
         struct Req {
             #[serde(default)]
-            cursor: Option<substrate_domain::PageCursor>,
+            cursor: Option<String>,
         }
         let req: Req = if args.is_null() || args == Value::Object(serde_json::Map::default()) {
             Req::default()
         } else {
             parse(&args)?
         };
-        let page = self.jobs.list(&client_id, req.cursor).await?;
+        let cursor = match req.cursor {
+            Some(ref token) => Some(decode_page_cursor(token)?),
+            None => None,
+        };
+        let page = self.jobs.list(&client_id, cursor).await?;
         Ok(DispatchedResponse {
             content: format!("Listed {} job(s).", page.jobs.len()),
             structured_content: serde_json::json!({
                 "jobs": page.jobs.iter().map(|e| serde_json::to_value(e).unwrap_or(Value::Null)).collect::<Vec<_>>(),
-                "next_cursor": page.next_cursor.as_ref().map(|c| {
-                    c.as_bytes().iter().fold(String::new(), |mut s, b| {
-                        use std::fmt::Write as _;
-                        let _ = write!(s, "{b:02x}");
-                        s
-                    })
-                }),
+                "next_cursor": page.next_cursor.as_ref().map(|c| encode_page_cursor(c.as_bytes())),
             }),
             hints: substrate_domain::Hints::default(),
         })
@@ -1543,4 +1548,157 @@ fn extract_idempotency_key(args: &Value) -> Option<IdempotencyKey> {
     args.get("idempotency_key")
         .and_then(Value::as_str)
         .and_then(|s| IdempotencyKey::parse_crockford(s).ok())
+}
+
+// ---- base64url-opaque pagination cursor (ADR-0008) --------------------------
+
+/// base64url alphabet (RFC 4648 §5, URL- and filename-safe, no padding).
+const BASE64URL_ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Encodes raw `PageCursor` bytes into a base64url-opaque wire token (ADR-0008).
+///
+/// Padding is omitted (URL-safe). The output round-trips through
+/// [`decode_page_cursor`] so a `next_cursor` returned to a client can be passed
+/// straight back into a follow-up `job_list` call.
+///
+/// Shared with `service.rs::list_tasks` so the `tasks/list` and `job_list`
+/// control planes emit byte-identical opaque cursors.
+pub(crate) fn encode_page_cursor(bytes: &[u8]) -> String {
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let combined = (b0 << 16) | (b1 << 8) | b2;
+        out.push(BASE64URL_ALPHA[((combined >> 18) & 0x3F) as usize]);
+        out.push(BASE64URL_ALPHA[((combined >> 12) & 0x3F) as usize]);
+        if chunk.len() >= 2 {
+            out.push(BASE64URL_ALPHA[((combined >> 6) & 0x3F) as usize]);
+        }
+        if chunk.len() == 3 {
+            out.push(BASE64URL_ALPHA[(combined & 0x3F) as usize]);
+        }
+    }
+    // SAFETY: every pushed byte is an ASCII char from BASE64URL_ALPHA.
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Decodes a base64url-opaque wire token back into a [`substrate_domain::PageCursor`].
+///
+/// Accepts unpadded base64url (the shape [`encode_page_cursor`] emits) and
+/// tolerates trailing `=` padding. Returns `SUBSTRATE_INVALID_ARGUMENT` when the
+/// token contains characters outside the base64url alphabet or has an invalid
+/// length, so a malformed client-supplied cursor surfaces a clear error.
+///
+/// Shared with `service.rs::list_tasks` for symmetric cursor round-tripping.
+pub(crate) fn decode_page_cursor(token: &str) -> SubstrateResult<substrate_domain::PageCursor> {
+    let bytes = decode_base64url(token).ok_or_else(|| SubstrateError::InvalidArgument {
+        offending_field: "cursor".to_owned(),
+        reason: "malformed cursor (invalid base64url)".to_owned(),
+        correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+    })?;
+    Ok(substrate_domain::PageCursor::from_bytes(bytes))
+}
+
+/// Maps a base64url ASCII character to its 6-bit value, or `None` when invalid.
+fn base64url_value(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'-' => Some(62),
+        b'_' => Some(63),
+        _ => None,
+    }
+}
+
+/// Decodes an unpadded (or `=`-padded) base64url string into raw bytes.
+///
+/// Returns `None` when the input contains a non-alphabet character or has an
+/// invalid residual length (a single leftover sextet cannot encode a byte).
+fn decode_base64url(token: &str) -> Option<Vec<u8>> {
+    let trimmed = token.trim_end_matches('=');
+    let mut out = Vec::with_capacity(trimmed.len() / 4 * 3 + 2);
+    let mut chunk = [0_u8; 4];
+    for group in trimmed.as_bytes().chunks(4) {
+        if group.len() == 1 {
+            // A lone sextet carries no full byte — reject as malformed.
+            return None;
+        }
+        for (slot, &c) in chunk.iter_mut().zip(group.iter()) {
+            *slot = base64url_value(c)?;
+        }
+        let combined = (u32::from(chunk[0]) << 18)
+            | (u32::from(chunk[1]) << 12)
+            | (u32::from(chunk[2]) << 6)
+            | u32::from(chunk[3]);
+        out.push(((combined >> 16) & 0xFF) as u8);
+        if group.len() >= 3 {
+            out.push(((combined >> 8) & 0xFF) as u8);
+        }
+        if group.len() == 4 {
+            out.push((combined & 0xFF) as u8);
+        }
+        chunk = [0_u8; 4];
+    }
+    Some(out)
+}
+
+// ---- Unit tests -------------------------------------------------------------
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics are the correct failure mode"
+)]
+mod tests {
+    use super::*;
+
+    /// The wire cursor must survive an encode → decode round-trip so that a
+    /// `next_cursor` returned to a client resumes the next page (ADR-0008).
+    #[test]
+    fn page_cursor_round_trips_through_base64url() {
+        // Mirrors the raw payload `substrate-jobs::encode_cursor` emits.
+        let payload = br#"{"offset":50}"#;
+        let token = encode_page_cursor(payload);
+        // Opaque token must be URL-safe (no '+', '/', or '=' padding).
+        assert!(
+            !token.contains('+') && !token.contains('/') && !token.contains('='),
+            "cursor token must be unpadded base64url, got: {token}"
+        );
+        let decoded = decode_page_cursor(&token).expect("valid token decodes");
+        assert_eq!(
+            decoded.as_bytes(),
+            payload,
+            "decoded cursor bytes must equal the original payload"
+        );
+    }
+
+    /// All three residual lengths (0, 1, 2 trailing bytes) must round-trip.
+    #[test]
+    fn base64url_handles_every_residual_length() {
+        for payload in [&b""[..], b"a", b"ab", b"abc", b"abcd", b"abcde"] {
+            let token = encode_page_cursor(payload);
+            let decoded = decode_base64url(&token).expect("round-trip decode");
+            assert_eq!(decoded, payload, "residual-length round-trip failed");
+        }
+    }
+
+    /// A token with characters outside the base64url alphabet is rejected with
+    /// SUBSTRATE_INVALID_ARGUMENT rather than silently decoding to garbage.
+    #[test]
+    fn malformed_cursor_returns_invalid_argument() {
+        let err = decode_page_cursor("not base64url!!").expect_err("must reject");
+        assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
+    }
+
+    /// Padded base64url input (trailing '=') is tolerated on decode.
+    #[test]
+    fn padded_base64url_is_tolerated() {
+        // "ab" → "YWI" unpadded; the padded form "YWI=" must still decode.
+        let decoded = decode_base64url("YWI=").expect("padded decode");
+        assert_eq!(decoded, b"ab");
+    }
 }

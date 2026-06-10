@@ -66,12 +66,65 @@ impl CancelSignal for NoCancel {
 
 // ---- Error helpers ----------------------------------------------------------
 
-/// Maps a [`SubprocessError`] to a [`SubstrateError`] carrying the
-/// `SUBSTRATE_INTERNAL_ERROR` code and a recovery hint per ADR-0010.
+/// Generates a fresh UUIDv7 correlation id for an outbound error envelope.
+fn new_correlation_id() -> uuid::Uuid {
+    uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
+}
+
+/// Maps an ADR-0052 [`SubprocessError`] to the most specific [`SubstrateError`]
+/// variant so the wire envelope carries the correct stable code instead of
+/// collapsing everything to `SUBSTRATE_INTERNAL_ERROR`.
+///
+/// Where the base taxonomy (ADR-0010) exposes a matching code the variant maps
+/// directly — `CwdOutsideAllowlist` → `PathOutsideAllowlist`, `QuotaExceeded` →
+/// `QuotaExceeded`, `Timeout` → `Timeout`, `InvalidRequest` → `InvalidArgument`,
+/// `ElicitationRequired` → `ConfirmationRequired`, `Killed` → `Cancelled`. For
+/// subprocess-only codes that have no base-taxonomy variant
+/// (`SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED`, `..._ENV_BANNED`, `..._SPAWN_FAILED`,
+/// `SUBSTRATE_STREAM_CHUNK_DROPPED`, `SUBSTRATE_INVALID_STATE_TRANSITION`) the
+/// closest base variant is used and the authoritative subprocess code string is
+/// preserved verbatim in the reason via `[<code>]` so it is never lost.
 fn subprocess_err(e: &SubprocessError) -> SubstrateError {
-    SubstrateError::InternalError {
-        reason: e.to_string(),
-        correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+    let correlation_id = Some(new_correlation_id());
+    let reason = format!("[{}] {e}", e.code());
+    match e {
+        SubprocessError::CwdOutsideAllowlist { path } => SubstrateError::PathOutsideAllowlist {
+            path: path.clone(),
+            correlation_id,
+        },
+        SubprocessError::QuotaExceeded { .. } => SubstrateError::QuotaExceeded {
+            detail: reason,
+            correlation_id,
+        },
+        SubprocessError::Timeout { secs } => SubstrateError::Timeout {
+            elapsed_ms: u64::from(*secs).saturating_mul(1_000),
+            correlation_id,
+        },
+        SubprocessError::Killed => SubstrateError::Cancelled { correlation_id },
+        SubprocessError::ElicitationRequired { .. } => {
+            SubstrateError::ConfirmationRequired { correlation_id }
+        },
+        SubprocessError::InvalidRequest { msg } => SubstrateError::InvalidArgument {
+            offending_field: "arguments".to_owned(),
+            reason: msg.clone(),
+            correlation_id,
+        },
+        SubprocessError::BinaryNotAllowed { .. } => SubstrateError::InvalidArgument {
+            offending_field: "binary_path".to_owned(),
+            reason,
+            correlation_id,
+        },
+        SubprocessError::EnvBanned { .. } => SubstrateError::InvalidArgument {
+            offending_field: "env_override".to_owned(),
+            reason,
+            correlation_id,
+        },
+        SubprocessError::SpawnFailed { .. }
+        | SubprocessError::StreamChunkDropped { .. }
+        | SubprocessError::InvalidStateTransition { .. } => SubstrateError::InternalError {
+            reason,
+            correlation_id,
+        },
     }
 }
 
@@ -314,6 +367,20 @@ pub(crate) async fn handle_subprocess_result(
             reason: e.to_string(),
             correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         })?;
+
+    // Line pagination reads the stdout/stderr aggregates; requesting pagination
+    // with `include_aggregates=false` would silently paginate over an empty
+    // aggregate and return zero lines. Reject the contradictory combination
+    // up-front so the caller gets a clear SUBSTRATE_INVALID_ARGUMENT instead.
+    if req.pagination.is_some() && !req.include_aggregates {
+        return Err(SubstrateError::InvalidArgument {
+            offending_field: "include_aggregates".to_owned(),
+            reason: "pagination requires include_aggregates=true; \
+                     line pagination operates over the stdout/stderr aggregates"
+                .to_owned(),
+            correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
+        });
+    }
 
     let effective_wait_ms = req.wait_ms.unwrap_or(default_wait_ms);
     let result = port
@@ -564,13 +631,19 @@ pub(crate) async fn handle_subprocess_signal(
 // ---- Unit tests -------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics are the correct failure mode"
+)]
 mod tests {
     use std::sync::Arc;
 
     use time::OffsetDateTime;
 
     use substrate_domain::{
-        SubstrateError, SubstrateResult,
+        SubstrateResult,
         ports::subprocess::{
             CancelSignal, SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName,
         },

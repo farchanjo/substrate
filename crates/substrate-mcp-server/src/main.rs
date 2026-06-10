@@ -56,20 +56,13 @@ fn emit_startup_error(code: &str, message: &str, recovery_hint: &str, details: &
     // ADR-0036 requires a UUIDv7 correlation_id in the startup-error envelope.
     let correlation_id = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)).to_string();
 
-    // ISO 8601 UTC timestamp (seconds precision — milliseconds not needed here).
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let timestamp = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        1970 + secs / 31_557_600,
-        (secs % 31_557_600 / 2_628_000) + 1,
-        (secs % 2_628_000 / 86_400) + 1,
-        (secs % 86_400) / 3_600,
-        (secs % 3_600) / 60,
-        secs % 60,
-    );
+    // RFC 3339 / ISO 8601 UTC timestamp via the `time` crate. The previous
+    // hand-rolled arithmetic approximated months as fixed 30.4-day blocks and
+    // years as 365.25-day blocks, drifting the rendered date by days to weeks.
+    // `OffsetDateTime` + `Rfc3339` is calendar-correct.
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned());
 
     // Clamp recovery_hint to ≤ 150 chars per ADR-0036 field definition.
     let hint = if recovery_hint.len() > 150 {

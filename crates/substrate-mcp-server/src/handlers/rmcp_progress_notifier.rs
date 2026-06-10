@@ -67,6 +67,13 @@ impl RmcpPeerNotifier {
     /// Used by sibling observers (e.g. [`RmcpStreamNotifier`]) that share the
     /// same late-bound peer slot but emit distinct payload shapes.
     #[must_use]
+    #[cfg_attr(
+        not(feature = "subprocess"),
+        allow(
+            dead_code,
+            reason = "only the subprocess-gated stream notifier calls this"
+        )
+    )]
     pub(crate) fn peer_handle(&self) -> Option<Arc<Peer<RoleServer>>> {
         self.peer.load_full()
     }
