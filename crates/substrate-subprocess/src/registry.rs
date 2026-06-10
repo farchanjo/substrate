@@ -546,7 +546,8 @@ impl SubprocessPort for SubprocessRegistry {
         // A literal PathBuf equality check is insufficient — an allowlisted symlink
         // would resolve to an arbitrary target. resolve_binary_allowed canonicalizes
         // both sides and verifies the resolved target is a regular file.
-        resolve_binary_allowed(&self.binary_allowlist, &req.binary_path).await?;
+        let resolved_binary =
+            resolve_binary_allowed(&self.binary_allowlist, &req.binary_path).await?;
 
         // Layer: cwd within path allowlist (Layer 1, ADR-0004).
         //
@@ -603,6 +604,8 @@ impl SubprocessPort for SubprocessRegistry {
         let handle = Arc::new(
             spawn_supervised(
                 &req,
+                &resolved_binary,
+                &canonical_cwd,
                 self.root_cancel.clone(),
                 self.aggregate_buffer_bytes,
                 self.tmp_root.as_deref(),
@@ -1529,7 +1532,7 @@ where
 async fn resolve_binary_allowed(
     allowlist: &BinaryAllowlist,
     binary_path: &std::path::Path,
-) -> Result<(), SubprocessError> {
+) -> Result<PathBuf, SubprocessError> {
     let display = binary_path.display().to_string();
     let entries = allowlist.entries();
 
@@ -1545,8 +1548,9 @@ async fn resolve_binary_allowed(
 
     // Resolve allowlist entries on a blocking thread; skip unresolvable entries so a
     // broken entry never widens the set. Verify the resolved binary is a regular file.
+    let resolved_for_check = resolved.clone();
     let is_member = tokio::task::spawn_blocking(move || {
-        let regular_file = std::fs::metadata(&resolved)
+        let regular_file = std::fs::metadata(&resolved_for_check)
             .map(|m| m.is_file())
             .unwrap_or(false);
         if !regular_file {
@@ -1555,7 +1559,7 @@ async fn resolve_binary_allowed(
         entries
             .iter()
             .filter_map(|e| std::fs::canonicalize(e).ok())
-            .any(|canon| canon == resolved)
+            .any(|canon| canon == resolved_for_check)
     })
     .await
     .map_err(|join_err| SubprocessError::SpawnFailed {
@@ -1563,7 +1567,9 @@ async fn resolve_binary_allowed(
     })?;
 
     if is_member {
-        Ok(())
+        // Return the canonical path so the caller execs the resolved binary, not the
+        // raw (possibly symlinked) request path — closing the check->exec TOCTOU window.
+        Ok(resolved)
     } else {
         Err(SubprocessError::BinaryNotAllowed {
             path: binary_path.display().to_string(),

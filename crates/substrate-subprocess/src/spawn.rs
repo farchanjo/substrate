@@ -301,6 +301,8 @@ impl RingBuffer {
 )]
 pub async fn spawn_supervised(
     req: &SubprocessRequest,
+    resolved_binary: &std::path::Path,
+    resolved_cwd: &std::path::Path,
     parent_cancel: CancellationToken,
     aggregate_buffer_bytes: usize,
     tmp_root: Option<&std::path::Path>,
@@ -309,10 +311,13 @@ pub async fn spawn_supervised(
     // Step 1: domain validation (no OS calls).
     req.validate()?;
 
-    // Step 2: build the command.
-    let mut cmd = tokio::process::Command::new(&req.binary_path);
+    // Step 2: build the command. Exec the canonical binary + cwd resolved and
+    // validated by the registry (not req.binary_path / req.cwd) so the path the
+    // kernel resolves is exactly the one the allowlist approved — no check->exec
+    // TOCTOU via a symlink swapped in after validation.
+    let mut cmd = tokio::process::Command::new(resolved_binary);
     cmd.args(&req.args);
-    cmd.current_dir(&req.cwd);
+    cmd.current_dir(resolved_cwd);
 
     // Clear environment then re-add only allowed keys.
     cmd.env_clear();
