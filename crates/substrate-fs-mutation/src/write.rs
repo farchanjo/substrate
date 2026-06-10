@@ -368,9 +368,18 @@ mod tests {
             .expect("read dir")
             .filter_map(std::result::Result::ok)
             .collect();
+        // ADR-0033 temp names follow the pattern `<original_filename>.tmp.<uuid>`.
+        // Both checks are required: the prefix ensures we're matching the right
+        // target's temp file, and `.tmp.` (with trailing dot) would fail to match
+        // the old `<uuid>.tmp` naming, making this a regression detector.
+        let target_stem = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp_prefix = format!("{target_stem}.tmp.");
         let tmp_files: Vec<_> = entries
             .iter()
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&tmp_prefix))
             .collect();
         assert!(
             tmp_files.is_empty(),
