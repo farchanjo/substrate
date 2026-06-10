@@ -1,8 +1,9 @@
 # substrate
 
 Model Context Protocol (MCP) server in Rust 1.95 exposing POSIX baseutils-equivalent
-OS management to LLM agents over STDIO. Seven bounded contexts: filesystem-query,
-filesystem-mutation, process, system-info, text-processing, archive, job.
+OS management to LLM agents over STDIO. Nine bounded contexts: filesystem-query,
+filesystem-mutation, process, system-info, text-processing, archive, job,
+subprocess, network-info.
 
 ## Quick Start
 
@@ -96,7 +97,7 @@ Read in order:
 
 1. [Architecture Overview](docs/arch/README.md) — entry point for the spec
 2. [Glossary](docs/arch/glossary.md) — ubiquitous-language vocabulary
-3. [ADR-0002](docs/arch/adr/0002-bounded-contexts.md) — strategic DDD and the seven bounded contexts (filesystem-query, filesystem-mutation, process, system-info, text-processing, archive, job)
+3. [ADR-0002](docs/arch/adr/0002-bounded-contexts.md) — strategic DDD and the nine bounded contexts (filesystem-query, filesystem-mutation, process, system-info, text-processing, archive, job, subprocess, network-info)
 4. [ADR-0040](docs/arch/adr/0040-async-job-control-plane.md) — async job control-plane (Push/Pull dual channel)
 
 ## Validation

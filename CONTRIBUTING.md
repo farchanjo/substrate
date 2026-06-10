@@ -106,8 +106,13 @@ relevant one:
 - **Security**: allowlist → path jail (`openat2`/`O_NOFOLLOW_ANY`) → dry-run →
   elicitation. See [ADR-0004](docs/arch/adr/0004-security-model.md) and
   [ADR-0035](docs/arch/adr/0035-path-safety-hardening.md).
-- **No subprocess**: pure-Rust syscalls only. See
-  [ADR-0044](docs/arch/adr/0044-no-subprocess-policy.md).
+- **Subprocess**: an opt-in bounded context gated behind the Cargo feature
+  `subprocess` (default-OFF). When enabled, every spawn is constrained by a
+  binary allowlist (`subprocess.binary_allowlist`, default deny-all), PathJail
+  validation of the working directory, environment filtering, and mandatory
+  elicitation. The original blanket "no subprocess" ban
+  ([ADR-0044](docs/arch/adr/0044-no-subprocess-policy.md)) is superseded by
+  [ADR-0052](docs/arch/adr/0052-subprocess-execution-architecture.md).
 - **Signal safety**: `SIGPIPE` ignored at startup; `SIGTERM`/`SIGINT` drain.
   See [ADR-0032](docs/arch/adr/0032-signal-safety.md).
 - **Cancellation**: `tokio-util` `CancellationToken` + `tokio::select! biased`.
