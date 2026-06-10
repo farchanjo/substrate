@@ -22,14 +22,28 @@ spec:
     spec:
       thresholdMetric:
         metricSource:
-          metricSourceRef: prometheus-substrate
-          type: prometheus
+          metricSourceRef: substrate-audit-log
+          type: audit-log
           spec:
-            query: >-
-              histogram_quantile(0.95,
-                sum(rate(
-                  substrate_job_duration_seconds_bucket{bucket="B"}
-                  [5m])) by (le))
+            # ADR-0039: source duration_ms from AuditEvent where
+            # tool_name IN Bucket B tools AND outcome IN {success, error}.
+            # Bucket B: fs.find, fs.read, fs.hash, fs.copy, text.search,
+            # text.count_lines, archive.gzip.compress, archive.gzip.decompress,
+            # archive.hash. Cancelled and timeout excluded per ADR-0039.
+            # p95 of duration_ms over a 5-minute rolling window
+            # (10-minute for archive tools).
+            filter: |
+              tool_name IN (
+                "fs.find", "fs.read", "fs.hash", "fs.copy",
+                "text.search", "text.count_lines",
+                "archive.gzip.compress", "archive.gzip.decompress",
+                "archive.hash"
+              )
+              AND outcome IN ("success", "error")
+            aggregation: p95
+            field: duration_ms
+            unit: milliseconds
+            window: 5m
   timeWindow:
     - duration: 7d
       isRolling: true

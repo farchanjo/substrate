@@ -88,5 +88,35 @@ package schemas
 	// subprocess_policy_enforced reflects the build-time verification result that
 	// no subprocess-spawning syscalls exist in the linked binary per ADR-0044.
 	// The runtime sets this field at startup; operators MUST NOT override it.
+	// Superseded as a hard ban by ADR-0052: subprocess is now an opt-in BC behind a
+	// Cargo feature gated by the subprocess_binary_allowlist below.
 	subprocess_policy_enforced: bool | *true
+
+	// subprocess_binary_allowlist is the set of absolute binary paths that
+	// subprocess.spawn may execute per ADR-0052. Default deny-all (empty list): a
+	// binary absent from this list is rejected with
+	// SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED. The recovery hint and ADR prose name
+	// this key security.subprocess_binary_allowlist, while the loaded TOML path is
+	// the [subprocess] section field binary_allowlist; both denote the same gate.
+	subprocess_binary_allowlist: [...string & =~"^/"] | *[]
+
+	// subprocess_env_allowlist names the environment variables (names only) that a
+	// child process may inherit from substrate per ADR-0052. Banned injection
+	// vectors (LD_PRELOAD, DYLD_INSERT_LIBRARIES, LD_LIBRARY_PATH,
+	// DYLD_LIBRARY_PATH) are rejected unconditionally regardless of this list.
+	subprocess_env_allowlist: [...string] | *[]
+
+	// subprocess_cwd_within_allowlist requires every child working directory to
+	// resolve inside security_policy.allowlist.roots per ADR-0052; a cwd outside is
+	// rejected with SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST. Default true.
+	subprocess_cwd_within_allowlist: bool | *true
+
+	// subprocess_max_concurrent is the global cap on active spawned children
+	// (loaded TOML path: [subprocess] max_concurrent). Default 8 per ADR-0052.
+	subprocess_max_concurrent: int & >=1 | *8
+
+	// subprocess_max_per_client is the per-client cap on active spawned children
+	// (loaded TOML path: [subprocess] max_per_client). Default 4 per ADR-0052.
+	// Exceeding either quota yields SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED.
+	subprocess_max_per_client: int & >=1 | *4
 }

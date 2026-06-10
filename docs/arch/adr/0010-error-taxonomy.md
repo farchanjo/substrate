@@ -148,7 +148,7 @@ When substrate fails before the MCP `initialize` handshake, it cannot use the JS
 
 ### Recovery Hint Length Cap
 
-Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error-response.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 19 codes.
+Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 43 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, and subprocess codes added by later amendments).
 
 ### JSON-RPC Standard Code Pass-Through
 
@@ -208,9 +208,9 @@ The top-level `recovery_hint` in the JSON-RPC `data` object retains its generic 
 ## Validation
 
 - Unit tests assert that every `thiserror` variant maps to a known stable code.
-- Integration tests assert the `data` shape conforms to the JSON schema in `docs/arch/schemas/error-response.cue`.
+- Integration tests assert the `data` shape conforms to the CUE schema in `docs/arch/schemas/error_catalog.cue`.
 - `cargo-deny` ensures no dependency introduces a conflicting JSON-RPC error range.
-- `spec validate --lane full` validates CUE schema coverage for all 19 codes (13 original + 6 kernel-induced).
+- `spec validate --lane full` validates CUE schema coverage for all 43 codes in the catalog (13 original + 6 kernel-induced documented here, plus the job, capability, startup, and subprocess codes added by later amendments).
 - CUE schema asserts `len(recovery_hint) <= 150` for every code.
 - Integration tests for `SUBSTRATE_INVALID_ARGUMENT` assert `offending_field` is present in `data`.
 - Integration tests for proc-namespace errors assert `structuredContent.hints.error_recovery` carries the proc-specific hint.

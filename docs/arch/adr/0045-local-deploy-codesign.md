@@ -6,7 +6,7 @@ consulted: []
 informed: []
 ---
 
-# ADR-0045 -- Local Deploy via codesign to /usr/local/bin
+# ADR-0045 — Local Deploy via codesign to /usr/local/bin
 
 ## Context and Problem Statement
 

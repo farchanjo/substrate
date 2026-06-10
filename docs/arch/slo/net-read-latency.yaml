@@ -1,0 +1,51 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-net-read-latency
+  displayName: Network introspection read latency
+  labels:
+    bounded_context: network-info
+spec:
+  description: |
+    Network introspection tools (net.tcp_list, net.udp_list,
+    net.tcp_stats, net.connection_count) SHOULD respond within
+    p95 < 500 ms per ADR-0058 (socket introspection via procfs on
+    Linux / pcblist_n sysctl on macOS). These are Zone A
+    (async-native) read-only tools; no job registry overhead applies.
+    SLI sourced from audit log JSON Lines stream per ADR-0039.
+    Cancelled and timeout outcomes excluded from denominator.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: net-read-latency
+    spec:
+      thresholdMetric:
+        metricSource:
+          metricSourceRef: substrate-audit-log
+          type: audit-log
+          spec:
+            # ADR-0039: source duration_ms from AuditEvent where
+            # tool_name IN net.* tools AND outcome IN {success, error}.
+            # p95 of duration_ms over a 5-minute rolling window.
+            filter: |
+              tool_name IN (
+                "net.tcp_list",
+                "net.udp_list",
+                "net.tcp_stats",
+                "net.connection_count"
+              )
+              AND outcome IN ("success", "error")
+            aggregation: p95
+            field: duration_ms
+            unit: milliseconds
+            window: 5m
+  timeWindow:
+    - duration: 7d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: p95 latency under 500ms
+      target: 0.95
+      op: lte
+      value: 500

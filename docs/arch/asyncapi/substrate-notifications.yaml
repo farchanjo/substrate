@@ -118,15 +118,16 @@ components:
           job_state:
             description: >-
               Current JobState at time of emission per ADR-0040 state
-              machine.
+              machine. Serialised as snake_case (serde rename_all =
+              "snake_case").
             type: string
             enum:
-              - Pending
-              - Running
-              - Succeeded
-              - Failed
-              - Cancelled
-              - TimedOut
+              - pending
+              - running
+              - succeeded
+              - failed
+              - cancelled
+              - timed_out
     StreamProgressEvent:
       name: StreamProgressEvent
       title: Subprocess stream chunk progress event
@@ -137,10 +138,10 @@ components:
         rmcp 1.7 wire-format constraint: ProgressNotificationParam
         exposes only four fields (progressToken, progress, total,
         message). Stream-extension fields (stream, chunk_base64,
-        chunk_bytes, chunk_seq, byte_offset, job_state) cannot be
-        carried as top-level keys because rmcp 1.7 does not support a
-        _meta extension map on ProgressNotificationParam. As a result,
-        all stream-extension fields are packed as a JSON-encoded object
+        chunk_bytes, seq, byte_offset, job_state) cannot be carried as
+        top-level keys because rmcp 1.7 does not support a _meta
+        extension map on ProgressNotificationParam. As a result, all
+        stream-extension fields are packed as a JSON-encoded object
         inside the standard message field. Consumers MUST JSON-parse
         message to extract stream payload.
 
@@ -150,9 +151,10 @@ components:
         described by StreamMessagePayload.
 
         The progressToken equals job_id (ADR-0040 triple-equality).
-        The progress field carries an increasing byte count for
-        backpressure monitoring (not a percentage). The total field is
-        absent or zero for streaming events. The terminal sentinel event
+        The progress field is a fixed sentinel: 0.0 on every non-terminal
+        chunk frame (total absent) and 100.0 on the terminal sentinel frame
+        (total 100.0). Byte tracking is conveyed separately via byte_offset
+        inside the packed StreamMessagePayload. The terminal sentinel event
         includes job_state in the packed message to signal subprocess
         completion without a separate notification.
       contentType: application/json
@@ -232,14 +234,18 @@ components:
           pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
         progress:
           description: |
-            Cumulative byte count of output delivered so far on this
-            stream. Used for backpressure monitoring, not a percentage.
+            Fixed sentinel value per ADR-0054: 0.0 on every non-terminal
+            chunk frame; 100.0 on the terminal sentinel frame. Does not
+            represent cumulative bytes or a percentage of work done. Byte
+            tracking is carried via byte_offset inside the packed message.
           type: number
           minimum: 0
+          maximum: 100
         total:
           description: |
-            Always absent or 0 for streaming events; not a percentage-
-            based total. Included only for protocol compatibility.
+            Absent (or omitted) on non-terminal chunk frames; 100.0 on
+            the terminal sentinel frame matching the progress sentinel.
+            Included only for protocol compatibility with rmcp 1.7.
           type: number
           default: 0
         message:
@@ -262,11 +268,13 @@ components:
         - stream
         - chunk_base64
         - chunk_bytes
-        - chunk_seq
+        - seq
         - byte_offset
       properties:
         stream:
-          description: Identifies which subprocess output stream this chunk belongs to.
+          description: |
+            Identifies which subprocess output stream this chunk
+            belongs to.
           type: string
           enum:
             - stdout
@@ -284,11 +292,12 @@ components:
           type: integer
           minimum: 0
           maximum: 4096
-        chunk_seq:
+        seq:
           description: |
-            Monotonic per-stream sequence counter starting at 0. Consumers
-            MUST use this to detect dropped chunks and reorder out-of-order
-            deliveries within a single stream (stdout or stderr).
+            Monotonic per-job per-stream sequence counter starting at 0
+            per ADR-0054 (wire name `seq`). Consumers MUST use this to
+            detect dropped chunks and reorder out-of-order deliveries
+            within a single stream (stdout or stderr).
           type: integer
           minimum: 0
         byte_offset:
@@ -302,11 +311,20 @@ components:
           description: |
             Present ONLY in the terminal sentinel event to signal subprocess
             completion. Consumers MUST treat its presence as end-of-stream
-            for this job. Absent on all non-terminal chunks.
+            for this job. Absent on all non-terminal chunks. Serialised as
+            snake_case per ADR-0040 (serde rename_all = "snake_case").
           type: string
           enum:
-            - Succeeded
-            - Failed
-            - TimedOut
-            - Cancelled
-            - Killed
+            - succeeded
+            - failed
+            - timed_out
+            - cancelled
+        exit_code:
+          description: |
+            Always JSON null in the terminal sentinel event per ADR-0054.
+            The StreamChunkObserver::on_terminal trait surface carries no
+            exit_code; the authoritative exit_code is obtained via
+            subprocess.result. ADR-0054 permits exit_code: null for
+            killed or pre-exit-cancelled processes.
+          type: integer
+          nullable: true

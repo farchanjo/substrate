@@ -46,10 +46,14 @@ import rego.v1
 # Read-only, non-destructive, idempotent, closed-world tools.
 _read_only_tools := {
     "fs.find", "fs.read", "fs.read_dir", "fs.stat",
-    "proc.list",
+    "proc.list", "proc.tree",
     "sys.info", "sys.platform", "sys.env", "sys.cwd",
-    "text.search", "text.count_lines",
+    "sys.load_average", "sys.hostname",
+    "text.search", "text.count_lines", "text.head", "text.tail",
     "archive.hash",
+    "net.tcp_list", "net.udp_list", "net.tcp_stats", "net.connection_count",
+    "job.list", "job.result", "job.status",
+    "subprocess.list", "subprocess.result", "subprocess.search",
 }
 
 # Writable (create/copy), non-destructive, non-idempotent, closed-world tools.
@@ -57,13 +61,15 @@ _write_create_tools := {
     "fs.mkdir", "fs.write", "fs.copy",
     "archive.tar.create", "archive.tar.extract",
     "archive.zip.create", "archive.zip.extract",
-    "archive.zstd.create", "archive.zstd.extract",
+    "archive.gzip.compress", "archive.gzip.decompress",
 }
 
 # Destructive, non-idempotent tools.
 _destructive_nonidempotent_tools := {
     "fs.remove", "fs.rename",
     "proc.signal",
+    "subprocess.spawn", "subprocess.signal", "subprocess.cancel",
+    "job.cancel",
 }
 
 # Destructive but idempotent tools.

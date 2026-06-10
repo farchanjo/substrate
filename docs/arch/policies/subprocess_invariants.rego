@@ -20,7 +20,9 @@
 #       "stdin_kind":      "none" | "piped" | "file_path",
 #       "stdin_file_path": "<string>",          // optional
 #       "capture_kind":    "stream" | "in_memory" | "tmp_file",
-#       "timeout_secs":    <int>                // optional
+#       "timeout_secs":    <int>,               // optional
+#       "execs_canonical_binary": <bool>,       // contract: exec the canonical binary path
+#       "execs_canonical_cwd":    <bool>        // contract: set the canonical cwd
 #     },
 #     "elicitation_confirmed": <bool>           // optional; required for --allow-* args
 #   }
@@ -31,10 +33,17 @@
 #   input = {
 #     "subprocess_request": {
 #       "binary_path":"/usr/bin/echo","args":["hello"],"env_allowlist":[],
-#       "env_override":{},"cwd":"/tmp","stdin_kind":"none","capture_kind":"stream"
+#       "env_override":{},"cwd":"/tmp","stdin_kind":"none","capture_kind":"stream",
+#       "execs_canonical_binary":true,"execs_canonical_cwd":true
 #     },
 #     "elicitation_confirmed": true
 #   }
+#
+#   FAIL — spawn contract does not exec the canonical binary
+#   input = {"subprocess_request":{"binary_path":"/usr/bin/echo","args":[],
+#     "env_allowlist":[],"env_override":{},"cwd":"/tmp","stdin_kind":"none",
+#     "capture_kind":"stream","execs_canonical_binary":false,"execs_canonical_cwd":true}}
+#   expected deny contains: "spawn contract MUST exec the canonicalized binary path"
 #
 #   FAIL — relative binary_path
 #   input = {"subprocess_request":{"binary_path":"./hack","args":[],"env_allowlist":[],
@@ -180,6 +189,33 @@ deny contains msg if {
 		"timeout_secs %d exceeds the maximum of %d seconds (24 hours)",
 		[timeout, _max_timeout_secs],
 	)
+}
+
+# ---------------------------------------------------------------------------
+# Invariant 9: the spawn contract MUST exec the canonicalized binary path.
+# After the allowlist + path-jail check resolves binary_path to its canonical
+# form, the adapter MUST exec exactly that canonical path (not the original
+# caller-supplied string) to close the check->exec TOCTOU window where a symlink
+# could be re-pointed between validation and execution. The contract field
+# execs_canonical_binary MUST be true.
+# ---------------------------------------------------------------------------
+
+deny contains msg if {
+	input.subprocess_request.execs_canonical_binary != true
+	msg := "spawn contract MUST exec the canonicalized binary path (execs_canonical_binary must be true) to close the check->exec TOCTOU window"
+}
+
+# ---------------------------------------------------------------------------
+# Invariant 10: the spawn contract MUST set the canonicalized cwd. After the
+# allowlist + path-jail check resolves cwd to its canonical form, the adapter
+# MUST set exactly that canonical directory as the child working directory (not
+# the original caller-supplied string), closing the same TOCTOU window for the
+# working directory. The contract field execs_canonical_cwd MUST be true.
+# ---------------------------------------------------------------------------
+
+deny contains msg if {
+	input.subprocess_request.execs_canonical_cwd != true
+	msg := "spawn contract MUST set the canonicalized cwd (execs_canonical_cwd must be true) to close the check->exec TOCTOU window"
 }
 
 # ---------------------------------------------------------------------------

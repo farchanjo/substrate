@@ -22,14 +22,19 @@ spec:
     spec:
       thresholdMetric:
         metricSource:
-          metricSourceRef: prometheus-substrate
-          type: prometheus
+          metricSourceRef: substrate-audit-log
+          type: audit-log
           spec:
-            query: >-
-              histogram_quantile(0.99,
-                sum(rate(
-                  substrate_cancellation_latency_seconds_bucket[5m]))
-                by (le))
+            # ADR-0039: source duration_ms from AuditEvent where
+            # tool_name = "job.cancel" AND outcome IN {success, error}.
+            # p99 of duration_ms (ms -> s) over the rolling window.
+            filter: |
+              tool_name = "job.cancel"
+              AND outcome IN ("success", "error")
+            aggregation: p99
+            field: duration_ms
+            unit: milliseconds
+            window: 5m
   timeWindow:
     - duration: 7d
       isRolling: true

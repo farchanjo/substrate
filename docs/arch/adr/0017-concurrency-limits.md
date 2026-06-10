@@ -158,7 +158,7 @@ max_concurrent = 0       # 0 = inherits cpu_permits (Zone C default)
 #### Negative
 
 - `num_cpus::get()` counts hyper-threaded logical cores, not physical cores. On hyper-threaded systems, N CPU-bound tasks may still cause visible latency spikes. Operators can reduce `cpu_permits` in config.
-- blake3 with `rayon` internally spawns rayon threads that are not subject to our Semaphore. The Semaphore limits the number of simultaneous blake3 *calls*, but each call may still spin up rayon's thread pool. This interaction must be documented in the operator guide.
+- blake3 with `rayon` internally spawns rayon threads that are not subject to our Semaphore. The Semaphore limits the number of simultaneous blake3 *calls*, but each call may still spin up rayon's thread pool. This interaction must be documented in the [operator guide](../operations/operator-guide.md).
 - Per-tool Semaphores add startup allocation proportional to the number of configured tools.
 
 ## Validation

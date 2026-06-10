@@ -52,6 +52,16 @@ mindmap
       CascadeKill
       WatchdogPipe
       OrphanReaper
+      RestartPolicy
+      HealthProbe
+      supervisor
+    Network
+      SocketEntry
+      TcpState
+      TcpStats
+      ConnectionCounts
+      NetworkInfoPort
+      PidResolver
     Security
       elicitation
       audit event
@@ -135,10 +145,10 @@ field; they are not domain events and carry no behavior. See
 ## bounded context
 
 A named semantic region of the domain with its own ubiquitous language,
-aggregates, port traits, and adapter implementations. Substrate defines seven
+aggregates, port traits, and adapter implementations. Substrate defines nine
 bounded contexts: filesystem-query, filesystem-mutation, process, system-info,
-text-processing, archive, and job. No aggregate crosses a context boundary. See
-[ADR-0002](adr/0002-bounded-contexts.md).
+text-processing, archive, job, subprocess, and network-info. No aggregate
+crosses a context boundary. See [ADR-0002](adr/0002-bounded-contexts.md).
 
 ## BinaryAllowlist
 
@@ -148,7 +158,7 @@ adapter checks this set at Layer 1 before any further validation: if
 `binary_path` is absent from the list the call is rejected immediately with
 `SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED` and no child process is created. An
 empty allowlist means zero subprocess capability. See
-[ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[ADR-0052](adr/0052-subprocess-execution-architecture.md) and
 [ADR-0004](adr/0004-security-model.md).
 
 ## Bucket A / B / C / D
@@ -191,7 +201,15 @@ process group so that the child and any grandchildren receive the signal. Phase
 receive `killpg(pgid, SIGKILL)`. The sequence ensures no orphaned processes
 remain even when the child ignores SIGTERM. See
 [ADR-0053](adr/0053-process-lifecycle-cascade-contract.md) and
-[ADR-0052](adr/0052-subprocess-bounded-context.md).
+[ADR-0052](adr/0052-subprocess-execution-architecture.md).
+
+## ConnectionCounts
+
+A read-model value object returned by `net.connection_count` that carries a
+histogram of TCP sockets grouped by `TcpState` (`by_state`). It is computed by
+walking the same PCB list as `net.tcp_list` with no state filter and grouping
+the resulting `SocketEntry.state` values. See
+[ADR-0058](adr/0058-network-socket-introspection.md).
 
 ## degraded jail
 
@@ -229,7 +247,7 @@ from the list are stripped before `exec`. The library-injection variables
 `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `LD_LIBRARY_PATH`, and
 `DYLD_LIBRARY_PATH` are unconditionally stripped regardless of what the
 `env_allowlist` contains. Values may additionally be overridden via
-`env_override`. See [ADR-0052](adr/0052-subprocess-bounded-context.md) and
+`env_override`. See [ADR-0052](adr/0052-subprocess-execution-architecture.md) and
 [schemas/subprocess.cue](schemas/subprocess.cue).
 
 ## FsIndexPort
@@ -248,6 +266,23 @@ for a given port (e.g., `JailTier::Openat2`, `JailTier::Degraded`). At startup
 the factory selects the highest tier supported by the host and records the
 choice in the `SUBSTRATE_CAPABILITY_TIERS_SELECTED` audit event. Per
 [ADR-0042](adr/0042-capability-adapter-factory.md).
+
+## HealthProbe
+
+An optional value object on `SubprocessRequest` that defines how the supervisor
+determines when a supervised child is `Ready`. Variants: `None` (default;
+`Running` equals `Ready` immediately), `HttpGet` (poll an absolute URL for an
+expected status), `PortOpen` (poll a host/port for a successful connection), and
+`LogPattern` (match a regex against captured stdout/stderr within a timeout). A
+failed probe emits `SUBSTRATE_SUPERVISOR_PROBE_FAILED` and increments a per-job
+counter. See [ADR-0056](adr/0056-subprocess-supervisor-semantics.md).
+
+## HostName
+
+The host's network node name as reported by `sys.hostname`. On Linux it is read
+from `uname(2)` / `/proc/sys/kernel/hostname`; on macOS it is read via `sysctl`.
+A value object returned by the system-info bounded context. See
+[ADR-0002](adr/0002-bounded-contexts.md).
 
 ## hexagonal architecture
 
@@ -324,11 +359,26 @@ the lifecycle of a `JobEntry`. Terminal states (`Succeeded`, `Failed`,
 `Cancelled`, `TimedOut`) never regress to non-terminal states. Per
 [ADR-0040](adr/0040-async-job-control-plane.md).
 
+## KernelVersion
+
+The operating-system kernel release string returned by `sys.uname` (and a
+component of `sys.info`). On Linux it is the `release` field of `uname(2)`
+(for example `6.8.0-generic`); on macOS it is the Darwin kernel version. A value
+object owned by the system-info bounded context. See
+[ADR-0002](adr/0002-bounded-contexts.md).
+
 ## LLM agent
 
 An autonomous software agent driven by a large language model that invokes
 substrate tools via the MCP protocol to accomplish OS management tasks. LLM
 agent inputs are considered untrusted; all security enforcement is server-side.
+
+## LoadAverage
+
+The 1-, 5-, and 15-minute system load averages returned by `sys.load_average`.
+On Linux the values are read from `/proc/loadavg`; on macOS they are read via
+`sysctl` (`vm.loadavg`). A value object owned by the system-info bounded
+context. See [ADR-0002](adr/0002-bounded-contexts.md).
 
 ## MADR
 
@@ -359,13 +409,62 @@ framework) that spawns substrate as a child process, mediates the STDIO
 transport, and renders elicitation forms to human operators. See
 [ADR-0005](adr/0005-stdio-transport.md).
 
+## MountPoint
+
+A mounted filesystem entry reported by `sys.df`: the mount path, the backing
+device, the filesystem type, and total/used/available bytes. On Linux it is
+read from `/proc/mounts` plus `statvfs`; on macOS it is read via `getmntinfo`.
+A value object owned by the system-info bounded context. See
+[ADR-0002](adr/0002-bounded-contexts.md).
+
 ## narrative-arc tool description
 
-The canonical format for tool descriptions in substrate: a six-field template
-(USE / DOES / ARGS / RETURNS / NEXT / AVOID) bounded to 180 tokens per card.
-The narrative arc encodes workflow context so that 10B-parameter models can
-chain tools correctly without external orchestration. See
+The format for tool descriptions in substrate. Following the ADR-0007
+2026-05-22 amendment, each registered MCP tool description is a thin one-liner
+bounded to 100 characters (roughly 25 tokens) that points at the companion
+substrate skill; the full six-field USE/DOES/ARGS/RETURNS/NEXT/AVOID narrative
+lives in the skill reference and in inline response content rather than in the
+tool card itself. This keeps the `tools/list` payload small while preserving
+the workflow context that lets 10B-parameter models chain tools correctly. See
 [ADR-0007](adr/0007-tool-card-narrative-arc.md).
+
+## net.connection_count
+
+Read-only tool of the network-info bounded context that returns a
+`ConnectionCounts` histogram of TCP sockets grouped by `TcpState`. Implemented
+by walking the same PCB list as `net.tcp_list` with no state filter. Bucket A
+(sync inline). See [ADR-0058](adr/0058-network-socket-introspection.md).
+
+## net.tcp_list
+
+Read-only tool of the network-info bounded context that lists TCP sockets as
+`SocketEntry` records, filterable by `TcpState` and paginated. When
+`resolve_pid = true` the adapter builds an inode-to-pid map to populate
+`SocketEntry.pid` (best-effort; unresolved entries are `null`). On Linux it
+parses `/proc/net/tcp`; on macOS it reads the kernel PCB list via `sysctl`. See
+[ADR-0058](adr/0058-network-socket-introspection.md).
+
+## net.tcp_stats
+
+Read-only tool of the network-info bounded context that returns a curated
+`TcpStats` subset of global TCP counters (12 counters plus `captured_at`). On
+Linux it reads `/proc/net/snmp`; on macOS it reads `struct tcpstat` via
+`sysctl`. See [ADR-0058](adr/0058-network-socket-introspection.md).
+
+## net.udp_list
+
+Read-only tool of the network-info bounded context that lists UDP sockets as
+`SocketEntry` records, paginated. Shares the macOS `pcblist_n` parser path with
+`net.tcp_list`. See [ADR-0058](adr/0058-network-socket-introspection.md).
+
+## NetworkInfoPort
+
+Domain port trait declared in `substrate-domain` for read-only socket
+introspection: `net.tcp_list`, `net.udp_list`, `net.tcp_stats`, and
+`net.connection_count`. Implemented by platform adapters (Linux `/proc/net`
+parser, macOS `sysctl` PCB-list reader) and selected at startup by
+`NetworkInfoFactory`, which implements `PortFactory<dyn NetworkInfoPort>`. See
+[ADR-0058](adr/0058-network-socket-introspection.md).
 
 ## no-subprocess policy
 
@@ -436,12 +535,36 @@ injections, symlink escapes, null bytes, and Zip Slip payloads. Implemented in
 the `strict-path` crate, invoked by the policy layer. See
 [ADR-0004](adr/0004-security-model.md).
 
+## Pid
+
+The operating-system process identifier of an inspected or controlled process.
+It is the primary key of `ProcessSnapshot` records returned by `proc.list` and
+`proc.tree`, and the target argument of `proc.signal`. A value object owned by
+the process bounded context. See [ADR-0002](adr/0002-bounded-contexts.md).
+
+## PidResolver
+
+The best-effort component used by `net.tcp_list`/`net.udp_list` (when
+`resolve_pid = true`) to map socket inodes back to owning process ids. It builds
+an inode-to-pid map and matches it against `SocketEntry.inode` to populate
+`SocketEntry.pid`; entries that cannot be resolved leave `pid` set to `null` and
+emit a `tracing::warn!`. See
+[ADR-0058](adr/0058-network-socket-introspection.md).
+
 ## port
 
 A Rust trait declared in a bounded-context domain module that describes what an
 adapter must do without prescribing how. Ports invert the dependency: domain
 code calls port methods; adapter code implements them. Ports contain no I/O and
 no infrastructure imports. See [ADR-0022](adr/0022-project-layout.md).
+
+## ProcessSnapshot
+
+A read-model value object describing a single observed process at the moment of
+a `proc.list` or `proc.tree` call: `pid`, parent pid, command, state, and basic
+resource fields. It is a point-in-time snapshot and carries no behavior; on
+Linux it is read from `/proc/<pid>`, on macOS via `sysctl`/`libproc`. Owned by
+the process bounded context. See [ADR-0002](adr/0002-bounded-contexts.md).
 
 ## ProgressToken
 
@@ -467,6 +590,18 @@ when no actionable remediation exists. Carried in `structuredContent` as part
 of the error value object. See [ADR-0010](adr/0010-error-taxonomy.md) and
 [ADR-0036](adr/0036-error-code-registry.md).
 
+## RestartPolicy
+
+An optional value object on `SubprocessRequest` that tells the supervisor how to
+react when a supervised child exits. Variants: `Never` (default; one-shot, no
+restart), `OnFailure { max_retries, backoff_ms }` (re-spawn after a fixed
+backoff on a non-zero exit, up to `max_retries`, then transition to `Failed`),
+and `Always { backoff_ms }` (re-spawn on any exit until the job is cancelled).
+Backoff is a fixed wait (the implementation may add up to 2x jitter but never
+exceeds `backoff_ms`) and resets after the child stays `Ready` long enough to
+indicate stable operation. See
+[ADR-0056](adr/0056-subprocess-supervisor-semantics.md).
+
 ## SequenceNumber
 
 Monotonic integer field included in every `notifications/progress` message for
@@ -482,6 +617,15 @@ kernel members: `JailedPath`, `ToolResult`, `PageCursor`, `ProgressToken`,
 `AuditEvent`. No aggregate and no I/O live here. See
 [ADR-0025](adr/0025-bounded-context-interactions.md).
 
+## Signal
+
+A POSIX signal selected for delivery by `proc.signal` (to a process) or
+`subprocess.signal` (to a supervised child's process group). The destructive
+signals `SIGKILL`, `SIGTERM`, and `SIGSTOP` require elicitation confirmation
+before delivery; non-destructive signals do not. A value object owned by the
+process bounded context. See [ADR-0002](adr/0002-bounded-contexts.md) and
+[ADR-0004](adr/0004-security-model.md).
+
 ## SimdTier
 
 Enum `{Avx512, Avx2, Sse42, Sse2, Neon, Portable}` declared in
@@ -493,6 +637,14 @@ available on the host CPU. Detected once at startup via
 at `build` time to select the appropriate backend crate. Per
 [ADR-0042](adr/0042-capability-adapter-factory.md) and
 [ADR-0043](adr/0043-simd-runtime-dispatch.md).
+
+## SocketEntry
+
+The read-model value object returned by `net.tcp_list` and `net.udp_list` for a
+single socket. It carries the local and remote address/port, the `TcpState`
+(for TCP), the owning inode, and an optional `pid` resolved best-effort by the
+`PidResolver`. `SocketEntry` is a query read-model, not a mutation aggregate.
+See [ADR-0058](adr/0058-network-socket-introspection.md).
 
 ## STDIO transport
 
@@ -509,7 +661,7 @@ stream. Fields: `job_id` (correlation), `stream` (`stdout` or `stderr`), `seq`
 base64-encoded raw bytes), `byte_offset` (cumulative byte offset from stream
 start), and `timestamp` (RFC 3339). Delivered to the MCP client as the payload
 of a `notifications/progress` event. Gaps in `seq` indicate dropped chunks.
-See [ADR-0054](adr/0054-subprocess-stdout-stderr-stream-multiplex.md) and
+See [ADR-0054](adr/0054-subprocess-stream-multiplex.md) and
 [schemas/subprocess.cue](schemas/subprocess.cue).
 
 ## structured content
@@ -545,7 +697,7 @@ behalf of an MCP client. Each subprocess is assigned its own process group via
 elicitation security gates, and is tracked as a `SubprocessHandle` registered
 in the `JobRegistry`. The entire subprocess feature is guarded by the optional
 Cargo feature `subprocess` (default-OFF). See
-[ADR-0052](adr/0052-subprocess-bounded-context.md).
+[ADR-0052](adr/0052-subprocess-execution-architecture.md).
 
 ## SubprocessHandle
 
@@ -555,7 +707,7 @@ record stores: `job_id` (UUIDv7, equal to the `JobEntry` id and MCP
 `exit_code`, `stream_chunks_dropped`, and the list of `tmp_files` registered
 during the invocation. State transitions are serialized through a
 `parking_lot::Mutex<SubprocessState>` and terminal states never regress. See
-[ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[ADR-0052](adr/0052-subprocess-execution-architecture.md) and
 [schemas/subprocess.cue](schemas/subprocess.cue).
 
 ## SubprocessRequest
@@ -566,7 +718,7 @@ process. Fields: `binary_path`, `args`, `env_allowlist`, `env_override`, `cwd`,
 `capture_kind` (`stream`/`in_memory`/`tmp_file`), optional `timeout_secs`
 (1-86400), and optional `idempotency_key`. Every field is validated by
 `subprocess_invariants.rego` before any OS call. See
-[ADR-0052](adr/0052-subprocess-bounded-context.md) and
+[ADR-0052](adr/0052-subprocess-execution-architecture.md) and
 [schemas/subprocess.cue](schemas/subprocess.cue).
 
 ## substrate-signal-sys
@@ -580,13 +732,24 @@ or domain crate. Only `substrate-mcp-server` links this crate; it calls
 `install_signal_handlers()` as the very first statement of `main`. See the
 hexagonal classification in [ADR-0022](adr/0022-project-layout.md).
 
+## supervisor
+
+A dedicated per-job tokio task, spawned alongside the worker task, that observes
+a supervised child's exit future and applies its `RestartPolicy` and
+`HealthProbe`. The supervisor drives the `Starting`/`Ready`/`Restarting` state
+transitions and is registered with the job's `CancellationToken` subtree so
+that `subprocess.cancel` terminates both the child and the supervisor task.
+Supervisor behavior is opt-in via optional fields on `SubprocessRequest`. See
+[ADR-0056](adr/0056-subprocess-supervisor-semantics.md).
+
 ## threat model
 
 A structured analysis mapping attacker capabilities to assets and mitigations.
-Substrate uses a STRIDE-Lite threat model documented in the `threat-model/`
-directory. The four security layers (allowlist, path jail, dry-run gate,
-elicitation) are derived from this analysis. See
-[ADR-0004](adr/0004-security-model.md).
+Substrate uses a STRIDE-Lite threat model defined inline in
+[ADR-0029](adr/0029-threat-model.md); the `threat-model/` directory is reserved
+as a structural index that points back at that ADR. The four security layers
+(allowlist, path jail, dry-run gate, elicitation) are derived from this
+analysis. See also [ADR-0004](adr/0004-security-model.md).
 
 ## tool annotation
 

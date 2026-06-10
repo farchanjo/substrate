@@ -63,10 +63,16 @@ package schemas
 
 // #ProtocolConfig governs MCP wire-level constraints.
 #ProtocolConfig: {
-	// max_page_size is the hard ceiling for pagination; clients may not exceed this.
+	// max_page_size is the handler-level pagination cap (default 500 per ADR-0008,
+	// applied on fs.find / proc.list / text.search). It is a SECOND, narrower layer
+	// on top of the domain #PageSize bound (1..=10000 per ADR-0060): the domain
+	// value object validates the request first (rejecting 0 or >10000 with
+	// SUBSTRATE_INVALID_ARGUMENT), then the handler clamps any surviving value DOWN
+	// to this cap. The two layers never widen each other.
 	max_page_size: uint & >=1 | *500
 
-	// default_page_size is used when the client omits a page_size parameter.
+	// default_page_size is used when the client omits a page_size parameter (default
+	// 50, matching the domain #PageSize default per ADR-0060).
 	default_page_size: uint & >=1 & <=max_page_size | *50
 
 	// max_in_memory_buffer_bytes caps single in-memory read/write operations (8 MiB default).
@@ -150,8 +156,12 @@ package schemas
 	shutdown_drain_secs: uint & >=1 & <=120 | *5
 
 	// jobs configures the async job control-plane per ADR-0040.
-	// Omitting this section disables the job control-plane entirely; only Bucket A
-	// and Bucket D tools are then available; Bucket B/C tools return an error.
+	// The control-plane is ALWAYS wired: omitting this section is optional tuning
+	// only, and the runtime falls back to JobConfig::default() (InMemoryJobRegistry).
+	// Per the ADR-0040 2026-05-22 amendment the earlier "absent [jobs] disables the
+	// control-plane" behavior was a bug that silently broke every long-running and
+	// large-input tool; the NullJobRegistry stub was deleted. All buckets (A-E)
+	// remain available regardless of whether this section is present.
 	jobs?: #JobConfig
 
 	// index configures the optional in-process filesystem index per ADR-0041.

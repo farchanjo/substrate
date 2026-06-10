@@ -180,7 +180,7 @@ ADR-0040 introduces a JobRegistry that tracks long-running tool calls as named j
 
 ### 2026-05-24 — Subprocess termination integrated into graceful drain (ADR-0052/ADR-0053)
 
-[ADR-0052](0052-subprocess-execution-architecture.md) and [ADR-0053](0053-subprocess-process-group-lifecycle.md) extend the SIGTERM/SIGINT graceful drain sequence described in this ADR to cover active subprocess jobs. The existing shutdown sequence (steps 1–4 above) is extended to the following eight-step sequence when the `subprocess` Cargo feature is enabled. Steps 1 and the existing drain window behavior are unchanged for non-subprocess jobs.
+[ADR-0052](0052-subprocess-execution-architecture.md) and [ADR-0053](0053-process-lifecycle-cascade-contract.md) extend the SIGTERM/SIGINT graceful drain sequence described in this ADR to cover active subprocess jobs. The existing shutdown sequence (steps 1–4 above) is extended to the following eight-step sequence when the `subprocess` Cargo feature is enabled. Steps 1 and the existing drain window behavior are unchanged for non-subprocess jobs.
 
 Extended shutdown sequence:
 
@@ -220,7 +220,7 @@ sequenceDiagram
     Root->>Root: rmcp service close on stdout EOF
 ```
 
-Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-subprocess-process-group-lifecycle.md) — process group lifecycle and cascade kill.
+Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-process-lifecycle-cascade-contract.md) — process group lifecycle and cascade kill.
 
 ### 2026-05-21 — Extended by ADR-0042 capability-adapter-factory
 

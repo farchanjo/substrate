@@ -98,7 +98,7 @@ All other errno values are not retried and map directly per the table above.
 #### Negative
 
 - Adapter must be extended with six new `From` impls.
-- CUE schema in `docs/arch/schemas/error-response.cue` must add the six new code literals and enforce the 150-character hint cap.
+- CUE schema in `docs/arch/schemas/error_catalog.cue` must add the six new code literals and enforce the 150-character hint cap.
 - `spec validate --lane full` count increases from 13 to 19 codes.
 
 ## Validation

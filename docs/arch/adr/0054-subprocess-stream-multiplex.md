@@ -384,7 +384,7 @@ On `Cancelled`, `Failed`, `Killed`, or `TimedOut`, the transit `.tmp.<uuid7>`
 paths remain in `ChildHandle.tmp_files` and the standard
 `cleanup_tmp_files` cascade removes them. `SubprocessResult.stdout_tmp_path` and
 `stderr_tmp_path` are `None`. Cleanup MUST handle `ENOENT` gracefully (the orphan
-reaper from [ADR-0055](0055-subprocess-orphan-reaper.md) may have already removed
+reaper from [ADR-0055](0055-orphan-reaper-on-startup.md) may have already removed
 the file between the terminal state write and the cleanup call).
 
 #### Dual-channel flow
@@ -471,3 +471,91 @@ Key invariants that remain unchanged:
   buffer contents.
 
 Cross-reference: [ADR-0057](0057-subprocess-output-pagination-and-search.md).
+
+### 2026-06-10 — Canonical chunk payload aligned to the shipped wire format
+
+The "Stream Chunk Payload", "Result Shape", and "Terminal Notification"
+sections above were authored ahead of the implementation. The shipped
+`rmcp` stream notifier (`crates/substrate-mcp-server/src/handlers/rmcp_stream_notifier.rs`)
+and the domain `StreamChunk` value object
+(`crates/substrate-domain/src/subprocess/stream.rs`) diverge from that draft
+on three points. The code is ground truth; this amendment corrects the ADR to
+match it.
+
+**1. Counter field name is `seq` (not `chunk_seq`).**
+The per-job, per-stream monotonic counter is serialized on the wire under the
+key `seq`, and the domain field is `StreamChunk.seq: u64`. An earlier
+implementation emitted it under the non-spec name `chunk_seq`; that has been
+renamed to the ADR name `seq`. The "Stream Chunk Payload" block above (which
+already uses `seq`) is therefore authoritative; any reference to `chunk_seq`
+elsewhere is stale and refers to this same field.
+
+**2. `byte_offset` is part of the per-chunk frame.**
+Each per-chunk notification carries an additional `byte_offset` field — the
+cumulative byte offset of the FIRST byte of the chunk relative to the start of
+the stream (domain field `StreamChunk.byte_offset: u64`). It is packed inside
+the notification `message` JSON object alongside the other chunk fields. The
+terminal frame does NOT carry `byte_offset`. The corrected per-chunk payload
+is:
+
+```
+{
+  "progressToken": "<job_id>",
+  "progress": 0.0,
+  "total": null,
+  "job_id": "<job_id>",
+  "job_state": "running",
+  "stream": "stdout" | "stderr",
+  "chunk_base64": "<base64-encoded bytes, max 4 KiB decoded>",
+  "chunk_bytes": <u32 decoded byte count>,
+  "seq": <u64 monotonic, per-job, per-stream>,
+  "byte_offset": <u64 cumulative offset of the first byte in this chunk>
+}
+```
+
+**3. `progress` is a fixed sentinel, not `bytes_emitted % 100`.**
+The "Stream Chunk Payload" section describes `progress` as `bytes_emitted % 100`.
+The shipped notifier does NOT compute a modulo wrap and does NOT emit a
+cumulative byte count in `progress`. Instead it emits a fixed sentinel:
+per-chunk frames carry `progress: 0.0` with `total: null`; the terminal frame
+carries `progress: 100.0` with `total: 100.0`. Byte tracking is conveyed
+exclusively through the additive `byte_offset` field, never through `progress`.
+(The separate non-stream job `ProgressEvent` from
+[ADR-0040](0040-async-job-control-plane.md) is unrelated: it uses a true
+`progress: u8` in `0..=100` with `total: u32` default 100, no wrap.)
+
+**4. `exit_code` rides inside the terminal `message` payload and is always
+`null`.**
+The terminal notification carries `exit_code` packed inside the `message` JSON
+object (alongside `job_id`, `job_state`, `chunk_base64`, `chunk_bytes`, and
+`seq`) — NOT as a top-level rmcp field and NOT in a separate hints map. Its
+value is ALWAYS JSON `null`, because the `StreamChunkObserver::on_terminal`
+trait surface carries neither the child exit code nor the terminal `seq`; both
+are emitted as `null`. The corrected terminal payload is:
+
+```
+{
+  "progressToken": "<job_id>",
+  "progress": 100.0,
+  "total": 100.0,
+  "job_id": "<job_id>",
+  "job_state": "succeeded" | "failed" | "cancelled" | "timed_out",
+  "exit_code": null,
+  "chunk_base64": "",
+  "chunk_bytes": 0,
+  "seq": null
+}
+```
+
+The authoritative exit code is always retrieved via `subprocess.result`
+(the "Result Shape" section), where `exit_code` is `<i32 | null>`. `exit_code:
+null` is permitted for SIGKILL-killed or pre-exit-cancelled processes, as the
+"Result Shape" section already states. Note also that the `job_state` values on
+the wire are snake_case (`running`, `succeeded`, `failed`, `cancelled`,
+`timed_out`), matching the `#JobState` serde `rename_all = "snake_case"`
+contract; the PascalCase forms shown in the original draft above are
+illustrative only.
+
+Cross-references: [ADR-0040](0040-async-job-control-plane.md) — `ProgressEvent`
+percentage semantics; [ADR-0057](0057-subprocess-output-pagination-and-search.md)
+— ring buffer as source of truth.

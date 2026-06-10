@@ -25,7 +25,7 @@ Feature: Operations are cancelled within 1 second of receiving $/cancelRequest
     And the server does not emit duplicate results
 
   Scenario: Cancellation token propagates to CancellationToken inside the handler
-    Given the client has sent archive.tar_create which is compressing data
-    When the client sends $/cancelRequest for the archive.tar_create request id
+    Given the client has sent archive.tar.create which is compressing data
+    When the client sends $/cancelRequest for the archive.tar.create request id
     Then the CancellationToken associated with the handler is signalled as cancelled
     And the server returns SUBSTRATE_CANCELLED within 1 second

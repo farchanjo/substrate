@@ -7,7 +7,7 @@ consulted: []
 informed: []
 ---
 
-# ADR-0043 -- SIMD Runtime Dispatch and Native Instruction Tiering
+# ADR-0043 — SIMD Runtime Dispatch and Native Instruction Tiering
 
 ## Context and Problem Statement
 

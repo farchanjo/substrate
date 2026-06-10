@@ -100,3 +100,89 @@ A compliance script (out of MVP scope but documented here as the consumer contra
 - [ADR-0009](0009-observability.md) — Observability (tracing framework; audit log is the measurement source)
 - [ADR-0030](0030-performance-budgets.md) — SLO targets (parent; defines the target ratios this ADR measures against)
 - [ADR-0038](0038-audit-event-semantics.md) — Audit event semantics (defines `duration_ms`, `outcome`, `tool_name` fields consumed here)
+
+---
+
+## Amendment — 2026-06-10: SLIs for Subprocess (Bucket E) and Network-Info Tools
+
+### Context
+
+The original SLI table covered seven tools across five bounded contexts (filesystem-query, process, system-info, text-processing, archive). Two bounded contexts added after the initial acceptance — subprocess (ADR-0052, Bucket E always-async dispatch) and network-info (ADR-0058) — have no production-path SLIs, leaving the error budget framework incomplete for `subprocess.*` and `net.*` tools.
+
+ADR-0054 introduces a `stream_chunks_dropped` quality counter (`SUBSTRATE_STREAM_CHUNK_DROPPED` audit events) for Bucket E jobs. This counter is a distinct quality dimension from latency and warrants its own SLI.
+
+### New SLI Definitions
+
+**Subprocess Bucket E spawn-to-running latency**
+
+```
+SLI(subprocess.spawn, threshold_ms=500) =
+  count(audit events where tool_name = "subprocess.spawn"
+                       AND outcome IN {success, error}
+                       AND duration_ms <= 500)
+  /
+  count(audit events where tool_name = "subprocess.spawn"
+                       AND outcome IN {success, error})
+```
+
+Measurement window: 5-minute rolling. `duration_ms` covers the wall-clock time from `subprocess.spawn` invocation to the first `job_state = Running` notification emission (i.e., spawn-to-running latency, not job completion). Cancelled and timeout outcomes excluded from both numerator and denominator per the general rule above.
+
+SLO target: p95 spawn-to-running ≤ 500 ms. See `docs/arch/slo/subprocess-stream-integrity.yaml` for the corresponding OpenSLO file.
+
+**Subprocess stream chunk drop rate**
+
+```
+SLI(stream_integrity) =
+  count(audit events where event_type = "SUBSTRATE_STREAM_CHUNK_DELIVERED")
+  /
+  count(audit events where event_type IN {
+    "SUBSTRATE_STREAM_CHUNK_DELIVERED",
+    "SUBSTRATE_STREAM_CHUNK_DROPPED"
+  })
+```
+
+`SUBSTRATE_STREAM_CHUNK_DROPPED` events are emitted by the dispatcher task per ADR-0054 whenever `mpsc::Sender::try_send` returns `Err::Full`. `SUBSTRATE_STREAM_CHUNK_DELIVERED` events are emitted on each successful `notifications/progress` emission. Measurement window: 10-minute rolling (long-lived services accumulate chunks slowly in low-throughput phases). SLO target: delivery rate ≥ 0.999 (drop rate ≤ 0.1%). See `docs/arch/slo/subprocess-stream-integrity.yaml`.
+
+**Network-info read latency**
+
+```
+SLI(net_tools, threshold_ms=500) =
+  count(audit events where tool_name IN {
+    "net.tcp_list", "net.udp_list",
+    "net.tcp_stats", "net.connection_count"
+  }
+                       AND outcome IN {success, error}
+                       AND duration_ms <= 500)
+  /
+  count(audit events where tool_name IN {
+    "net.tcp_list", "net.udp_list",
+    "net.tcp_stats", "net.connection_count"
+  }
+                       AND outcome IN {success, error})
+```
+
+Measurement window: 5-minute rolling. Net tools are Zone A (async-native, no job registry overhead); a 500 ms p95 threshold aligns with the `sys.info` tier. Cancelled and timeout outcomes excluded. SLO target: p95 ≤ 500 ms. See `docs/arch/slo/net-read-latency.yaml`.
+
+### Amended SLI Table
+
+The table in the Consequences section above now extends to:
+
+| Tool | Threshold (ms) | Window |
+|---|---|---|
+| `fs.find` | 2000 | 5 min |
+| `proc.list` | 200 | 5 min |
+| `sys.info` | 50 | 5 min |
+| `text.search` | 500 | 5 min |
+| `archive.tar.create` | 30000 | 10 min |
+| `archive.zip.create` | 30000 | 10 min |
+| `archive.gzip.compress` | 5000 | 5 min |
+| `subprocess.spawn` (spawn-to-running) | 500 | 5 min |
+| `net.tcp_list` / `net.udp_list` / `net.tcp_stats` / `net.connection_count` | 500 | 5 min |
+
+The `stream_chunks_dropped` SLI is a ratio metric (not a latency threshold) and is listed separately above.
+
+### Cross-References (amendment)
+
+- [ADR-0052](0052-subprocess-execution-architecture.md) — Subprocess BC (Bucket E)
+- [ADR-0054](0054-subprocess-stream-multiplex.md) — Stream chunk drop counter (`SUBSTRATE_STREAM_CHUNK_DROPPED`)
+- [ADR-0058](0058-network-socket-introspection.md) — Network-info BC tools

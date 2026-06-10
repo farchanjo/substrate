@@ -6,7 +6,7 @@ consulted: []
 informed: []
 ---
 
-# ADR-0046 -- Companion SKILL.md for substrate MCP
+# ADR-0046 — Companion SKILL.md for substrate MCP
 
 ## Context and Problem Statement
 
@@ -37,9 +37,10 @@ narrative summary of the tool taxonomy.
 - The skill body acts as a stable contract between the server and the
   client — versioned with the server, but distributed at the client
   side.
-- Substrate's tool descriptions per ADR-0007 (narrative arc, capped at
-  180 tokens) are intentionally terse and cannot carry trigger heuristics
-  or call-pattern guidance.
+- Substrate's tool descriptions per ADR-0007 (capped at <= 100 characters
+  per the 2026-05-22 amendment, which retired the 180-token narrative-arc
+  template) are intentionally terse one-liners and cannot carry trigger
+  heuristics or call-pattern guidance.
 - The job control-plane (per ADR-0040) introduces a four-stage Push +
   Pull dual-channel contract that benefits from explicit client-side
   documentation.

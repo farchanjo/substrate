@@ -144,13 +144,14 @@ Cleanup MUST complete (or time out at one second) before the error response is d
 - [ADR-0004](0004-security-model.md) — Security model (path jail applied in step 1)
 - [ADR-0016](0016-resource-limits.md) — Resource limits (size limits enforced before preflight)
 - [ADR-0034](0034-kernel-induced-error-codes.md) — Kernel-induced error codes (`SUBSTRATE_STORAGE_FULL`)
+- [ADR-0035](0035-path-safety-hardening.md) — Path safety hardening (archive symlink-member ban and kernel-atomic path jail applied to the temp extraction directory before atomic rename)
 - [ADR-0037](0037-async-cancellation-patterns.md) — Cancellation patterns (CancellationToken propagation)
 
 ## Amendments
 
 ### 2026-05-24 — Subprocess stream-capture tmp files use same pattern (ADR-0052/ADR-0054)
 
-[ADR-0052](0052-subprocess-execution-architecture.md) and [ADR-0054](0054-subprocess-stream-capture.md) extend the transactional write pattern to subprocess stream capture. When `subprocess.spawn` is called with `capture_kind: tmp_file`, the stdout and stderr streams of the child process are written to temporary files using the same pattern mandated by this ADR.
+[ADR-0052](0052-subprocess-execution-architecture.md) and [ADR-0054](0054-subprocess-stream-multiplex.md) extend the transactional write pattern to subprocess stream capture. When `subprocess.spawn` is called with `capture_kind: tmp_file`, the stdout and stderr streams of the child process are written to temporary files using the same pattern mandated by this ADR.
 
 Temporary file naming convention for subprocess stream capture:
 
@@ -169,11 +170,11 @@ On terminal `Succeeded` state, the temporary files are atomically renamed to the
 
 On `Cancelled`, `Failed`, or SIGKILL-forced termination, both temporary files are removed via `tokio::fs::remove_file` in the cancellation cleanup path. This cleanup MUST NOT be implemented as a `Drop` impl, consistent with the `panic = "abort"` constraint from [ADR-0014](0014-build-system-and-toolchain.md) which prevents unwind-based RAII inside blocking closures from executing reliably. Cleanup is instead explicitly driven from the cancel arm of the job worker's `tokio::select!` loop, matching the pattern described in this ADR.
 
-Orphan temporary files — those that were not cleaned up because substrate was killed (e.g., via SIGKILL on macOS where `PR_SET_PDEATHSIG` is unavailable) — are reaped at next substrate startup by the orphan reaper routine specified in [ADR-0055](0055-subprocess-orphan-reaper.md). The reaper identifies orphan subprocess stream files by the `.substrate-subprocess-stream-` prefix and removes them before accepting new tool calls.
+Orphan temporary files — those that were not cleaned up because substrate was killed (e.g., via SIGKILL on macOS where `PR_SET_PDEATHSIG` is unavailable) — are reaped at next substrate startup by the orphan reaper routine specified in [ADR-0055](0055-orphan-reaper-on-startup.md). The reaper identifies orphan subprocess stream files by the `.substrate-subprocess-stream-` prefix and removes them before accepting new tool calls.
 
 The disk-space preflight defined in this ADR applies to subprocess stream capture: before creating the stdout and stderr temporary files, substrate checks available space in the `<capture_root>` filesystem and returns `SUBSTRATE_STORAGE_FULL` if the projected capture size exceeds available capacity. When the projected size is unknown (streaming capture without a known size bound), the preflight is skipped and ENOSPC is handled as a write error during capture.
 
-Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0054](0054-subprocess-stream-capture.md) — stream capture and aggregation; [ADR-0055](0055-subprocess-orphan-reaper.md) — orphan reaper.
+Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0054](0054-subprocess-stream-multiplex.md) — stream capture and aggregation; [ADR-0055](0055-orphan-reaper-on-startup.md) — orphan reaper.
 
 ### 2026-05-24 (revision 2) — TmpFile capture finalisation invariants
 
@@ -200,7 +201,7 @@ to a path inside `policy.roots` (returning `SUBSTRATE_CONFIG_INVALID` on failure
 
 **ENOENT-safe cleanup.** The `cleanup_tmp_files` routine MUST silently ignore
 `ENOENT` errors when removing transit files. The orphan reaper introduced by
-[ADR-0055](0055-subprocess-orphan-reaper.md) may remove a transit file between the
+[ADR-0055](0055-orphan-reaper-on-startup.md) may remove a transit file between the
 terminal state write and the cleanup call (a legitimate race on SIGKILL-forced
 shutdown). Treating `ENOENT` as a fatal error in cleanup would mask the real
 terminal state and prevent the error response from reaching the client.

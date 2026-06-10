@@ -40,11 +40,11 @@
 #
 #   FAIL — tool name with wrong separator
 #   input = {"tool_name":"fs_read"}
-#   expected deny: "tool_name 'fs_read': must match ^(fs|proc|sys|text|archive)\\.[a-z_]+$"
+#   expected deny: "tool_name 'fs_read': must match ^(fs|proc|sys|text|archive|job|net|subprocess)\\.[a-z_]+$"
 #
 #   FAIL — unknown namespace in tool name
-#   input = {"tool_name":"net.connect"}
-#   expected deny: "tool_name 'net.connect': must match ^(fs|proc|sys|text|archive)\\.[a-z_]+$"
+#   input = {"tool_name":"bogus.tool"}
+#   expected deny: "tool_name 'bogus.tool': must match ^(fs|proc|sys|text|archive|job|net|subprocess)\\.[a-z_]+$"
 #
 #   FAIL — error code missing prefix
 #   input = {"error_code":"PATH_OUTSIDE_ALLOWLIST"}
@@ -74,7 +74,7 @@ import rego.v1
 # Pattern constants
 # ---------------------------------------------------------------------------
 
-_tool_name_pattern     := `^(fs|proc|sys|text|archive)\.[a-z_]+$`
+_tool_name_pattern     := `^(fs|proc|sys|text|archive|job|net|subprocess)\.[a-z_]+$`
 _error_code_pattern    := `^SUBSTRATE_[A-Z_]+$`
 _cue_filename_pattern  := `^[a-z][a-z0-9_]*\.cue$`
 _cue_def_pattern       := `^#[A-Z][a-zA-Z0-9]*$`
@@ -89,7 +89,7 @@ deny contains msg if {
     v := input.tool_name
     not regex.match(_tool_name_pattern, v)
     msg := sprintf(
-        "tool_name '%s': must match ^(fs|proc|sys|text|archive)\\.[a-z_]+$",
+        "tool_name '%s': must match ^(fs|proc|sys|text|archive|job|net|subprocess)\\.[a-z_]+$",
         [v],
     )
 }

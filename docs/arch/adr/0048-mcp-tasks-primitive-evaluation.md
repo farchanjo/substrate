@@ -8,7 +8,7 @@ tags: [mcp, protocol, tasks, evaluation]
 superseded_by: 0049-mcp-tasks-primitive-adoption.md
 ---
 
-# ADR-0048: MCP Tasks Primitive Evaluation (SEP-1686 deferral)
+# ADR-0048 — MCP Tasks Primitive Evaluation (SEP-1686 deferral)
 
 ## Context and Problem Statement
 

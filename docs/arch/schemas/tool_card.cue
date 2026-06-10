@@ -1,30 +1,23 @@
 // DDD role: ValueObject
 package schemas
 
-// #ToolCard is the canonical human-readable narrative arc for a tool.
-// All six sections follow the USE/DOES/ARGS/RETURNS/NEXT/AVOID grammar.
-// The total token budget across all text fields MUST NOT exceed 180 tokens.
+import "strings"
+
+// #ToolCard is the canonical wire description for a registered MCP tool.
+// Per the ADR-0007 2026-05-22 amendment (MCP + skill synergy) the description is a
+// thin one-liner capped at 100 characters; the former 180-token six-field
+// USE/DOES/ARGS/RETURNS/NEXT/AVOID grammar was retired and those labels are
+// forbidden on the wire. The full lookup reference (argument tables, follow-up
+// suggestions, anti-patterns) lives in the companion substrate skill, not in the
+// tool listing.
 #ToolCard: {
-	// use: one sentence on when a caller should reach for this tool.
-	use: string
+	// description is the thin one-liner shown verbatim in client tool listings.
+	// Hard cap: 100 characters (tool_description_cap). No multi-field template.
+	description: string & strings.MaxRunes(100)
 
-	// does: one sentence on what the tool actually performs.
-	does: string
-
-	// args: ordered list of argument descriptors.
+	// args: ordered list of argument descriptors. Retained for skill-side reference
+	// generation; not emitted in the on-the-wire tool description.
 	args: [...#ToolArg]
-
-	// returns: one sentence describing the successful output shape.
-	returns: string
-
-	// next: suggested follow-up tool names (0-3 items preferred).
-	next: [...string]
-
-	// avoid: anti-patterns or misuse scenarios to warn callers about.
-	avoid: string
-
-	// total_token_budget_max is a spec constant; never exceed 180 tokens across all fields.
-	total_token_budget_max: 180
 }
 
 // #ArgType enumerates the primitive argument types recognised by the substrate runtime.

@@ -169,7 +169,7 @@ sequence numbers are per-stream, zero-based, and monotonically increasing.
 due to mpsc back-pressure. Clients MUST detect dropped chunks via gaps in `seq`
 and surface them to the operator.
 
-See [ADR-0054](../../adr/0054-subprocess-stdout-stderr-stream-multiplex.md).
+See [ADR-0054](../../adr/0054-subprocess-stream-multiplex.md).
 
 ## Orphan Reaper Integration
 
@@ -185,11 +185,11 @@ See [ADR-0055](../../adr/0055-orphan-reaper-on-startup.md).
 
 ## Cross-References
 
-- [ADR-0052](../../adr/0052-subprocess-bounded-context.md) — decision record
-  superseding ADR-0044 for the subprocess BC
+- [ADR-0052](../../adr/0052-subprocess-execution-architecture.md) — decision
+  record superseding ADR-0044 for the subprocess BC
 - [ADR-0053](../../adr/0053-process-lifecycle-cascade-contract.md) — setsid,
   PR_SET_PDEATHSIG, macOS watchdog pipe
-- [ADR-0054](../../adr/0054-subprocess-stdout-stderr-stream-multiplex.md) —
+- [ADR-0054](../../adr/0054-subprocess-stream-multiplex.md) —
   chunk delivery via notifications/progress
 - [ADR-0055](../../adr/0055-orphan-reaper-on-startup.md) — startup orphan reap
 - [ADR-0004](../../adr/0004-security-model.md) — security model (Layer 5 amendment)

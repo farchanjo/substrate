@@ -249,6 +249,32 @@ to the MCP caller. The domain never receives an invalid value.
 - [ADR-0061](0061-inbound-request-default-validation-policy.md) — companion
   ADR: governs the handler-level `Default` / `is_null()` shortcut policy that
   allowed the zero-page bug to survive the inbound layer.
+- [ADR-0008](0008-mcp-features-map.md) — declares the handler/protocol-layer
+  pagination clamp (`max_page_size` default 500). The `PageSize` value object
+  defined here owns the outer domain bound (`1..=10000`, reject-if-outside);
+  the per-tool handler cap in ADR-0008 is the inner clamp applied after this
+  value object validates. The 2026-06-10 amendment of ADR-0008 documents the
+  layering reconciliation in full.
+
+## Amendments
+
+### 2026-06-10 — Relationship to the ADR-0008 handler-layer pagination cap
+
+This value object enforces the domain-port bound `MIN = 1`, `MAX = 10_000`,
+`DEFAULT = 50`. It does NOT set the maximum page size a paginated tool will
+actually return. [ADR-0008](0008-mcp-features-map.md) defines a separate
+handler/protocol-layer clamp that runs AFTER `PageSize::try_from` succeeds:
+`fs.find`, `proc.list`, and `text.search` clamp the validated value down to
+500 via `.get().min(cap)`, and `fs.read_dir` clamps to 5_000. The TOML
+`[protocol] max_page_size` (default 500) configures this clamp.
+
+The two layers are complementary, not contradictory: a request with
+`page_size` in `501..=10_000` is accepted by this value object and then
+silently clamped down to the per-tool ceiling at the handler; only
+`page_size = 0` or `page_size > 10_000` is rejected with
+`SUBSTRATE_INVALID_ARGUMENT`. A second associated default,
+`DEFAULT_PAGINATION = 100`, is provided for line- and record-oriented
+operations (subprocess result, search, network TCP/UDP list).
 
 ## References
 

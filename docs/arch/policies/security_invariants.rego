@@ -20,7 +20,7 @@
 #                                           // references Zip Slip check in its spec
 #     },
 #     "security_policy": {
-#       "dry_run_required_for":   ["fs.remove","fs.rename","fs.set_permissions","proc.signal","archive.tar.create","archive.tar.extract","archive.zip.create","archive.zip.extract","archive.zstd.create","archive.zstd.extract"],
+#       "dry_run_required_for":   ["fs.remove","fs.rename","fs.set_permissions","proc.signal","archive.tar.create","archive.tar.extract","archive.zip.create","archive.zip.extract","archive.gzip.compress","archive.gzip.decompress"],
 #       "signal_allowlist":       ["SIGTERM","SIGHUP","SIGINT","SIGUSR1","SIGUSR2"],
 #       "outbound_net_enabled":   false,
 #       "features":               []      // list of enabled cargo feature flag strings
@@ -87,7 +87,7 @@ _destructive_annotation(tool) if {
 _archive_extract_tools := {
     "archive.tar.extract",
     "archive.zip.extract",
-    "archive.zstd.extract",
+    "archive.gzip.decompress",
 }
 
 _is_archive_extract(name) if _archive_extract_tools[name]

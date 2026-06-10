@@ -24,17 +24,29 @@ spec:
         counter: true
         good:
           metricSource:
-            metricSourceRef: prometheus-substrate
-            type: prometheus
+            metricSourceRef: substrate-audit-log
+            type: audit-log
             spec:
-              query: sum(rate(substrate_pathjail_blocked_total[1h]))
+              # ADR-0039 / ADR-0035: count audit events where
+              # outcome = "error" AND error_code = "SUBSTRATE_PATH_OUTSIDE_JAIL"
+              # (a blocked evaluation is the good event — it means the jail
+              # correctly rejected the path; the SLO target is 1.0 = all
+              # out-of-allowlist paths are blocked).
+              filter: |
+                outcome = "error"
+                AND error_code = "SUBSTRATE_PATH_OUTSIDE_JAIL"
+              window: 1h
         total:
           metricSource:
-            metricSourceRef: prometheus-substrate
-            type: prometheus
+            metricSourceRef: substrate-audit-log
+            type: audit-log
             spec:
-              query: >-
-                sum(rate(substrate_pathjail_evaluation_total[1h]))
+              # Total = all path-jail evaluations that reached the kernel
+              # check, identified by the pathjail_evaluated structured field
+              # emitted by the policy enforcement layer (ADR-0038 field).
+              filter: |
+                pathjail_evaluated = true
+              window: 1h
   timeWindow:
     - duration: 30d
       isRolling: true

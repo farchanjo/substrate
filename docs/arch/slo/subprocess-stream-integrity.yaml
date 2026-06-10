@@ -1,0 +1,60 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-subprocess-stream-integrity
+  displayName: Subprocess stream chunk drop rate
+  labels:
+    bounded_context: subprocess
+spec:
+  description: |
+    Subprocess stream chunks (stdout/stderr) SHOULD be delivered with a
+    drop rate below 0.1% per Bucket E job per ADR-0054 (bounded mpsc
+    channel with 64-slot capacity per stream). A dropped chunk is
+    recorded as audit event SUBSTRATE_STREAM_CHUNK_DROPPED per ADR-0038.
+    SLI sourced from audit log JSON Lines stream per ADR-0039. The ratio
+    is (chunks_delivered) / (chunks_delivered + chunks_dropped) over a
+    10-minute rolling window. A 10-minute window is used because
+    Bucket E jobs may be long-running services; a 5-minute window would
+    not accumulate a statistically meaningful sample for short jobs.
+    Cancelled and timeout outcomes excluded from denominator per ADR-0039.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: subprocess-stream-chunk-drop-rate
+    spec:
+      ratioMetric:
+        counter: true
+        good:
+          metricSource:
+            metricSourceRef: substrate-audit-log
+            type: audit-log
+            spec:
+              # ADR-0039 / ADR-0054: count audit events where
+              # event_type = "SUBSTRATE_STREAM_CHUNK_DELIVERED".
+              # Delivered chunks are emitted by the dispatcher task on
+              # each successful notifications/progress emission.
+              filter: |
+                event_type = "SUBSTRATE_STREAM_CHUNK_DELIVERED"
+              window: 10m
+        total:
+          metricSource:
+            metricSourceRef: substrate-audit-log
+            type: audit-log
+            spec:
+              # Total = delivered + dropped chunks. Dropped chunks are
+              # recorded as SUBSTRATE_STREAM_CHUNK_DROPPED audit events
+              # per ADR-0054 backpressure section.
+              filter: |
+                event_type IN (
+                  "SUBSTRATE_STREAM_CHUNK_DELIVERED",
+                  "SUBSTRATE_STREAM_CHUNK_DROPPED"
+                )
+              window: 10m
+  timeWindow:
+    - duration: 7d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: 99.9% chunk delivery rate
+      target: 0.999

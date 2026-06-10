@@ -196,6 +196,7 @@ The following risks are documented as not fully closed by the decisions above:
 - [ADR-0004](0004-security-model.md) — Security model (base path jail and allowlist)
 - [ADR-0018](0018-logging-redaction.md) — Logging redaction policy (extra_patterns for custom secrets)
 - [ADR-0029](0029-threat-model.md) — Threat model (TOCTOU, firmlink, and Unicode threats)
+- [ADR-0033](0033-transactional-write-pattern.md) — Transactional write pattern (the archive symlink-member ban and path jail defined here are applied to each member written into the temp extraction directory before its atomic rename)
 - [ADR-0036](0036-startup-error-contract.md) — Startup error contract (`SUBSTRATE_CONFIG_INVALID` on root canonicalization failure)
 
 ## Amendments

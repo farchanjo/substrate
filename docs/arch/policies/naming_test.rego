@@ -10,15 +10,27 @@ test_valid_tool_name_allowed if {
     count(deny) == 0 with input as {"tool_name": "fs.read"}
 }
 
+test_valid_net_tcp_list_tool_name_allowed if {
+    count(deny) == 0 with input as {"tool_name": "net.tcp_list"}
+}
+
+test_valid_subprocess_spawn_tool_name_allowed if {
+    count(deny) == 0 with input as {"tool_name": "subprocess.spawn"}
+}
+
+test_valid_job_result_tool_name_allowed if {
+    count(deny) == 0 with input as {"tool_name": "job.result"}
+}
+
 test_tool_name_wrong_separator_denied if {
-    deny["tool_name 'fs_read': must match ^(fs|proc|sys|text|archive)\\.[a-z_]+$"] with input as {
+    deny["tool_name 'fs_read': must match ^(fs|proc|sys|text|archive|job|net|subprocess)\\.[a-z_]+$"] with input as {
         "tool_name": "fs_read",
     }
 }
 
 test_tool_name_unknown_namespace_denied if {
-    deny["tool_name 'net.connect': must match ^(fs|proc|sys|text|archive)\\.[a-z_]+$"] with input as {
-        "tool_name": "net.connect",
+    deny["tool_name 'bogus.tool': must match ^(fs|proc|sys|text|archive|job|net|subprocess)\\.[a-z_]+$"] with input as {
+        "tool_name": "bogus.tool",
     }
 }
 
