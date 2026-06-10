@@ -13,6 +13,7 @@
 //! performance posture relative to the native tiers.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -129,30 +130,53 @@ impl FsIndexPort for PortablePollingIndex {
         cancel: &dyn CancelSignal,
     ) -> SubstrateResult<()> {
         let root_clone = root.clone();
-        // Capture the cancel flag state in a closure for use inside spawn_blocking.
-        // We cannot pass `&dyn CancelSignal` across the spawn_blocking boundary
-        // because it is not `'static`. Instead we capture a snapshot of the
-        // cancelled state and poll it synchronously inside the blocking closure.
-        // The granularity (check every 256 directory entries in rebuild::walk_root)
-        // is sufficient for cooperative cancellation per ADR-0037.
-        let is_cancelled = cancel.is_cancelled();
         let slot = Arc::clone(&self.slot);
 
-        let new_snap = task::spawn_blocking(move || {
-            // Pass a simple closure that returns the pre-captured cancellation state.
-            // For long walks, callers that need finer-grained cancellation should
-            // use the Linux or macOS native tiers which integrate CancellationToken
-            // more tightly.
-            let cancel_fn = move || is_cancelled;
-            rebuild::walk_root(&root_clone, &cancel_fn)
-        })
-        .await
-        .map_err(|e| substrate_domain::SubstrateError::InternalError {
-            reason: format!("rebuild spawn_blocking panicked: {e}"),
-            correlation_id: None,
-        })??;
+        // Bridge the `&dyn CancelSignal` (non-`'static`) into the `spawn_blocking`
+        // closure (which requires `'static` captures) via a shared `AtomicBool`.
+        //
+        // Strategy: share an `Arc<AtomicBool>` between the async context and the
+        // blocking closure.  In the async context we `tokio::select!` between the
+        // blocking task completing and `cancel.cancelled()` firing.  When the
+        // cancellation arm wins, we set the flag so that the still-running
+        // blocking walk sees it at the next 256-entry boundary check (ADR-0037).
+        //
+        // This replaces the previous `let is_cancelled = cancel.is_cancelled()`
+        // frozen-bool pattern, which was only evaluated once at dispatch time and
+        // therefore never reflected cancellations that arrived mid-walk.
+        let cancel_flag = Arc::new(AtomicBool::new(cancel.is_cancelled()));
+        let flag_for_closure = Arc::clone(&cancel_flag);
 
-        slot.store(Arc::new(new_snap));
+        let blocking_task = task::spawn_blocking(move || {
+            // Re-read the live AtomicBool at each 256-entry boundary.
+            // The flag is set by the cancellation arm of the select below
+            // while the walk is in progress, giving true mid-walk cancellation.
+            let cancel_fn = move || flag_for_closure.load(Ordering::Acquire);
+            rebuild::walk_root(&root_clone, &cancel_fn)
+        });
+
+        // Drive the blocking task while concurrently watching for cancellation.
+        // Per ADR-0037 the work future is the biased-first arm; the cancel arm
+        // sets the flag and returns early, allowing the blocking task to drain
+        // at its next checkpoint.
+        let snap_result = tokio::select! {
+            biased;
+            result = blocking_task => {
+                result.map_err(|e| substrate_domain::SubstrateError::InternalError {
+                    reason: format!("rebuild spawn_blocking panicked: {e}"),
+                    correlation_id: None,
+                })?
+            },
+            () = cancel.cancelled() => {
+                // Signal the blocking walk to stop at its next boundary check.
+                cancel_flag.store(true, Ordering::Release);
+                return Err(substrate_domain::SubstrateError::Cancelled {
+                    correlation_id: None,
+                });
+            },
+        };
+
+        slot.store(Arc::new(snap_result?));
         Ok(())
     }
 }

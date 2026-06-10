@@ -112,14 +112,50 @@ impl IndexSnapshot {
     /// Inserts a single entry, keying it in both indexes.
     ///
     /// Used by `WriteThroughHandle` for fast single-entry updates.
+    ///
+    /// # Root-key resolution
+    ///
+    /// The `by_root` key must match the configured allowlist root so that
+    /// `lookup_by_root` (which queries by that root) can find the entry.
+    /// We walk the entry's path ancestors from shallowest to deepest and use
+    /// the first ancestor that is already a key in `by_root` — i.e., a root
+    /// that has been seeded by a previous `insert_batch` call from a full
+    /// rebuild.  If no seeded ancestor is found we fall back to the immediate
+    /// parent, which preserves the pre-existing behaviour for the bootstrapping
+    /// window (before the first rebuild completes).
     pub(crate) fn insert_batch_single(&mut self, file_name: String, entry: IndexEntry) {
-        let root_key = entry
+        // Collect ancestors ordered from the filesystem root downward so that
+        // the longest matching prefix (deepest configured allowlist root) wins.
+        // `std::path::Path::ancestors` yields from the path itself toward `/`,
+        // so we reverse to get shallowest-first for the scan.
+        let mut ancestors: Vec<String> = entry
             .path
             .as_path()
             .ancestors()
-            .nth(1)
+            .skip(1) // skip the path itself
             .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        // Reverse so we go from the filesystem root toward the immediate parent;
+        // the last element matching a seeded root is the deepest configured root.
+        ancestors.reverse();
+
+        let root_key = ancestors
+            .iter()
+            .filter(|p| self.by_root.contains_key(p.as_str()))
+            .last()
+            .cloned()
+            .or_else(|| {
+                // Fallback: immediate parent — original behaviour for the
+                // bootstrapping window before the first rebuild seeds by_root.
+                entry
+                    .path
+                    .as_path()
+                    .ancestors()
+                    .nth(1)
+                    .map(|p| p.to_string_lossy().into_owned())
+            })
             .unwrap_or_default();
+
         self.by_name
             .entry(file_name)
             .or_default()
