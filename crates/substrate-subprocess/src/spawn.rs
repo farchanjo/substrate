@@ -21,6 +21,8 @@ use substrate_domain::subprocess::state::SubprocessState;
 use substrate_domain::subprocess::{StdinKind, SubprocessError, SubprocessRequest};
 use substrate_domain::value_objects::{JobId, ProcessGroup};
 
+use substrate_policy::Allowlist;
+
 // ---------------------------------------------------------------------------
 // SubprocessState ↔ u8 conversion helpers (private to this crate).
 // AtomicU8 is used in ChildHandle.state for lock-free reads by snapshot_handle.
@@ -302,6 +304,7 @@ pub async fn spawn_supervised(
     parent_cancel: CancellationToken,
     aggregate_buffer_bytes: usize,
     tmp_root: Option<&std::path::Path>,
+    path_allowlist: &Allowlist,
 ) -> Result<ChildHandle, SubprocessError> {
     // Step 1: domain validation (no OS calls).
     req.validate()?;
@@ -334,14 +337,21 @@ pub async fn spawn_supervised(
             cmd.stdin(Stdio::piped());
         },
         StdinKind::FilePath(path) => {
-            let file = std::fs::File::open(path)
-                .map_err(|e| SubprocessError::SpawnFailed { source: e })?;
+            // SECURITY (ADR-0004 / ADR-0035): the stdin source file is host-readable
+            // content piped into the child. Opening it without a jail check is an
+            // arbitrary-file-read primitive (e.g. /etc/shadow). Validate the path
+            // against the allowlist (reject `..`, canonicalize, require containment),
+            // then open inside spawn_blocking (blocking syscall, async zone B).
+            let file = open_jailed_stdin(path, path_allowlist).await?;
             cmd.stdin(file);
         },
     }
 
-    // Step 4: watchdog (macOS) — must be installed before pre_exec.
-    let watchdog = crate::watchdog::install(&mut cmd)
+    // Step 4: watchdog (macOS) — must be installed before pre_exec. On macOS the
+    // returned WatchdogPipe keeps the read end open in the parent until after
+    // cmd.spawn() forks the child (see notify_spawned below); on other platforms
+    // this is a zero-cost no-op.
+    let mut watchdog = crate::watchdog::install(&mut cmd)
         .map_err(|e| SubprocessError::SpawnFailed { source: e })?;
 
     // Step 5: pre-exec hook (setsid + prctl).
@@ -351,6 +361,13 @@ pub async fn spawn_supervised(
     let child = cmd
         .spawn()
         .map_err(|e| SubprocessError::SpawnFailed { source: e })?;
+
+    // Step 6b: close the parent's copy of the watchdog read end now that the child
+    // has been forked and has inherited it. Keeping it open until here is what makes
+    // the macOS EOF-on-parent-death mechanism (ADR-0053) actually function; doing it
+    // inside install() — before fork — left the child without an open read end. No-op
+    // on non-macOS platforms.
+    watchdog.notify_spawned();
 
     // Step 7: extract PID. After setsid() pgid == pid.
     let raw_pid = child.id().ok_or_else(|| SubprocessError::SpawnFailed {
@@ -430,5 +447,81 @@ pub async fn spawn_supervised(
         capture_kind: req.capture_kind.clone(),
         stdout_tmp_writer,
         stderr_tmp_writer,
+    })
+}
+
+/// Validates `path` against `allowlist` and opens it as a read-only stdin source.
+///
+/// Mirrors the `fs.read` jail contract for the `StdinKind::FilePath` case:
+///
+/// 1. Reject any `..` (`Component::ParentDir`) segment — a component-wise prefix
+///    check cannot reason about traversal, so this is rejected before resolution.
+/// 2. Canonicalize the path (resolving symlinks + remaining segments) on a blocking
+///    thread (zone B, ADR-0003); a missing/unreadable path is a spawn error.
+/// 3. Require the resolved real path to be contained in an allowlist root.
+/// 4. Open the resolved path with `O_NOFOLLOW` so a symlink swapped in after the
+///    containment check cannot redirect the open (TOCTOU hardening).
+///
+/// # Errors
+///
+/// - [`SubprocessError::CwdOutsideAllowlist`] reuses the cwd-allowlist code for any
+///   stdin file path outside the allowlist (no dedicated stdin variant exists; the
+///   code string communicates "path outside the configured allowlist").
+/// - [`SubprocessError::SpawnFailed`] when canonicalization or the open fails.
+async fn open_jailed_stdin(
+    path: &std::path::Path,
+    allowlist: &Allowlist,
+) -> Result<std::fs::File, SubprocessError> {
+    use std::path::Component;
+
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(SubprocessError::CwdOutsideAllowlist {
+            path: path.display().to_string(),
+        });
+    }
+
+    let display = path.display().to_string();
+    let owned = path.to_path_buf();
+    let canonical = {
+        let display = display.clone();
+        tokio::task::spawn_blocking(move || std::fs::canonicalize(&owned))
+            .await
+            .map_err(|join_err| SubprocessError::SpawnFailed {
+                source: std::io::Error::other(format!(
+                    "stdin canonicalize task join failed: {join_err}"
+                )),
+            })?
+            .map_err(|e| SubprocessError::SpawnFailed {
+                source: std::io::Error::other(format!(
+                    "failed to canonicalize stdin file path '{display}': {e}"
+                )),
+            })?
+    };
+
+    if !allowlist.contains(&canonical) {
+        return Err(SubprocessError::CwdOutsideAllowlist {
+            path: path.display().to_string(),
+        });
+    }
+
+    // Open the resolved real path. O_NOFOLLOW on the final component closes the
+    // residual TOCTOU window where a symlink is swapped in between the containment
+    // check and the open. Blocking open runs inside spawn_blocking (zone B).
+    tokio::task::spawn_blocking(move || {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        opts.open(&canonical)
+    })
+    .await
+    .map_err(|join_err| SubprocessError::SpawnFailed {
+        source: std::io::Error::other(format!("stdin open task join failed: {join_err}")),
+    })?
+    .map_err(|e| SubprocessError::SpawnFailed {
+        source: std::io::Error::other(format!("failed to open stdin file path '{display}': {e}")),
     })
 }

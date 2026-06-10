@@ -26,26 +26,58 @@
               only a pipe fd lifetime (close-on-exec bit clear on read end)."
 )]
 mod inner {
-    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::fd::OwnedFd;
 
-    /// macOS watchdog pipe: the write end is kept alive in the parent.
+    /// macOS watchdog pipe.
     ///
-    /// When this struct is dropped (or the parent exits), the write end is
-    /// closed, delivering EOF to the child's read end.
+    /// Holds the write end (kept alive for the lifetime of the child so the EOF
+    /// notification is delivered when substrate exits) and, transiently, the
+    /// parent's copy of the read end.
+    ///
+    /// The read end MUST stay open in the parent until AFTER `cmd.spawn()` forks,
+    /// otherwise the child never inherits an open read end and the EOF-on-parent
+    /// -death mechanism (ADR-0053) is silently non-functional. The caller invokes
+    /// [`WatchdogPipe::notify_spawned`] immediately after `cmd.spawn()` returns to
+    /// drop the parent's read-end copy; from that point only the child holds the
+    /// read end, so closing the write end delivers EOF to the child alone.
     #[derive(Debug)]
     pub struct WatchdogPipe {
         /// Write end of the watchdog pipe. Kept alive as long as this struct
         /// exists. Dropped (closed) when substrate exits or when the
-        /// `ChildHandle` is released.
+        /// `ChildHandle` is released, delivering EOF to the child's read end.
         _write_end: OwnedFd,
+
+        /// Parent's copy of the read end. Held open across `cmd.spawn()` so the
+        /// child inherits a valid, open read end at exec time. Dropped by
+        /// [`WatchdogPipe::notify_spawned`] once the fork has occurred.
+        read_end_parent_copy: Option<OwnedFd>,
+    }
+
+    impl WatchdogPipe {
+        /// Closes the parent's copy of the read end after the child has been forked.
+        ///
+        /// Call exactly once, immediately after `cmd.spawn()` returns. Before this
+        /// call the parent keeps the read end open so the fork inherits it; after
+        /// it, only the child holds the read end and closing the write end (on
+        /// substrate exit / `WatchdogPipe` drop) delivers a clean EOF to the child.
+        ///
+        /// Idempotent: a second call is a no-op.
+        pub fn notify_spawned(&mut self) {
+            // Dropping the OwnedFd closes the parent's read-end copy.
+            self.read_end_parent_copy = None;
+        }
     }
 
     /// Installs the watchdog pipe on `cmd`.
     ///
     /// Creates a `pipe(2)`, marks the read end as non-CLOEXEC so the child
-    /// inherits it, sets `SUBSTRATE_WATCHDOG_FD` in the child's environment
-    /// to the read-end fd number, and returns a [`WatchdogPipe`] that keeps
-    /// the write end open.
+    /// inherits it, sets `SUBSTRATE_WATCHDOG_FD` in the child's environment to the
+    /// read-end fd number, and returns a [`WatchdogPipe`] that keeps BOTH ends open
+    /// in the parent until [`WatchdogPipe::notify_spawned`] is called post-spawn.
+    ///
+    /// Keeping the read end open across the spawn is required: the child inherits
+    /// the fd at fork/exec, so the `SUBSTRATE_WATCHDOG_FD` number must reference a
+    /// still-open descriptor when exec runs.
     ///
     /// # Errors
     ///
@@ -79,29 +111,14 @@ mod inner {
             return Err(std::io::Error::last_os_error());
         }
 
-        // Tell the child the fd number via environment variable.
+        // Tell the child the fd number via environment variable. This number stays
+        // valid at exec time because `read_fd` is retained in `read_end_parent_copy`
+        // until `notify_spawned` is called AFTER `cmd.spawn()` forks the child.
         cmd.env("SUBSTRATE_WATCHDOG_FD", raw_read.to_string());
-
-        // Transfer the read_fd into the child by converting to raw and forgetting
-        // the OwnedFd so it is not closed in the parent before exec runs.
-        // The child inherits the raw fd number; the parent has no further interest.
-        // SAFETY: we intentionally leak the read fd into the child via exec
-        // inheritance. The `forget` prevents double-close. The child (OS) closes
-        // it when the child process exits.
-        let raw_read_forgotten = std::os::fd::IntoRawFd::into_raw_fd(read_fd);
-        // Immediately re-wrap in OwnedFd so that if this function returns an error
-        // after this point, the fd is still closed on the parent side. However,
-        // at this point we have no more fallible operations, so this is purely
-        // defensive. Since the child inherits this fd on exec, the parent should
-        // close it after fork to avoid accumulation. We close it here explicitly.
-        // SAFETY: raw_read_forgotten is a valid open fd not aliased elsewhere in
-        // this scope. Wrapping it in OwnedFd transfers ownership back for drop.
-        let _close_read_in_parent = unsafe { OwnedFd::from_raw_fd(raw_read_forgotten) };
-        // _close_read_in_parent drops here, closing the read end in the parent.
-        // The child inherits a copy created by fork+exec.
 
         Ok(WatchdogPipe {
             _write_end: write_fd,
+            read_end_parent_copy: Some(read_fd),
         })
     }
 }
@@ -115,6 +132,15 @@ mod inner {
     #[derive(Debug)]
     pub struct WatchdogPipe {
         _phantom: std::marker::PhantomData<()>,
+    }
+
+    impl WatchdogPipe {
+        /// No-op on non-macOS platforms (Linux uses `PR_SET_PDEATHSIG`).
+        ///
+        /// Present so the spawn path can call `notify_spawned` unconditionally
+        /// after `cmd.spawn()` regardless of platform.
+        #[inline]
+        pub const fn notify_spawned(&mut self) {}
     }
 
     /// No-op install on non-macOS platforms. Always returns `Ok(NoopWatchdog)`.

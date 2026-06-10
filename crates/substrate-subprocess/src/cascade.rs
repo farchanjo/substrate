@@ -177,17 +177,30 @@ async fn wait_or_kill(
                     return SubprocessState::Cancelled;
                 },
                 Err(e) => {
-                    warn!(job_id = job_id, error = %e, "wait_exit returned error during drain");
-                    // Fall through to SIGKILL.
+                    // PID/PGID-reuse mitigation (ADR-0053): wait_exit() already TOOK
+                    // the child from the mutex, so on error the leader may already be
+                    // reaped by the kernel and its PGID recyclable. Sending killpg
+                    // here could signal an unrelated, recycled process group. Treat as
+                    // terminal WITHOUT a post-reap killpg.
+                    warn!(
+                        job_id = job_id,
+                        error = %e,
+                        "wait_exit errored during drain; leader may be reaped — \
+                         skipping post-reap killpg to avoid PGID-reuse race"
+                    );
+                    return SubprocessState::Killed;
                 },
             }
         },
         () = tokio::time::sleep(Duration::from_secs(drain_secs)) => {
-            // Drain window expired; escalate to SIGKILL.
+            // Drain window expired; the leader is still alive (the wait_exit arm did
+            // not win), so its PGID has NOT been reaped/recycled. Escalating to
+            // killpg here is race-free.
         },
     }
 
-    // Step 4: drain window expired — send SIGKILL.
+    // Step 4: drain window expired — SIGKILL the still-live group, THEN reap.
+    // Order matters: killpg precedes drain_child so we never signal a recycled PGID.
     send_signal_to_group(
         pgid,
         Signal::SIGKILL,

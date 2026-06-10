@@ -68,9 +68,18 @@ const BANNED_ENV_KEYS: &[&str] = &[
 /// A simple binary allowlist: a set of absolute path strings.
 ///
 /// Empty = deny-all (default per ADR-0052 §"Binary allowlist").
+///
+/// # Security (ADR-0052 §"Binary allowlist", symlink hardening)
+///
+/// The configured `entries` are compared verbatim by [`BinaryAllowlist::allows`].
+/// That literal check is insufficient on its own because an allowlisted symlink
+/// resolves to an arbitrary target binary, so the registry spawn path additionally
+/// canonicalizes both the configured entries AND the requested binary, then compares
+/// the resolved real paths and requires the resolved target to be a regular file.
+/// See [`canonicalize_existing`] and the binary check in `SubprocessRegistry::spawn`.
 #[derive(Debug, Clone)]
 pub struct BinaryAllowlist {
-    /// Absolute paths of permitted binaries.
+    /// Absolute paths of permitted binaries, as configured (unresolved).
     entries: Vec<PathBuf>,
 }
 
@@ -89,10 +98,25 @@ impl BinaryAllowlist {
         }
     }
 
-    /// Returns `true` when `path` is in the allowlist.
+    /// Returns `true` when `path` literally matches a configured allowlist entry.
+    ///
+    /// This is a verbatim (unresolved) comparison. It is necessary but NOT
+    /// sufficient: a configured symlink entry would match a request that names the
+    /// symlink yet resolve to an arbitrary target. The registry spawn path performs
+    /// the canonical, regular-file-verified membership check; this method is retained
+    /// for the cheap literal fast-path and for unit tests.
     #[must_use]
     pub fn allows(&self, path: &std::path::Path) -> bool {
         self.entries.iter().any(|e| e == path)
+    }
+
+    /// Returns a snapshot of the configured (unresolved) allowlist entries.
+    ///
+    /// Used by the registry spawn path to canonicalize each entry inside a
+    /// `spawn_blocking` closure before comparing resolved real paths.
+    #[must_use]
+    pub fn entries(&self) -> Vec<PathBuf> {
+        self.entries.clone()
     }
 }
 
@@ -518,15 +542,30 @@ impl SubprocessPort for SubprocessRegistry {
             }
         }
 
-        // Layer: binary allowlist.
-        if !self.binary_allowlist.allows(&req.binary_path) {
-            return Err(SubprocessError::BinaryNotAllowed {
-                path: req.binary_path.display().to_string(),
+        // Layer: binary allowlist (canonical, symlink-resolved, regular-file-only).
+        // A literal PathBuf equality check is insufficient — an allowlisted symlink
+        // would resolve to an arbitrary target. resolve_binary_allowed canonicalizes
+        // both sides and verifies the resolved target is a regular file.
+        resolve_binary_allowed(&self.binary_allowlist, &req.binary_path).await?;
+
+        // Layer: cwd within path allowlist (Layer 1, ADR-0004).
+        //
+        // Reject any `..` segment up-front: a component-wise prefix check cannot
+        // reason about parent-dir traversal, so '/allowed/root/../../etc' would
+        // otherwise pass while the kernel resolves it to /etc. After the guard we
+        // canonicalize the cwd (resolving symlinks + remaining segments) and check
+        // containment against the canonicalized allowlist roots.
+        if contains_parent_dir(&req.cwd) {
+            return Err(SubprocessError::CwdOutsideAllowlist {
+                path: req.cwd.display().to_string(),
             });
         }
-
-        // Layer: cwd within path allowlist.
-        if !allowlist_contains(&self.path_allowlist, &req.cwd) {
+        let cwd_display = req.cwd.display().to_string();
+        let canonical_cwd = canonicalize_existing(req.cwd.clone(), move |_e| {
+            SubprocessError::CwdOutsideAllowlist { path: cwd_display }
+        })
+        .await?;
+        if !allowlist_contains(&self.path_allowlist, &canonical_cwd) {
             return Err(SubprocessError::CwdOutsideAllowlist {
                 path: req.cwd.display().to_string(),
             });
@@ -567,6 +606,7 @@ impl SubprocessPort for SubprocessRegistry {
                 self.root_cancel.clone(),
                 self.aggregate_buffer_bytes,
                 self.tmp_root.as_deref(),
+                &self.path_allowlist,
             )
             .await?,
         );
@@ -1423,8 +1463,112 @@ const fn map_signal_name(name: SubprocessSignalName) -> nix::sys::signal::Signal
 ///
 /// Used to validate `cwd` per ADR-0052 Layer 1 without constructing a
 /// [`substrate_domain::JailedPath`] (which requires the `PathJail` factory).
+///
+/// The caller MUST pass an already-canonicalized `path`; otherwise a component-wise
+/// `starts_with` on a path containing `..` (e.g. `/allowed/root/../../etc`) would
+/// pass this prefix check while the kernel resolves the path outside the jail. The
+/// spawn path enforces canonicalization via [`canonicalize_existing`] and rejects
+/// any `ParentDir` component via [`contains_parent_dir`] before calling this.
 fn allowlist_contains(allowlist: &Allowlist, path: &std::path::Path) -> bool {
     allowlist.iter_roots().any(|root| path.starts_with(root))
+}
+
+/// Returns `true` when `path` contains a `..` (`Component::ParentDir`) segment.
+///
+/// A pre-canonicalization guard: any `..` in an operator/agent-supplied path is a
+/// jail-escape vector because a component-wise prefix check cannot reason about it.
+/// We reject such paths outright before the canonical containment check.
+fn contains_parent_dir(path: &std::path::Path) -> bool {
+    path.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// Canonicalizes `path` on a blocking thread, mapping I/O failures to `err`.
+///
+/// `std::fs::canonicalize` resolves `..`, `.`, and symlinks against the real
+/// filesystem and is a blocking syscall, so it MUST run inside `spawn_blocking`
+/// per ADR-0003 async-zone classification (zone B). The resulting real path is
+/// what the kernel would actually open, closing the gap between the userspace
+/// prefix check and kernel path resolution.
+///
+/// # Errors
+///
+/// Returns the value produced by `err` when canonicalization fails (path does not
+/// exist, permission denied, or the blocking task could not be joined).
+async fn canonicalize_existing<F>(path: PathBuf, err: F) -> Result<PathBuf, SubprocessError>
+where
+    F: FnOnce(std::io::Error) -> SubprocessError + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || std::fs::canonicalize(&path))
+        .await
+        .map_err(|join_err| SubprocessError::SpawnFailed {
+            source: std::io::Error::other(format!("canonicalize task join failed: {join_err}")),
+        })?
+        .map_err(err)
+}
+
+/// Resolves and validates `req.binary_path` against the canonicalized allowlist.
+///
+/// Per ADR-0052 binary-allowlist hardening:
+/// 1. Each configured allowlist entry is canonicalized (resolving symlinks to the
+///    real target). Entries that cannot be resolved are skipped — a broken or
+///    dangling allowlist entry must never widen the permitted set.
+/// 2. `req.binary_path` is canonicalized to its real target.
+/// 3. The resolved binary must equal one of the resolved entries.
+/// 4. The resolved binary must be a regular file (rejects directories, FIFOs,
+///    devices, and sockets that a crafted symlink could otherwise point at).
+///
+/// All filesystem syscalls run inside `spawn_blocking` (async zone B, ADR-0003).
+///
+/// # Errors
+///
+/// Returns [`SubprocessError::BinaryNotAllowed`] when the resolved binary is not in
+/// the canonical allowlist or is not a regular file, and
+/// [`SubprocessError::SpawnFailed`] when canonicalization of the requested binary
+/// fails (missing or unreadable).
+async fn resolve_binary_allowed(
+    allowlist: &BinaryAllowlist,
+    binary_path: &std::path::Path,
+) -> Result<(), SubprocessError> {
+    let display = binary_path.display().to_string();
+    let entries = allowlist.entries();
+
+    // Canonicalize the requested binary first; a missing binary is a spawn error.
+    let resolved = canonicalize_existing(binary_path.to_path_buf(), move |e| {
+        SubprocessError::SpawnFailed {
+            source: std::io::Error::other(format!(
+                "failed to canonicalize binary_path '{display}': {e}"
+            )),
+        }
+    })
+    .await?;
+
+    // Resolve allowlist entries on a blocking thread; skip unresolvable entries so a
+    // broken entry never widens the set. Verify the resolved binary is a regular file.
+    let is_member = tokio::task::spawn_blocking(move || {
+        let regular_file = std::fs::metadata(&resolved)
+            .map(|m| m.is_file())
+            .unwrap_or(false);
+        if !regular_file {
+            return false;
+        }
+        entries
+            .iter()
+            .filter_map(|e| std::fs::canonicalize(e).ok())
+            .any(|canon| canon == resolved)
+    })
+    .await
+    .map_err(|join_err| SubprocessError::SpawnFailed {
+        source: std::io::Error::other(format!("binary allowlist task join failed: {join_err}")),
+    })?;
+
+    if is_member {
+        Ok(())
+    } else {
+        Err(SubprocessError::BinaryNotAllowed {
+            path: binary_path.display().to_string(),
+        })
+    }
 }
 
 /// Convenience factory that wires a deny-all `SubprocessRegistry` for use in
