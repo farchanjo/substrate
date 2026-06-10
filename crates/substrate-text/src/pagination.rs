@@ -9,7 +9,7 @@
 //! match index from which the next page starts, base64-encoded as a decimal
 //! ASCII string. This matches the `PageCursor` semantics in `substrate-domain`.
 
-use substrate_domain::SubstrateResult;
+use substrate_domain::{SubstrateError, SubstrateResult};
 
 /// Default number of match records returned per page.
 pub const DEFAULT_PAGE_SIZE: usize = 50;
@@ -70,7 +70,13 @@ pub fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
 /// Slices `all_matches` into a single page starting at `cursor_offset`.
 ///
 /// Returns a [`MatchPage`] whose `next_cursor` is `Some` when more pages remain.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns `SUBSTRATE_INVALID_ARGUMENT` when `page_size` is zero.
+/// A zero page-size would produce an empty records slice on every call while
+/// always emitting a `next_cursor`, creating an infinite pagination loop for
+/// any caller that pages until `next_cursor` is `None` (fix #4, text-oom lane).
 #[expect(
     clippy::needless_pass_by_value,
     reason = "public API takes ownership to allow callers to move the full match vec; changing to slice would break the call site idiom"
@@ -80,7 +86,17 @@ pub fn paginate(
     skipped_binary_count: u64,
     cursor_offset: usize,
     page_size: usize,
-) -> MatchPage {
+) -> SubstrateResult<MatchPage> {
+    if page_size == 0 {
+        return Err(SubstrateError::InvalidArgument {
+            offending_field: "page_size".to_owned(),
+            reason:
+                "page_size must be at least 1; a value of 0 produces an infinite pagination loop"
+                    .to_owned(),
+            correlation_id: None,
+        });
+    }
+
     let total = all_matches.len();
     let start = cursor_offset.min(total);
     let end = (start + page_size).min(total);
@@ -92,12 +108,12 @@ pub fn paginate(
         None
     };
 
-    MatchPage {
+    Ok(MatchPage {
         records,
         next_cursor,
         total_match_count: total as u64,
         skipped_binary_count,
-    }
+    })
 }
 
 // ---- Tests -------------------------------------------------------------------
@@ -126,7 +142,7 @@ mod tests {
     #[test]
     fn first_page_has_no_next_cursor_when_within_size() {
         let records = make_records(10);
-        let page = paginate(records, 0, 0, 50);
+        let page = paginate(records, 0, 0, 50).expect("valid page_size");
         assert_eq!(page.records.len(), 10);
         assert!(page.next_cursor.is_none());
         assert_eq!(page.total_match_count, 10);
@@ -135,7 +151,7 @@ mod tests {
     #[test]
     fn first_page_returns_next_cursor_when_more_exist() {
         let records = make_records(100);
-        let page = paginate(records, 0, 0, 50);
+        let page = paginate(records, 0, 0, 50).expect("valid page_size");
         assert_eq!(page.records.len(), 50);
         assert_eq!(page.next_cursor, Some("50".to_owned()));
     }
@@ -143,9 +159,20 @@ mod tests {
     #[test]
     fn second_page_exhausts_remaining() {
         let records = make_records(75);
-        let page = paginate(records, 0, 50, 50);
+        let page = paginate(records, 0, 50, 50).expect("valid page_size");
         assert_eq!(page.records.len(), 25);
         assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn zero_page_size_returns_invalid_argument() {
+        let records = make_records(10);
+        let err = paginate(records, 0, 0, 0).unwrap_err();
+        assert_eq!(
+            err.code(),
+            "SUBSTRATE_INVALID_ARGUMENT",
+            "page_size == 0 must return SUBSTRATE_INVALID_ARGUMENT"
+        );
     }
 
     #[test]

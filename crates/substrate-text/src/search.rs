@@ -44,6 +44,14 @@ use crate::response::{TextDeps, ToolResponse};
 /// Number of lines processed between cancellation token checks.
 const CANCEL_CHECK_INTERVAL: usize = 256;
 
+/// Maximum bytes buffered for a single line before the remainder is discarded.
+///
+/// Mirrors `head::MAX_LINE_BYTES`.  A single newline-less 1 GiB line would
+/// otherwise fill the sync `BufReader` buffer in `scan_file`, OOM-ing the
+/// blocking thread.  Lines over this limit are truncated; the match is still
+/// attempted against the truncated prefix so the line number is preserved.
+const MAX_LINE_BYTES: usize = 64 * 1024; // 64 KiB per line
+
 /// Input parameters for `text.search`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -82,10 +90,16 @@ pub async fn handle_text_search(
     deps: Arc<TextDeps>,
     cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
-    let page_size = params
-        .page_size
-        .unwrap_or(DEFAULT_PAGE_SIZE)
-        .min(MAX_PAGE_SIZE);
+    // Guard fix #4: page_size == 0 would produce an empty page with a
+    // `next_cursor` that never advances, creating an infinite pagination loop.
+    // Treat 0 as "use default" to match user intent (asking for all defaults).
+    let page_size = {
+        let raw = params
+            .page_size
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .min(MAX_PAGE_SIZE);
+        if raw == 0 { DEFAULT_PAGE_SIZE } else { raw }
+    };
 
     let cursor_offset = match &params.cursor {
         Some(c) => pagination::decode_cursor(c)?,
@@ -126,15 +140,24 @@ pub async fn handle_text_search(
     let jailed_path_buf = jailed.into_inner();
     let simd_tier = deps.capabilities.simd_tier;
 
+    // Collect only as many matches as needed to serve this page plus the
+    // lookahead that determines whether a next page exists (fix #3).
+    // Adding 1 to the lookahead: if we get exactly cursor_offset + page_size + 1
+    // matches, `paginate` will know there is a next page; if we get fewer, there
+    // is not.  Using `usize::MAX` as a fallback for the degenerate case where
+    // `cursor_offset + page_size` would overflow is safe because the scan exits
+    // early on match, so the allocator never sees the full count.
+    let max_matches = cursor_offset.saturating_add(page_size).saturating_add(1);
+
     // Perform the blocking file scan on a blocking thread.
     // When the path is a directory, walk it recursively and scan each file.
     let scan_result = tokio::task::spawn_blocking({
         let cancel = cancel.clone();
         move || {
             if jailed_path_buf.is_dir() {
-                scan_dir(&jailed_path_buf, &regex, &cancel)
+                scan_dir(&jailed_path_buf, &regex, &cancel, max_matches)
             } else {
-                scan_file(&jailed_path_buf, &regex, cancel)
+                scan_file(&jailed_path_buf, &regex, cancel, max_matches)
             }
         }
     })
@@ -145,9 +168,12 @@ pub async fn handle_text_search(
     })??;
 
     let (all_matches, skipped_binary_count) = scan_result;
+    // `all_matches` may be shorter than the true total because the scan was
+    // stopped early after collecting `max_matches` records.  `total` here
+    // reflects how many were actually collected; `next_cursor` signals more.
     let total = all_matches.len();
 
-    let page = pagination::paginate(all_matches, skipped_binary_count, cursor_offset, page_size);
+    let page = pagination::paginate(all_matches, skipped_binary_count, cursor_offset, page_size)?;
     let has_more = page.next_cursor.is_some();
 
     let content = format!(
@@ -174,6 +200,11 @@ pub async fn handle_text_search(
 /// `skipped_binary_count` is 0 when the file is text, 1 when skipped as binary.
 ///
 /// Each [`MatchRecord`] carries `file_path` set to the UTF-8 display of `path`.
+///
+/// `max_matches` caps how many records are collected.  Once `matches.len() ==
+/// max_matches` the scan stops early — the caller passes
+/// `cursor_offset + page_size + 1` so pagination can determine whether a next
+/// page exists without scanning the entire file (fix #3, text-oom lane).
 #[expect(
     clippy::needless_pass_by_value,
     reason = "CancellationToken is an Arc-backed handle; pass by value matches the tokio-util API convention"
@@ -182,6 +213,7 @@ fn scan_file(
     path: &std::path::Path,
     regex: &regex::Regex,
     cancel: CancellationToken,
+    max_matches: usize,
 ) -> SubstrateResult<(Vec<MatchRecord>, u64)> {
     let file = std::fs::File::open(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => SubstrateError::NotFound {
@@ -218,13 +250,21 @@ fn scan_file(
         path: path.display().to_string(),
         correlation_id: None,
     })?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut matches = Vec::new();
     let mut lines_since_check: usize = 0;
+    let mut line_number: u64 = 0;
 
-    for (idx, line_result) in (1_u64..).zip(reader.lines()) {
-        let line_number = idx;
+    // Per-line byte buffer.  Reused across iterations to avoid re-allocation.
+    let mut line_buf: Vec<u8> = Vec::with_capacity(MAX_LINE_BYTES);
+
+    loop {
+        // Early-exit once the page-lookahead limit is reached (fix #3).
+        if matches.len() >= max_matches {
+            break;
+        }
+
         lines_since_check += 1;
 
         // Honour cancellation at chunk boundaries to avoid blocking indefinitely.
@@ -237,16 +277,37 @@ fn scan_file(
             }
         }
 
-        let line = line_result.map_err(|_| SubstrateError::IoError {
-            path: path.display().to_string(),
-            correlation_id: None,
-        })?;
+        // OOM guard (fix #2): read at most MAX_LINE_BYTES per line.
+        // `BufRead::lines()` uses `read_until` internally with no size cap;
+        // a single newline-less line can exhaust the heap.
+        // Instead, use `read_line_capped` which stops at the byte limit and
+        // drains the remainder synchronously.
+        line_buf.clear();
+        let n_read =
+            read_line_capped(&mut reader, &mut line_buf, MAX_LINE_BYTES).map_err(|_| {
+                SubstrateError::IoError {
+                    path: path.display().to_string(),
+                    correlation_id: None,
+                }
+            })?;
 
-        if regex.is_match(&line) {
+        if n_read == 0 {
+            break; // EOF
+        }
+
+        // Increment line counter only after confirming we read real data.
+        line_number += 1;
+
+        // Convert to a UTF-8 string, replacing invalid sequences.
+        let line = String::from_utf8_lossy(&line_buf);
+        // Trim trailing newline/CR for clean matching.
+        let line = line.trim_end_matches('\n').trim_end_matches('\r');
+
+        if regex.is_match(line) {
             matches.push(MatchRecord {
                 file_path: path.display().to_string(),
                 line_number,
-                line,
+                line: line.to_owned(),
             });
         }
     }
@@ -254,11 +315,73 @@ fn scan_file(
     Ok((matches, 0))
 }
 
+/// Reads at most `max_bytes` bytes into `buf` until `\n` or EOF.
+///
+/// If the line is longer than `max_bytes` the function fills `buf` to the cap
+/// and then drains the remaining bytes of the line (up to the next `\n`) from
+/// `reader` without buffering them, preventing unbounded allocation (fix #2).
+///
+/// Returns the number of bytes placed into `buf` (excluding any drained
+/// excess).  Returns `0` on EOF with an empty `buf`.
+fn read_line_capped(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+    max_bytes: usize,
+) -> std::io::Result<usize> {
+    let mut total_stored: usize = 0;
+    let mut overflowed = false;
+
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            break; // EOF
+        }
+
+        // Search for `\n` in the available buffer (SIMD — ADR-0043).
+        match memchr::memchr(b'\n', available) {
+            Some(pos) => {
+                // Newline found within the available bytes.
+                if !overflowed {
+                    // Take up to the newline (including it if within cap).
+                    let take = (pos + 1).min(max_bytes - total_stored);
+                    buf.extend_from_slice(&available[..take]);
+                    total_stored += take;
+                }
+                // Consume up to and including the newline.
+                reader.consume(pos + 1);
+                break;
+            },
+            None => {
+                // No newline in available chunk; take what we can.
+                if !overflowed {
+                    let headroom = max_bytes.saturating_sub(total_stored);
+                    let take = available.len().min(headroom);
+                    if take > 0 {
+                        buf.extend_from_slice(&available[..take]);
+                        total_stored += take;
+                    }
+                    if total_stored >= max_bytes {
+                        // Line exceeded the cap; mark overflowed and drain.
+                        overflowed = true;
+                    }
+                }
+                let len = available.len();
+                reader.consume(len);
+            },
+        }
+    }
+
+    Ok(total_stored)
+}
+
 /// Recursively walk a directory and scan each file.
 ///
 /// Returns the aggregated `(matches, skipped_binary_count)` across all files.
 /// Directories and other non-file entries are silently skipped.
 /// Cancellation is checked at each file boundary.
+///
+/// `max_matches` is forwarded to each `scan_file` call; the walk also stops
+/// early once the accumulated match count reaches the limit (fix #3).
 ///
 /// # Ignore semantics
 ///
@@ -273,6 +396,7 @@ fn scan_dir(
     dir: &Path,
     regex: &regex::Regex,
     cancel: &CancellationToken,
+    max_matches: usize,
 ) -> SubstrateResult<(Vec<MatchRecord>, u64)> {
     let mut all_matches: Vec<MatchRecord> = Vec::new();
     let mut total_skipped: u64 = 0;
@@ -288,6 +412,13 @@ fn scan_dir(
                 correlation_id: None,
             });
         }
+
+        // Stop walking once we have enough matches to serve the current page
+        // plus the lookahead that determines `has_more` (fix #3).
+        if all_matches.len() >= max_matches {
+            break;
+        }
+
         let Ok(entry) = entry else { continue };
         let Some(ft) = entry.file_type() else {
             continue;
@@ -295,8 +426,11 @@ fn scan_dir(
         if !ft.is_file() {
             continue;
         }
+
+        // Pass the remaining headroom to each file scan so it also stops early.
+        let remaining = max_matches.saturating_sub(all_matches.len());
         let path: PathBuf = entry.into_path();
-        match scan_file(&path, regex, cancel.child_token()) {
+        match scan_file(&path, regex, cancel.child_token(), remaining) {
             Ok((file_matches, skipped)) => {
                 all_matches.extend(file_matches);
                 total_skipped += skipped;

@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt as _, BufReader};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -29,6 +29,15 @@ use crate::response::{TextDeps, ToolResponse};
 pub const DEFAULT_LINES: usize = 10;
 /// Maximum number of lines that `text.head` will return.
 pub const MAX_LINES: usize = 1000;
+/// Maximum bytes read per line before the remainder is silently truncated.
+///
+/// A single line without any `\n` can be arbitrarily large (e.g. a minified
+/// JS bundle, a binary blob mis-classified as text).  Without a cap, a 1 GiB
+/// line would buffer entirely in `buf` before `read_line` returns, exhausting
+/// the async-executor heap.  Lines longer than this limit are truncated to the
+/// first `MAX_LINE_BYTES` bytes and suffixed with `…` so callers can detect
+/// truncation without crashing.
+pub const MAX_LINE_BYTES: usize = 64 * 1024; // 64 KiB per line
 
 /// Input parameters for `text.head`.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -39,6 +48,54 @@ pub struct HeadParams {
     /// Number of lines to return (default 10, max 1000).
     #[serde(default)]
     pub n: Option<usize>,
+}
+
+/// Drains bytes from `reader` until (and including) the next `\n` or EOF.
+///
+/// This is the complement to the `take(MAX_LINE_BYTES).read_line(…)` pattern:
+/// after the cap is hit and the line was truncated, the underlying reader is
+/// still positioned mid-line.  Advancing to the next newline without
+/// allocating the skipped content is done via `fill_buf` + `consume` which
+/// operates on the existing internal buffer — O(1) heap, O(1) per internal
+/// buffer chunk.
+///
+/// # Errors
+///
+/// Returns `SubstrateError::IoError` on any I/O failure during the drain.
+async fn drain_to_newline(
+    reader: &mut BufReader<tokio::fs::File>,
+    path: &str,
+) -> SubstrateResult<()> {
+    loop {
+        let filled = reader
+            .fill_buf()
+            .await
+            .map_err(|_| SubstrateError::IoError {
+                path: path.to_owned(),
+                correlation_id: None,
+            })?;
+
+        if filled.is_empty() {
+            // EOF — the over-long line extended to end-of-file; nothing more
+            // to drain.
+            break;
+        }
+
+        // Look for `\n` in the currently buffered chunk (SIMD — ADR-0043).
+        match memchr::memchr(b'\n', filled) {
+            Some(pos) => {
+                // Consume up to and including the newline, then stop.
+                reader.consume(pos + 1);
+                break;
+            },
+            None => {
+                // No newline yet; consume the entire buffered chunk and loop.
+                let len = filled.len();
+                reader.consume(len);
+            },
+        }
+    }
+    Ok(())
 }
 
 /// Handles a `text.head` tool call.
@@ -97,7 +154,6 @@ pub async fn handle_text_head(
 
     let mut reader = BufReader::new(file);
     let mut lines = Vec::with_capacity(n);
-    let mut buf = String::new();
 
     for _ in 0..n {
         if cancel.is_cancelled() {
@@ -106,17 +162,38 @@ pub async fn handle_text_head(
             });
         }
 
-        buf.clear();
-        let bytes_read = reader
-            .read_line(&mut buf)
-            .await
-            .map_err(|_| SubstrateError::IoError {
-                path: params.path.clone(),
-                correlation_id: None,
-            })?;
+        // OOM guard (text-oom lane fix #1): read at most MAX_LINE_BYTES per
+        // line.  A newline-less 1 GiB line would otherwise buffer entirely in
+        // `buf` before `read_line` returns, exhausting heap on the executor.
+        //
+        // `take(MAX_LINE_BYTES)` wraps the reader in a byte-limited view while
+        // still exposing `AsyncBufRead` (tokio impl for `Take<R: AsyncBufRead>`
+        // passes through `fill_buf` capped to the remaining limit), so
+        // `read_line` honours the cap without any extra allocation.
+        let mut limited = (&mut reader).take(MAX_LINE_BYTES as u64);
+        let mut buf = String::new();
+        let bytes_read =
+            limited
+                .read_line(&mut buf)
+                .await
+                .map_err(|_| SubstrateError::IoError {
+                    path: params.path.clone(),
+                    correlation_id: None,
+                })?;
 
         if bytes_read == 0 {
             break; // EOF
+        }
+
+        // Detect truncation: `read_line` on the capped view stopped because
+        // the byte limit was hit, not because it found `\n`.
+        let truncated = !buf.ends_with('\n') && bytes_read >= MAX_LINE_BYTES;
+        if truncated {
+            // Drain the remainder of the over-long line from `reader` without
+            // allocating the skipped content.  Use `fill_buf` + `consume` in a
+            // loop: O(1) memory, O(line_bytes / internal_buf_size) iterations.
+            drain_to_newline(&mut reader, &params.path).await?;
+            buf.push('…');
         }
 
         // Trim the trailing newline for cleaner output.
