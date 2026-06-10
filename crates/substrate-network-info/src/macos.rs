@@ -427,7 +427,7 @@ impl NetworkInfoPort for MacosSysctlAdapter {
     }
 
     async fn connection_count(&self) -> Result<ConnectionCounts, SubstrateError> {
-        let all = collect_all_tcp(self).await?;
+        let all = collect_all_tcp().await?;
         let mut by_state: BTreeMap<TcpState, u32> = BTreeMap::new();
         for entry in &all {
             *by_state.entry(entry.state).or_insert(0) += 1;
@@ -444,16 +444,16 @@ impl NetworkInfoPort for MacosSysctlAdapter {
 // ---- Internal helpers -------------------------------------------------------
 
 /// Reads all TCP PCB entries without pagination (used by `connection_count`).
-async fn collect_all_tcp(adapter: &MacosSysctlAdapter) -> Result<Vec<SocketEntry>, SubstrateError> {
-    // Use a max-page-size request to get all entries in one shot.
-    let result = adapter
-        .list_tcp(NetworkTcpListRequest {
-            state_filter: None,
-            resolve_pid: false,
-            pagination: None,
-        })
-        .await?;
-    Ok(result.entries)
+///
+/// Calls `read_tcp_pcblist()` directly instead of routing through `list_tcp`,
+/// which would silently truncate results to the default page size (100 entries).
+async fn collect_all_tcp() -> Result<Vec<SocketEntry>, SubstrateError> {
+    tokio::task::spawn_blocking(read_tcp_pcblist)
+        .await
+        .map_err(|e| SubstrateError::InternalError {
+            reason: format!("spawn_blocking join error: {e}"),
+            correlation_id: None,
+        })?
 }
 
 /// Reads `net.inet.tcp.pcblist_n` via `sysctlbyname` and parses the blob.

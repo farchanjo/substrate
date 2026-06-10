@@ -132,17 +132,9 @@ impl NetworkInfoPort for LinuxProcNetAdapter {
     }
 
     async fn connection_count(&self) -> Result<ConnectionCounts, SubstrateError> {
-        // Re-use list_tcp with no filter for an accurate per-state count.
-        // This reads /proc/net/tcp + /proc/net/tcp6 in full; adapters that need
-        // a cheaper count-only path can override this with a dedicated counter.
-        let req = NetworkTcpListRequest {
-            state_filter: None,
-            resolve_pid: false,
-            pagination: None,
-        };
-        // list_tcp applies default pagination; we want ALL entries.
-        // Build without a pagination limit by requesting max page size.
-        let all = collect_all_tcp(self).await?;
+        // Calls collect_all_tcp which reads /proc/net/tcp + /proc/net/tcp6 directly,
+        // bypassing pagination so all entries are counted regardless of page size.
+        let all = collect_all_tcp().await?;
 
         let mut by_state: BTreeMap<TcpState, u32> = BTreeMap::new();
         for entry in &all {
@@ -160,9 +152,7 @@ impl NetworkInfoPort for LinuxProcNetAdapter {
 // ---- Internal helpers -------------------------------------------------------
 
 /// Collects every TCP entry (both IPv4 and IPv6) without pagination.
-async fn collect_all_tcp(
-    adapter: &LinuxProcNetAdapter,
-) -> Result<Vec<SocketEntry>, SubstrateError> {
+async fn collect_all_tcp() -> Result<Vec<SocketEntry>, SubstrateError> {
     let mut entries = Vec::new();
     parse_proc_net(
         Protocol::Tcp,
@@ -444,7 +434,7 @@ async fn parse_snmp_stats() -> Result<TcpStats, SubstrateError> {
         snd_packets: get("OutSegs"),
         connections_initiated: get("ActiveOpens"),
         connections_accepted: get("PassiveOpens"),
-        connections_established: get("ActiveOpens") + get("PassiveOpens"),
+        connections_established: get("CurrEstab"),
         connections_closed: get("EstabResets"),
         persist_timer_drops: 0, // not available in /proc/net/snmp
         keepalive_drops: 0,     // not available in /proc/net/snmp
@@ -455,14 +445,14 @@ async fn parse_snmp_stats() -> Result<TcpStats, SubstrateError> {
 
 /// Applies cursor-based pagination to a list of entries.
 ///
-/// Returns `(page, next_offset)`. When `pagination` is `None` the first 50
-/// entries are returned (default page size per ADR-0008).
+/// Returns `(page, next_offset)`. When `pagination` is `None` the first 100
+/// entries are returned, matching `PageSize::DEFAULT_PAGINATION` (ADR-0008).
 fn paginate(
     entries: Vec<SocketEntry>,
     pagination: Option<&Pagination>,
 ) -> (Vec<SocketEntry>, Option<u64>) {
     let offset = pagination.map_or(0, |p| p.offset as usize);
-    let page_size = pagination.map_or(50, |p| p.page_size.get() as usize);
+    let page_size = pagination.map_or(100, |p| p.page_size.get() as usize);
 
     let slice: Vec<SocketEntry> = entries.into_iter().skip(offset).collect();
     let next_offset = if slice.len() > page_size {
