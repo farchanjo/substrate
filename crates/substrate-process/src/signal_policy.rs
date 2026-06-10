@@ -1,27 +1,25 @@
 //! Signal policy — destructive-signal classification and elicitation gate.
 //!
-//! ADR-0004 (Layer 4 — Elicitation) requires that SIGKILL, SIGTERM, and
-//! SIGSTOP pass through an explicit user confirmation step before delivery.
-//! This module encodes that classification so it can be tested independently
-//! from the handler.
+//! ADR-0004 (Layer 4 — Elicitation) and ADR-0008 (Elicitation Matrix) both
+//! require that SIGKILL, SIGTERM, and SIGSTOP pass through an explicit user
+//! confirmation step before delivery.  This module encodes that classification
+//! so it can be tested independently from the handler.
 
 use nix::sys::signal::Signal;
 
 /// Returns `true` when the signal requires elicitation confirmation per
-/// ADR-0004 Layer 4.
+/// ADR-0004 Layer 4 and ADR-0008 §Elicitation Matrix.
 ///
-/// Destructive signals are those whose effect on the target process is
-/// irreversible from the agent's perspective:
-/// - `SIGKILL` — forced termination, no cleanup possible.
-/// - `SIGSTOP` — pauses the process until resumed; disrupts real-time work.
-///
-/// `SIGTERM` is intentionally excluded: it is a polite termination request
-/// that the target process may ignore, making it recoverable in practice.
-/// The feature spec (`proc-signal-sigkill-requires-elicitation.feature`)
-/// explicitly states "SIGTERM does not require elicitation".
+/// Destructive signals are those whose effect on the target process cannot
+/// be fully undone from the agent's perspective:
+/// - `SIGKILL` — forced termination; no cleanup possible.
+/// - `SIGTERM` — requests termination; typically causes process exit and may
+///   flush state.  ADR-0004 and ADR-0008 both list SIGTERM alongside SIGKILL
+///   and SIGSTOP in the elicitation-required set.
+/// - `SIGSTOP` — suspends the process until resumed; disrupts real-time work.
 #[must_use]
 pub const fn is_destructive(sig: Signal) -> bool {
-    matches!(sig, Signal::SIGKILL | Signal::SIGSTOP)
+    matches!(sig, Signal::SIGKILL | Signal::SIGTERM | Signal::SIGSTOP)
 }
 
 /// Returns `true` when `sig` is signal 0 (existence probe, not a real signal).
@@ -50,9 +48,14 @@ mod tests {
     }
 
     #[test]
+    fn sigterm_is_classified_as_destructive() {
+        // ADR-0004 Layer 4 and ADR-0008 §Elicitation Matrix both list SIGTERM
+        // in the elicitation-required set alongside SIGKILL and SIGSTOP.
+        assert!(is_destructive(Signal::SIGTERM));
+    }
+
+    #[test]
     fn non_destructive_signals_not_classified_as_destructive() {
-        // SIGTERM is intentionally non-destructive per feature spec.
-        assert!(!is_destructive(Signal::SIGTERM));
         assert!(!is_destructive(Signal::SIGHUP));
         assert!(!is_destructive(Signal::SIGUSR1));
         assert!(!is_destructive(Signal::SIGUSR2));
