@@ -43,3 +43,8 @@ criterion/
 
 # TLA+ jar (large binary; download instructions in tools/README.md)
 tools/tla2tools.jar
+
+# TLC model-checker run output (binary state dumps, fingerprint files)
+# These are generated artefacts from running tlc on formal/*.tla models.
+# Source models (.tla, .cfg) are tracked; run output is not.
+docs/arch/formal/states/
