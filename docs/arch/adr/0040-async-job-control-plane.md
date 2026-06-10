@@ -255,8 +255,8 @@ evicted by the same garbage collector.
 ### Quotas
 
 ```text
-jobs.max_per_client     default: 16   per-client active job limit
-jobs.max_concurrent     default: 32   global active job limit
+jobs.max_per_client     default: 4    per-client active job limit
+jobs.max_concurrent     default: 16   global active job limit (pending + running)
 jobs.result_ttl_secs    default: 300  result retention after terminal state
 jobs.result_max_wait_ms default: 30000  cap for job.result wait_ms parameter
 ```
@@ -402,12 +402,18 @@ Related ADRs (existing):
 - [ADR-0037](0037-async-cancellation-patterns.md) — CancellationToken; biased select; JoinSet
 - [ADR-0038](0038-audit-event-semantics.md) — audit event shape; ordering; sequence counter
 
-Dependent new ADRs (future waves):
+Dependent deliverables (now shipped — the original ADR-0041–0044 placeholders were
+reused by unrelated decisions, so these forward-references are repointed to the
+artifacts that actually carry the work):
 
-- ADR-0041 — CUE schemas for JobEntry, JobState, ProgressEvent, and job.* tool output shapes
-- ADR-0042 — Gherkin feature specs for bucket classification and job lifecycle scenarios
-- ADR-0043 — ADR-0007 amendment: formally extend hints map with job_* keys
-- ADR-0044 — domain/job/README.md bounded-context narrative
+- CUE schemas for JobEntry, JobState, ProgressEvent, and job.* tool output shapes:
+  [`schemas/job.cue`](../schemas/job.cue).
+- Gherkin feature specs for bucket classification and job lifecycle scenarios:
+  [`specs/features/job/`](../specs/features/job/).
+- Hints map extension with `job_*` keys: the §Hints Map Extension section of this
+  ADR, formalised by the 2026-05-22 amendment of
+  [ADR-0007](0007-tool-card-narrative-arc.md).
+- Bounded-context narrative: [`domain/job/README.md`](../domain/job/README.md).
 
 ## Amendments
 
@@ -449,7 +455,7 @@ SubprocessHandle {
 }
 ```
 
-`pid` and `pgid` are set when the child transitions from `Pending` to `Running`. `tmp_files` holds paths to any stream-capture temporary files created per [ADR-0033](0033-transactional-write-pattern.md) and [ADR-0054](0054-subprocess-stream-capture.md). `stream_aggregator` is the mpsc receiver for stdout and stderr chunk events, used by `subprocess.result` to assemble the aggregate output.
+`pid` and `pgid` are set when the child transitions from `Pending` to `Running`. `tmp_files` holds paths to any stream-capture temporary files created per [ADR-0033](0033-transactional-write-pattern.md) and [ADR-0054](0054-subprocess-stream-multiplex.md). `stream_aggregator` is the mpsc receiver for stdout and stderr chunk events, used by `subprocess.result` to assemble the aggregate output.
 
 The existing `JobState` machine (Pending, Running, Succeeded, Failed, Cancelled, TimedOut) is unchanged and applies identically to Bucket E jobs. For audit event purposes only, a Cancelled terminal state may carry a `kill_required: bool` annotation distinguishing cooperative cancellation (SIGTERM was sufficient) from forced termination (SIGKILL was required after the drain window). This is an audit distinction, not a new state; the state enum value remains `Cancelled` in both cases.
 
@@ -460,7 +466,7 @@ The hints map defined in this ADR is extended with the following keys for Bucket
 - `subprocess_exit_code` (i32, nullable) — set only when the job reaches a terminal Succeeded or Failed state; carries the child process exit code. Null for Cancelled and TimedOut.
 - `subprocess_stream_chunks_dropped` (u64) — cumulative count of stream chunks that were dropped due to backpressure since job creation; updated on every `job.status` and `job.result` response.
 
-Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-subprocess-process-group-lifecycle.md) — process group lifecycle; [ADR-0054](0054-subprocess-stream-capture.md) — stream capture and aggregation.
+Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-process-lifecycle-cascade-contract.md) — process group lifecycle; [ADR-0054](0054-subprocess-stream-multiplex.md) — stream capture and aggregation.
 
 ### 2026-05-22 — Control-plane is always wired (no disabled mode)
 

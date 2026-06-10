@@ -8,7 +8,7 @@ tags: [mcp, protocol, tasks, adoption]
 supersedes: 0048-mcp-tasks-primitive-evaluation.md
 ---
 
-# ADR-0049: MCP Tasks Primitive Adoption (supersedes ADR-0048)
+# ADR-0049 — MCP Tasks Primitive Adoption (supersedes ADR-0048)
 
 ## Context and Problem Statement
 

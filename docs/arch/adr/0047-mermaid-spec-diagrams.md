@@ -6,7 +6,7 @@ consulted: []
 informed: []
 ---
 
-# ADR-0047 -- Mermaid diagrams in spec markdown
+# ADR-0047 — Mermaid diagrams in spec markdown
 
 ## Context and Problem Statement
 

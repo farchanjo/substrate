@@ -144,7 +144,7 @@ MCP hosts and operators detect startup failures by:
   - `recovery_hint` length ≤ 150 characters.
   - Exit code matches the mapping table.
 - Unit tests assert the envelope serializes as a single line (no embedded newlines in field values).
-- CUE schema in `docs/arch/schemas/startup-error-envelope.cue` validates all seven code literals and the `recovery_hint` length constraint.
+- CUE schema in `docs/arch/schemas/error_catalog.cue` validates all seven startup code literals and the `recovery_hint` length constraint.
 
 ## Links
 

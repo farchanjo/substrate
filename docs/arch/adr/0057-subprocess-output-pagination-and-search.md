@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: accepted
+accepted_date: 2026-06-10
 date: 2026-05-24
 deciders: [com.archanjo]
 consulted: []
@@ -267,7 +268,7 @@ sequenceDiagram
 
 - [ADR-0054](0054-subprocess-stream-multiplex.md) — ring buffer source of truth
   for both paginate and search reads
-- [ADR-0008](0008-mcp-feature-usage-map.md) — cursor pagination pattern reference
+- [ADR-0008](0008-mcp-features-map.md) — cursor pagination pattern reference
 - [ADR-0007](0007-tool-card-narrative-arc.md) — tool card narrative arc; both
   tools require narrative arc entries per the 2026-05-22 amendment
 

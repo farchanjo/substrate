@@ -2,7 +2,7 @@
 status: superseded
 accepted_date: 2026-05-21
 date: 2026-05-21
-superseded_by: ADR-0052
+superseded_by: 0052-subprocess-execution-architecture.md
 superseded_date: 2026-05-24
 deciders: [com.archanjo]
 consulted: []

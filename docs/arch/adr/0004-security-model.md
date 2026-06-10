@@ -182,4 +182,4 @@ flowchart TD
     SPAWN --> RESP
 ```
 
-Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-subprocess-process-group-lifecycle.md) — process group lifecycle and cascade kill.
+Cross-references: [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess execution architecture; [ADR-0053](0053-process-lifecycle-cascade-contract.md) — process group lifecycle and cascade kill.
