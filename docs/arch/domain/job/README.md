@@ -147,11 +147,12 @@ TTL-based garbage collection runs every 60 seconds and evicts `JobEntry` records
 whose terminal state was set more than `jobs.result_ttl_secs` (default 300)
 seconds ago. After eviction, the job_id is unknown to the registry.
 
-Quota guards enforce two limits simultaneously: `jobs.max_per_client` (default 16)
-and `jobs.max_concurrent` (default 32). Submission beyond either limit returns
-`SUBSTRATE_QUOTA_EXCEEDED` synchronously without creating a job. A per-tool
-`Semaphore` (from [ADR-0017](../../adr/0017-concurrency-limits.md)) additionally
-gates worker start independently of the quota counters.
+Quota guards enforce two limits simultaneously: `jobs.max_per_client` (default 4)
+and `jobs.max_concurrent` (default 16, counting all active pending plus running
+jobs). Submission beyond either limit returns `SUBSTRATE_QUOTA_EXCEEDED`
+synchronously without creating a job. A per-tool `Semaphore` (from
+[ADR-0017](../../adr/0017-concurrency-limits.md)) additionally gates worker start
+independently of the quota counters.
 
 Progress push is throttled (250 ms or 1% delta) and backpressured via a bounded
 mpsc channel (capacity 64). Dropped events increment `progress_events_dropped`
