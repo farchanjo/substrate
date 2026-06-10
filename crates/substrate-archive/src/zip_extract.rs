@@ -31,6 +31,9 @@ use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::hints_helpers::build_job_hints;
 use crate::manifest::{ArchiveEntry, ArchiveManifest};
+use crate::resource_limit::{
+    DEFAULT_MAX_EXTRACT_TOTAL_BYTES, DEFAULT_MAX_OUTPUT_BYTES, DecompressGuard, check_disk_space,
+};
 use crate::response::{ArchiveDeps, ToolResponse};
 use crate::symlink_guard::{EntryKind, reject_symlink_entry, validate_symlink_target};
 use crate::tmp_path::TmpPath;
@@ -95,7 +98,7 @@ pub async fn handle_archive_zip_extract(
             })??;
 
     if req.dry_run {
-        return produce_dry_run(&req, &jailed_archive, &jailed_dest, deps);
+        return produce_dry_run(&jailed_archive, &jailed_dest, deps).await;
     }
     if !req.confirmed {
         return Err(SubstrateError::ConfirmationRequired {
@@ -108,6 +111,19 @@ pub async fn handle_archive_zip_extract(
             correlation_id: Some(uuid::Uuid::now_v7()),
         });
     }
+
+    // Disk-space preflight (ADR-0033): the compressed archive size is a cheap
+    // lower bound on the uncompressed payload landing in the destination.
+    let archive_for_meta = jailed_archive.as_path().to_path_buf();
+    let archive_size = tokio::task::spawn_blocking(move || {
+        std::fs::metadata(&archive_for_meta).map_or(0u64, |m| m.len())
+    })
+    .await
+    .map_err(|e| SubstrateError::InternalError {
+        reason: format!("spawn_blocking: {e}"),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    check_disk_space(jailed_dest.as_path(), archive_size).await?;
 
     let archive_clone = jailed_archive.as_path().to_path_buf();
     let dest_clone = jailed_dest.as_path().to_path_buf();
@@ -136,15 +152,46 @@ pub async fn handle_archive_zip_extract(
     Ok(ToolResponse::with_hints(content, structured_content, hints))
 }
 
-fn produce_dry_run(
-    _req: &ZipExtractRequest,
+async fn produce_dry_run(
     jailed_archive: &JailedPath,
     jailed_dest: &JailedPath,
     deps: &ArchiveDeps,
 ) -> SubstrateResult<ToolResponse> {
-    let archive_path = jailed_archive.as_path();
-    let dest_root = jailed_dest.as_path();
+    let archive_path = jailed_archive.as_path().to_path_buf();
+    let dest_root = jailed_dest.as_path().to_path_buf();
 
+    // The member scan opens and reads the archive — run it off the executor
+    // (ADR-0003 async-zone B). The previous inline scan blocked the reactor.
+    let entries = tokio::task::spawn_blocking(move || scan_zip_members(&archive_path, &dest_root))
+        .await
+        .map_err(|e| SubstrateError::InternalError {
+            reason: format!("spawn_blocking: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })??;
+
+    let manifest = ArchiveManifest::from_entries(entries);
+    let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, true);
+    let content = format!(
+        "USE: preview ZIP extract\nDOES: dry-run; {} entries; set dry_run=false&&confirmed=true to extract\nNEXT: archive.zip.extract (live)\nAVOID: skipping Zip Slip dry-run validation",
+        manifest.entry_count
+    );
+    let structured_content = serde_json::json!({
+        "tool": "archive.zip.extract",
+        "dry_run": true,
+        "manifest": serde_json::Value::from(manifest),
+        "hints": hints,
+    });
+    Ok(ToolResponse::with_hints(content, structured_content, hints))
+}
+
+/// Scans ZIP members for the dry-run manifest without writing to disk.
+///
+/// Opens the archive, validates every member path (Zip Slip + symlink target),
+/// and collects an [`ArchiveEntry`] per member. Runs inside `spawn_blocking`.
+fn scan_zip_members(
+    archive_path: &std::path::Path,
+    dest_root: &std::path::Path,
+) -> SubstrateResult<Vec<ArchiveEntry>> {
     let file = std::fs::File::open(archive_path).map_err(|_| SubstrateError::NotFound {
         resource: archive_path.to_string_lossy().into_owned(),
         correlation_id: Some(uuid::Uuid::now_v7()),
@@ -199,20 +246,7 @@ fn produce_dry_run(
             modified_at: None,
         });
     }
-
-    let manifest = ArchiveManifest::from_entries(entries);
-    let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, true);
-    let content = format!(
-        "USE: preview ZIP extract\nDOES: dry-run; {} entries; set dry_run=false&&confirmed=true to extract\nNEXT: archive.zip.extract (live)\nAVOID: skipping Zip Slip dry-run validation",
-        manifest.entry_count
-    );
-    let structured_content = serde_json::json!({
-        "tool": "archive.zip.extract",
-        "dry_run": true,
-        "manifest": serde_json::Value::from(manifest),
-        "hints": hints,
-    });
-    Ok(ToolResponse::with_hints(content, structured_content, hints))
+    Ok(entries)
 }
 
 /// Synchronous ZIP extraction inside `spawn_blocking`.
@@ -233,6 +267,10 @@ fn extract_zip_blocking(
 
     // Security-first: validate all members before any disk write (ADR-0035).
     zip_prevalidate_members(&mut zip, dest_root)?;
+
+    // Aggregate ceiling across the whole archive guards against many-member
+    // DEFLATE bombs whose individual entries stay below the per-entry limit.
+    let mut total_guard = DecompressGuard::new(DEFAULT_MAX_EXTRACT_TOTAL_BYTES);
 
     // All validated: proceed with extraction.
     let mut extracted_count = 0usize;
@@ -266,7 +304,7 @@ fn extract_zip_blocking(
             zip_write_symlink(&resolved, target_str)?;
             extracted_count += 1;
         } else {
-            zip_write_file(&mut entry, &resolved)?;
+            zip_write_file(&mut entry, &resolved, &mut total_guard)?;
             extracted_count += 1;
         }
     }
@@ -380,9 +418,15 @@ fn zip_write_symlink(resolved: &std::path::Path, target_str: &str) -> SubstrateR
 }
 
 /// Writes a regular ZIP file entry to `resolved` using a transactional tmp rename (ADR-0033).
+///
+/// Streams the (potentially DEFLATE-bomb) entry in bounded 64 KiB chunks rather
+/// than reading it fully into the heap, recording every chunk against a
+/// per-entry [`DecompressGuard`] and the archive-wide `total_guard`. Either
+/// overflow aborts extraction with `SUBSTRATE_RESOURCE_LIMIT` (fix-1).
 fn zip_write_file(
     entry: &mut zip::read::ZipFile<'_>,
     resolved: &std::path::Path,
+    total_guard: &mut DecompressGuard,
 ) -> SubstrateResult<()> {
     use std::io::Read as _;
     use std::io::Write as _;
@@ -393,6 +437,7 @@ fn zip_write_file(
             correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
     }
+    let mut entry_guard = DecompressGuard::new(DEFAULT_MAX_OUTPUT_BYTES);
     let tmp = TmpPath::new_for(resolved);
     {
         let mut out =
@@ -400,17 +445,23 @@ fn zip_write_file(
                 path: format!("{}: {e}", tmp.tmp_path().display()),
                 correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
-        let mut buf = Vec::new();
-        entry
-            .read_to_end(&mut buf)
-            .map_err(|e| SubstrateError::IoError {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = entry.read(&mut buf).map_err(|e| SubstrateError::IoError {
                 path: format!("zip read entry: {e}"),
                 correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
-        out.write_all(&buf).map_err(|e| SubstrateError::IoError {
-            path: format!("{}: {e}", resolved.display()),
-            correlation_id: Some(uuid::Uuid::now_v7()),
-        })?;
+            if n == 0 {
+                break;
+            }
+            entry_guard.record(n as u64)?;
+            total_guard.record(n as u64)?;
+            out.write_all(&buf[..n])
+                .map_err(|e| SubstrateError::IoError {
+                    path: format!("{}: {e}", resolved.display()),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                })?;
+        }
     }
     std::fs::rename(tmp.tmp_path(), tmp.final_path()).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", resolved.display()),

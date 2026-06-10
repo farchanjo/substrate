@@ -14,6 +14,9 @@
 //! AVOID: passing paths outside the allowlist
 //! ```
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -23,8 +26,12 @@ use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::hints_helpers::build_job_hints;
 use crate::manifest::{ArchiveEntry, ArchiveManifest};
+use crate::resource_limit::{DEFAULT_MAX_OUTPUT_BYTES, DecompressGuard, check_disk_space};
 use crate::response::{ArchiveDeps, ToolResponse};
 use crate::tmp_path::TmpPath;
+
+/// Bounded read-buffer size for streaming source files into the ZIP writer.
+const ZIP_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Input parameters for `archive.zip.create`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -61,7 +68,7 @@ pub async fn handle_archive_zip_create(
     cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     if req.dry_run {
-        return Ok(produce_dry_run(&req, deps));
+        return produce_dry_run(&req, deps).await;
     }
     if !req.confirmed {
         return Err(SubstrateError::ConfirmationRequired {
@@ -102,20 +109,47 @@ pub async fn handle_archive_zip_create(
         jailed_sources.push(jailed);
     }
 
+    // Disk-space preflight (ADR-0033): sum of source sizes is a lower bound on
+    // the archive's footprint in the destination filesystem.
+    let sources_for_size = jailed_sources.clone();
+    let total_source_bytes =
+        tokio::task::spawn_blocking(move || sum_source_bytes(&sources_for_size))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking: {e}"),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+    if let Some(parent) = jailed_dest.as_path().parent() {
+        check_disk_space(parent, total_source_bytes).await?;
+    }
+
     let dest_final = jailed_dest.as_path().to_path_buf();
     let tmp = TmpPath::new_for(&dest_final);
     let tmp_path = tmp.tmp_path().to_path_buf();
     let sources_snapshot = jailed_sources.clone();
 
-    let (entry_count, archive_bytes) =
-        tokio::task::spawn_blocking(move || -> SubstrateResult<(usize, u64)> {
-            build_zip_blocking(&tmp_path, &sources_snapshot)
-        })
-        .await
-        .map_err(|e| SubstrateError::InternalError {
-            reason: format!("spawn_blocking: {e}"),
-            correlation_id: Some(uuid::Uuid::now_v7()),
-        })??;
+    // ADR-0037: bridge the async CancellationToken into the blocking build via an
+    // `Arc<AtomicBool>` polled at every source boundary.
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let watcher_flag = Arc::clone(&cancel_flag);
+    let watch_cancel = cancel.clone();
+    let watcher = tokio::spawn(async move {
+        watch_cancel.cancelled().await;
+        watcher_flag.store(true, Ordering::SeqCst);
+    });
+    let blocking_flag = Arc::clone(&cancel_flag);
+
+    let build = tokio::task::spawn_blocking(move || -> SubstrateResult<(usize, u64)> {
+        build_zip_blocking(&tmp_path, &sources_snapshot, &blocking_flag)
+    })
+    .await
+    .map_err(|e| SubstrateError::InternalError {
+        reason: format!("spawn_blocking: {e}"),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    });
+    watcher.abort();
+
+    let (entry_count, archive_bytes) = build??;
 
     if cancel.is_cancelled() {
         drop(tmp);
@@ -146,23 +180,30 @@ pub async fn handle_archive_zip_create(
     Ok(ToolResponse::with_hints(content, structured_content, hints))
 }
 
-fn produce_dry_run(req: &ZipCreateRequest, deps: &ArchiveDeps) -> ToolResponse {
-    let entries: Vec<ArchiveEntry> = req
-        .sources
-        .iter()
-        .filter_map(|s| {
-            let path = std::path::Path::new(s);
-            let meta = std::fs::metadata(path).ok()?;
-            Some(ArchiveEntry {
-                archive_path: path
-                    .file_name()
-                    .map_or_else(|| s.clone(), |n| n.to_string_lossy().into_owned()),
-                uncompressed_bytes: meta.len(),
-                compression_method: "deflate".to_owned(),
-                modified_at: None,
-            })
-        })
-        .collect();
+/// Dry-run pass: build the manifest after jailing each source path.
+///
+/// Source paths are jailed BEFORE any `metadata` syscall so the preview cannot
+/// disclose the existence or size of host files outside the allowlist. The jail
+/// runs inside `spawn_blocking` per ADR-0003.
+async fn produce_dry_run(
+    req: &ZipCreateRequest,
+    deps: &ArchiveDeps,
+) -> SubstrateResult<ToolResponse> {
+    let mut entries: Vec<ArchiveEntry> = Vec::with_capacity(req.sources.len());
+    for src in &req.sources {
+        let jail = Arc::clone(&deps.jail);
+        let raw = std::path::PathBuf::from(src);
+        if let Some(entry) =
+            tokio::task::spawn_blocking(move || jailed_dry_run_entry(jail.as_ref(), &raw))
+                .await
+                .map_err(|e| SubstrateError::InternalError {
+                    reason: format!("spawn_blocking: {e}"),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                })??
+        {
+            entries.push(entry);
+        }
+    }
 
     let manifest = ArchiveManifest::from_entries(entries);
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, true);
@@ -176,18 +217,69 @@ fn produce_dry_run(req: &ZipCreateRequest, deps: &ArchiveDeps) -> ToolResponse {
         "manifest": serde_json::Value::from(manifest),
         "hints": hints,
     });
-    ToolResponse::with_hints(content, structured_content, hints)
+    Ok(ToolResponse::with_hints(content, structured_content, hints))
+}
+
+/// Jails a single source path, then stats it for the dry-run manifest.
+///
+/// Returns `Ok(None)` when the jailed path cannot be stat'd.
+///
+/// # Errors
+///
+/// Propagates any jail error (path outside allowlist, traversal, symlink escape).
+fn jailed_dry_run_entry(
+    jail: &dyn substrate_domain::PathJailPort,
+    raw: &std::path::Path,
+) -> SubstrateResult<Option<ArchiveEntry>> {
+    let jailed = jail.jail(&JailedPath::new_jailed(raw.to_path_buf()), raw)?;
+    let path = jailed.as_path();
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Ok(None);
+    };
+    Ok(Some(ArchiveEntry {
+        archive_path: path.file_name().map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        uncompressed_bytes: meta.len(),
+        compression_method: "deflate".to_owned(),
+        modified_at: None,
+    }))
+}
+
+/// Sums the on-disk sizes of all jailed sources (files and directory trees) for
+/// the disk-space preflight. Unreadable entries contribute zero.
+fn sum_source_bytes(sources: &[JailedPath]) -> u64 {
+    sources
+        .iter()
+        .map(|s| dir_or_file_size(s.as_path()))
+        .fold(0u64, u64::saturating_add)
+}
+
+fn dir_or_file_size(path: &std::path::Path) -> u64 {
+    if path.is_dir() {
+        std::fs::read_dir(path).map_or(0u64, |rd| {
+            rd.flatten()
+                .map(|e| dir_or_file_size(&e.path()))
+                .fold(0u64, u64::saturating_add)
+        })
+    } else {
+        std::fs::metadata(path).map_or(0u64, |m| m.len())
+    }
 }
 
 /// Synchronous ZIP creation inside `spawn_blocking`.
 ///
-/// Uses `zip::write::ZipWriter` with `Deflated` compression.
-/// CRC32 is handled by the `zip` crate internally (backed by `crc32fast`).
+/// Uses `zip::write::ZipWriter` with `Deflated` compression. CRC32 is handled by
+/// the `zip` crate internally (backed by `crc32fast`). Each source file is
+/// streamed in [`ZIP_CHUNK_BYTES`] chunks (never read fully into the heap) and
+/// guarded by a per-file [`DecompressGuard`] ceiling. Cancellation is polled at
+/// every top-level source boundary (ADR-0037).
 fn build_zip_blocking(
     tmp_path: &std::path::Path,
     sources: &[JailedPath],
+    cancel: &Arc<AtomicBool>,
 ) -> SubstrateResult<(usize, u64)> {
-    use std::io::Write as _;
     use zip::CompressionMethod;
     use zip::write::SimpleFileOptions;
 
@@ -201,29 +293,19 @@ fn build_zip_blocking(
     let mut entry_count = 0usize;
 
     for src in sources {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(SubstrateError::Cancelled {
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            });
+        }
         let path = src.as_path();
         if path.is_dir() {
-            add_dir_to_zip(&mut writer, path, path, &options)?;
+            add_dir_to_zip(&mut writer, path, path, &options, &mut entry_count)?;
         } else {
             let name = path
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-            writer
-                .start_file(&name, options)
-                .map_err(|e| SubstrateError::IoError {
-                    path: format!("{name}: {e}"),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
-            let data = std::fs::read(path).map_err(|e| SubstrateError::IoError {
-                path: format!("{}: {e}", path.display()),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })?;
-            writer
-                .write_all(&data)
-                .map_err(|e| SubstrateError::IoError {
-                    path: format!("{name}: {e}"),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
+            stream_file_into_zip(&mut writer, path, &name, options)?;
             entry_count += 1;
         }
     }
@@ -242,9 +324,8 @@ fn add_dir_to_zip(
     base: &std::path::Path,
     dir: &std::path::Path,
     options: &zip::write::SimpleFileOptions,
+    entry_count: &mut usize,
 ) -> SubstrateResult<()> {
-    use std::io::Write as _;
-
     for entry in std::fs::read_dir(dir).map_err(|e| SubstrateError::IoError {
         path: format!("{}: {e}", dir.display()),
         correlation_id: Some(uuid::Uuid::now_v7()),
@@ -255,28 +336,57 @@ fn add_dir_to_zip(
         })?;
         let path = entry.path();
         let relative = path.strip_prefix(base).unwrap_or(&path);
-        let name = relative.to_string_lossy();
+        let name = relative.to_string_lossy().into_owned();
 
         if path.is_dir() {
-            add_dir_to_zip(writer, base, &path, options)?;
+            add_dir_to_zip(writer, base, &path, options, entry_count)?;
         } else {
-            writer
-                .start_file(name.as_ref(), *options)
-                .map_err(|e| SubstrateError::IoError {
-                    path: format!("{name}: {e}"),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
-            let data = std::fs::read(&path).map_err(|e| SubstrateError::IoError {
+            stream_file_into_zip(writer, &path, &name, *options)?;
+            *entry_count += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Streams a single file into the ZIP writer in bounded chunks, enforcing a
+/// per-file output ceiling via [`DecompressGuard`] (fix-7 unbounded-read guard).
+fn stream_file_into_zip(
+    writer: &mut zip::write::ZipWriter<std::fs::File>,
+    path: &std::path::Path,
+    name: &str,
+    options: zip::write::SimpleFileOptions,
+) -> SubstrateResult<()> {
+    use std::io::{Read as _, Write as _};
+
+    writer
+        .start_file(name, options)
+        .map_err(|e| SubstrateError::IoError {
+            path: format!("{name}: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?;
+    let mut in_file = std::fs::File::open(path).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", path.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    let mut guard = DecompressGuard::new(DEFAULT_MAX_OUTPUT_BYTES);
+    let mut buf = vec![0u8; ZIP_CHUNK_BYTES];
+    loop {
+        let n = in_file
+            .read(&mut buf)
+            .map_err(|e| SubstrateError::IoError {
                 path: format!("{}: {e}", path.display()),
                 correlation_id: Some(uuid::Uuid::now_v7()),
             })?;
-            writer
-                .write_all(&data)
-                .map_err(|e| SubstrateError::IoError {
-                    path: format!("{name}: {e}"),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                })?;
+        if n == 0 {
+            break;
         }
+        guard.record(n as u64)?;
+        writer
+            .write_all(&buf[..n])
+            .map_err(|e| SubstrateError::IoError {
+                path: format!("{name}: {e}"),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
     }
     Ok(())
 }

@@ -104,7 +104,7 @@ pub async fn handle_archive_tar_create(
 ) -> SubstrateResult<ToolResponse> {
     // Dry-run gate (ADR-0004 / ADR-0033).
     if req.dry_run {
-        return Ok(produce_dry_run(&req, deps));
+        return produce_dry_run(&req, deps).await;
     }
 
     if !req.confirmed {
@@ -193,23 +193,31 @@ pub async fn handle_archive_tar_create(
 }
 
 /// Dry-run pass: compute the manifest without touching disk.
-fn produce_dry_run(req: &TarCreateRequest, deps: &ArchiveDeps) -> ToolResponse {
-    let entries: Vec<ArchiveEntry> = req
-        .sources
-        .iter()
-        .filter_map(|s| {
-            let path = Path::new(s);
-            let meta = std::fs::metadata(path).ok()?;
-            Some(ArchiveEntry {
-                archive_path: path
-                    .file_name()
-                    .map_or_else(|| s.clone(), |n| n.to_string_lossy().into_owned()),
-                uncompressed_bytes: meta.len(),
-                compression_method: req.compression.to_string(),
-                modified_at: None,
-            })
+///
+/// Source paths are jailed BEFORE any `metadata` syscall so the preview cannot
+/// disclose the existence or size of host files outside the allowlist
+/// (information-disclosure fix). The jail performs blocking syscalls and runs
+/// inside `spawn_blocking` per ADR-0003.
+async fn produce_dry_run(
+    req: &TarCreateRequest,
+    deps: &ArchiveDeps,
+) -> SubstrateResult<ToolResponse> {
+    let mut entries: Vec<ArchiveEntry> = Vec::with_capacity(req.sources.len());
+    for src in &req.sources {
+        let jail = std::sync::Arc::clone(&deps.jail);
+        let raw = std::path::PathBuf::from(src);
+        let compression = req.compression;
+        if let Some(entry) = tokio::task::spawn_blocking(move || {
+            jailed_dry_run_entry(jail.as_ref(), &raw, compression)
         })
-        .collect();
+        .await
+        .map_err(|e| SubstrateError::InternalError {
+            reason: format!("spawn_blocking join error: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?? {
+            entries.push(entry);
+        }
+    }
 
     let manifest = ArchiveManifest::from_entries(entries);
     let hints = build_job_hints(None, Some("archive.hash"), &deps.capabilities, true);
@@ -223,7 +231,37 @@ fn produce_dry_run(req: &TarCreateRequest, deps: &ArchiveDeps) -> ToolResponse {
         "manifest": serde_json::Value::from(manifest),
         "hints": hints,
     });
-    ToolResponse::with_hints(content, structured_content, hints)
+    Ok(ToolResponse::with_hints(content, structured_content, hints))
+}
+
+/// Jails a single source path, then stats it for the dry-run manifest.
+///
+/// Returns `Ok(None)` when the jailed path cannot be stat'd (e.g. it does not
+/// exist), matching the previous lenient dry-run behaviour while never touching
+/// an unjailed host path.
+///
+/// # Errors
+///
+/// Propagates any jail error (path outside allowlist, traversal, symlink escape).
+fn jailed_dry_run_entry(
+    jail: &dyn substrate_domain::PathJailPort,
+    raw: &Path,
+    compression: TarCompression,
+) -> SubstrateResult<Option<ArchiveEntry>> {
+    let jailed = jail.jail(&JailedPath::new_jailed(raw.to_path_buf()), raw)?;
+    let path = jailed.as_path();
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Ok(None);
+    };
+    Ok(Some(ArchiveEntry {
+        archive_path: path.file_name().map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        uncompressed_bytes: meta.len(),
+        compression_method: compression.to_string(),
+        modified_at: None,
+    }))
 }
 
 /// Synchronous TAR creation running inside `spawn_blocking`.
