@@ -251,7 +251,7 @@ the job is submitted to the `JobRegistry`. Exceeding any quota returns
 
 The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonomy.md):
 
-- `SUBSTRATE_SUBPROCESS_BINARY_DENIED` — the requested binary is not in
+- `SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED` — the requested binary is not in
   `security.subprocess_binary_allowlist`. Recovery hint: `"add the binary
   absolute path to security.subprocess_binary_allowlist in the server config"`.
 - `SUBSTRATE_SUBPROCESS_SPAWN_FAILED` — `tokio::process::Command` returned an
@@ -262,6 +262,9 @@ The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonom
   an existing subprocess"`.
 - `SUBSTRATE_SUBPROCESS_RATE_LIMITED` — spawn rate exceeded. Recovery hint:
   `"reduce spawn frequency; maximum is configured in subprocess.spawn_rate_per_sec"`.
+- `SUBSTRATE_INVALID_STATE_TRANSITION` — a state transition that violates the
+  subprocess state machine was attempted. Recovery hint: `"report the
+  correlation_id; this is an internal state machine violation"`.
 
 ## Consequences
 
@@ -301,7 +304,7 @@ The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonom
 ## Validation
 
 - Unit test: construct a `SubprocessRequest` with a binary not in the allowlist;
-  assert `SUBSTRATE_SUBPROCESS_BINARY_DENIED` is returned before any job is
+  assert `SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED` is returned before any job is
   created.
 - Unit test: construct a `SubprocessRequest` with a clean binary; assert a
   `JobEntry` with a `SubprocessHandle` variant is created and `job_state=Pending`.

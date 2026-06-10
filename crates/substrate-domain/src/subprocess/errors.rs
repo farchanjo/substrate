@@ -21,7 +21,7 @@ use crate::value_objects::JobId;
 pub enum SubprocessError {
     /// The requested binary path is not present in `security.subprocess_binary_allowlist`.
     ///
-    /// Stable code: `SUBSTRATE_SUBPROCESS_BINARY_DENIED`.
+    /// Stable code: `SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED`.
     #[error("Binary not in subprocess allowlist: {path}")]
     BinaryNotAllowed {
         /// The binary path that was rejected.
@@ -105,7 +105,7 @@ pub enum SubprocessError {
 
     /// A `SubprocessRequest` field fails semantic validation.
     ///
-    /// Reuses `SUBSTRATE_INVALID_INPUT` from the base error taxonomy (ADR-0010).
+    /// Reuses `SUBSTRATE_INVALID_ARGUMENT` from the base error taxonomy (ADR-0010).
     #[error("Invalid subprocess request: {msg}")]
     InvalidRequest {
         /// Human-readable description of the validation failure.
@@ -132,7 +132,7 @@ impl SubprocessError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::BinaryNotAllowed { .. } => "SUBSTRATE_SUBPROCESS_BINARY_DENIED",
+            Self::BinaryNotAllowed { .. } => "SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED",
             Self::EnvBanned { .. } => "SUBSTRATE_SUBPROCESS_ENV_BANNED",
             Self::CwdOutsideAllowlist { .. } => "SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST",
             Self::QuotaExceeded { .. } => "SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED",
@@ -141,7 +141,7 @@ impl SubprocessError {
             Self::Killed => "SUBSTRATE_SUBPROCESS_KILLED",
             Self::ElicitationRequired { .. } => "SUBSTRATE_ELICITATION_REQUIRED",
             Self::StreamChunkDropped { .. } => "SUBSTRATE_STREAM_CHUNK_DROPPED",
-            Self::InvalidRequest { .. } => "SUBSTRATE_INVALID_INPUT",
+            Self::InvalidRequest { .. } => "SUBSTRATE_INVALID_ARGUMENT",
             Self::InvalidStateTransition { .. } => "SUBSTRATE_INVALID_STATE_TRANSITION",
         }
     }

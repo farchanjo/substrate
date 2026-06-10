@@ -42,7 +42,7 @@ package schemas
 	// Capability-startup errors per ADR-0042 + ADR-0043 (-32032 through -32033)
 	"SUBSTRATE_TIER_OVERRIDE_INVALID" |
 	"SUBSTRATE_JAIL_DEGRADED_REFUSED" |
-	// Subprocess BC security and lifecycle errors per ADR-0052 + ADR-0053 + ADR-0054 + ADR-0055 (-32034 through -32042)
+	// Subprocess BC security and lifecycle errors per ADR-0052 + ADR-0053 + ADR-0054 + ADR-0055 (-32034 through -32043)
 	"SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED" |
 	"SUBSTRATE_SUBPROCESS_ENV_BANNED" |
 	"SUBSTRATE_SUBPROCESS_CWD_OUTSIDE_ALLOWLIST" |
@@ -51,7 +51,8 @@ package schemas
 	"SUBSTRATE_SUBPROCESS_TIMEOUT" |
 	"SUBSTRATE_SUBPROCESS_KILLED" |
 	"SUBSTRATE_ELICITATION_REQUIRED" |
-	"SUBSTRATE_STREAM_CHUNK_DROPPED"
+	"SUBSTRATE_STREAM_CHUNK_DROPPED" |
+	"SUBSTRATE_INVALID_STATE_TRANSITION"
 
 // #ErrorCategory classifies codes by operational concern.
 // "job" added per ADR-0010 amendment for async-job BC per ADR-0040.
@@ -80,7 +81,7 @@ package schemas
 
 // #ErrorCatalog is a closed map of all error codes to their entries.
 // 7 codes added per ADR-0010 amendment (job BC + capability startup codes).
-// 9 codes added per ADR-0052/0053/0054/0055 (subprocess BC).
+// 10 codes added per ADR-0052/0053/0054/0055 (subprocess BC).
 // This read model is generated; do not edit entries; open a spec ADR to evolve codes.
 #ErrorCatalog: {
 	SUBSTRATE_PATH_OUTSIDE_ALLOWLIST: #ErrorEntry & {
@@ -339,5 +340,11 @@ package schemas
 		http_jsonrpc_code: -32042
 		recovery_hint:     "Client should drain notifications/progress faster; or use subprocess.result aggregate after job completion."
 		category:          "backpressure"
+	}
+	SUBSTRATE_INVALID_STATE_TRANSITION: #ErrorEntry & {
+		code:              "SUBSTRATE_INVALID_STATE_TRANSITION"
+		http_jsonrpc_code: -32043
+		recovery_hint:     "Report the correlation_id; this is an internal state machine violation."
+		category:          "internal"
 	}
 }
