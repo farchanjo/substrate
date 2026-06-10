@@ -17,6 +17,8 @@ _valid_request := {
 	"cwd": "/tmp/sandbox",
 	"stdin_kind": "none",
 	"capture_kind": "stream",
+	"execs_canonical_binary": true,
+	"execs_canonical_cwd": true,
 }
 
 # ---------------------------------------------------------------------------
@@ -167,6 +169,8 @@ test_happy_path_allowed if {
 			"stdin_kind": "none",
 			"capture_kind": "stream",
 			"timeout_secs": 30,
+			"execs_canonical_binary": true,
+			"execs_canonical_cwd": true,
 		},
 		"elicitation_confirmed": true,
 	}
@@ -182,7 +186,39 @@ test_happy_path_allow_rule_true if {
 			"cwd": "/tmp/sandbox",
 			"stdin_kind": "none",
 			"capture_kind": "in_memory",
+			"execs_canonical_binary": true,
+			"execs_canonical_cwd": true,
 		},
 		"elicitation_confirmed": true,
 	}
+}
+
+# ---------------------------------------------------------------------------
+# test_non_canonical_binary_denied
+# Invariant 9: spawn contract must exec the canonical binary path.
+# ---------------------------------------------------------------------------
+
+test_non_canonical_binary_denied if {
+	result := subprocess_invariants.deny with input as {
+		"subprocess_request": object.union(_valid_request, {"execs_canonical_binary": false}),
+		"elicitation_confirmed": true,
+	}
+	some msg
+	result[msg]
+	contains(msg, "spawn contract MUST exec the canonicalized binary path")
+}
+
+# ---------------------------------------------------------------------------
+# test_non_canonical_cwd_denied
+# Invariant 10: spawn contract must set the canonical cwd.
+# ---------------------------------------------------------------------------
+
+test_non_canonical_cwd_denied if {
+	result := subprocess_invariants.deny with input as {
+		"subprocess_request": object.union(_valid_request, {"execs_canonical_cwd": false}),
+		"elicitation_confirmed": true,
+	}
+	some msg
+	result[msg]
+	contains(msg, "spawn contract MUST set the canonicalized cwd")
 }

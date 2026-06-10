@@ -118,3 +118,44 @@ test_archive_extract_with_zip_slip_allowed if {
         "startup_error_schema": "substrate-startup-error/v1",
     }
 }
+
+# ---------------------------------------------------------------------------
+# Tests for the gzip extract family (archive.gzip.decompress)
+# ---------------------------------------------------------------------------
+
+test_archive_gzip_decompress_without_zip_slip_denied if {
+    deny["archive.gzip.decompress: archive extraction tool MUST reference Zip Slip mitigation in its spec (has_zip_slip_mitigation must be true)"] with input as {
+        "tool_spec": {
+            "name": "archive.gzip.decompress",
+            "annotations": {"destructiveHint": false, "openWorldHint": false},
+            "has_zip_slip_mitigation": false,
+        },
+        "security_policy": {
+            "dry_run_required_for": ["archive.gzip.decompress"],
+            "signal_allowlist": ["SIGTERM"],
+            "outbound_net_enabled": false,
+            "features": [],
+        },
+    }
+}
+
+test_archive_gzip_decompress_with_zip_slip_allowed if {
+    count(deny) == 0 with input as {
+        "tool_spec": {
+            "name": "archive.gzip.decompress",
+            "annotations": {"destructiveHint": false, "openWorldHint": false},
+            "has_zip_slip_mitigation": true,
+            "references_openat2_path_safety": true,
+            "rejects_symlink_members": true,
+        },
+        "security_policy": {
+            "dry_run_required_for": ["archive.gzip.decompress"],
+            "signal_allowlist": ["SIGTERM"],
+            "outbound_net_enabled": false,
+            "features": [],
+            "reject_hardlinks": false,
+            "archive_allow_symlinks": false,
+        },
+        "startup_error_schema": "substrate-startup-error/v1",
+    }
+}
