@@ -10,6 +10,8 @@
 //! - Result watch channel set inside the same mutex lock as the terminal transition.
 //! - Per-client and global inflight counters decremented atomically on terminal entry.
 //! - Idempotency dedup key = (`client_id`, tool, `idempotency_key`, `blake3(args_json)`).
+//! - Dedup index insert is atomic via `DashMap::entry().or_insert_with()`; concurrent
+//!   same-key submits collapse to a single worker (ADR-0040 at-most-once guarantee).
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -175,11 +177,16 @@ impl JobRegistryPort for InMemoryJobRegistry {
     /// the MCP server composition root is implemented (Wave C/D work).
     #[instrument(skip(self, request), fields(tool = %request.tool, client = %request.client_id))]
     async fn submit(&self, request: JobSubmitRequest) -> SubstrateResult<JobId> {
-        // --- Step 1: idempotency check ---
+        // --- Step 1: idempotency fast-path (non-atomic optimisation) ---
+        //
+        // If the dedup key already maps to a live slot, return it immediately
+        // without paying the quota-increment + slot-construction cost.
+        // This is a read-only check and may race with a concurrent insert of the
+        // same key; the race is resolved atomically in Step 4 via `or_insert_with`.
         if let Some(dedup_key) = IdempotencyDedupKey::from_request(&request)
             && let Some(existing_id) = self.idempotency_index.get(&dedup_key)
         {
-            // Check the slot still exists (not TTL-evicted).
+            // Verify the slot is still live (not TTL-evicted).
             if self.jobs.contains_key(&*existing_id) {
                 debug!(job_id = %*existing_id, "idempotent submit: returning existing job");
                 return Ok(existing_id.clone());
@@ -236,10 +243,9 @@ impl JobRegistryPort for InMemoryJobRegistry {
 
         let job_cancel = self.parent_cancel.child_token();
 
-        // Extract fields needed after the partial move of `request.execute`.
-        // `IdempotencyDedupKey::from_request` takes `&JobSubmitRequest`, so we
-        // must call it (and capture `bucket` for tracing) before partially
-        // moving `execute` out of the struct.
+        // Capture `dedup_key` and `bucket_label` before partially moving `request`.
+        // `IdempotencyDedupKey::from_request` takes `&JobSubmitRequest`, so this
+        // must happen before `request.execute` is moved into the worker closure.
         let dedup_key = IdempotencyDedupKey::from_request(&request);
         let bucket_label = request.bucket;
 
@@ -251,8 +257,7 @@ impl JobRegistryPort for InMemoryJobRegistry {
         // the slot needs to be Arc-cloned into the spawn closure for state transitions.
         let (result_tx, result_rx) = watch::channel::<Option<JobResult>>(None);
         // Clone the entry mutex and cancel token for the worker closure.
-        let worker_entry = parking_lot::Mutex::new(entry);
-        let worker_entry = Arc::new(worker_entry);
+        let worker_entry = Arc::new(parking_lot::Mutex::new(entry));
         let worker_entry_clone = Arc::clone(&worker_entry);
         let result_tx_clone = result_tx.clone();
 
@@ -311,35 +316,43 @@ impl JobRegistryPort for InMemoryJobRegistry {
                             (JobState::Failed, JobResult::Failed(e))
                         }
                     };
+                    // Write state and publish result to the watch channel under the
+                    // same mutex lock.  This eliminates the window between
+                    // "state=terminal visible" and "result present in watch channel":
+                    // any reader that observes a terminal state will always find the
+                    // result ready in `result_rx.borrow()` (Fix for race in ADR-0040).
                     {
                         let mut entry = worker_entry_clone.lock();
                         if entry.state.can_transition_to(next_state) {
                             entry.state = next_state;
                             entry.updated_at = time::OffsetDateTime::now_utc();
                             entry.terminal_at = Some(entry.updated_at);
+                            // Send a clone into the watch while the lock is held.
+                            // The original `job_result` is kept for the notify call below.
+                            let _ = result_tx_clone.send(Some(clone_job_result(&job_result)));
                         }
                     }
-                    // ADR-0040: emit terminal progress notification (100% or 0% for
-                    // non-success) before publishing the result to the watch channel
-                    // so the audit trail is complete before job.result returns.
+                    // ADR-0040: emit terminal progress notification after the watch
+                    // channel is set so the audit trail is complete (async — must
+                    // not hold the entry mutex across this await).
                     worker_notifier.notify_complete(&notify_job_id, &job_result).await;
-                    // Publish result to waiting `job_result` callers.
-                    let _ = result_tx_clone.send(Some(job_result));
                 }
                 () = slot_cancel.cancelled() => {
                     // Cancellation requested — transition to Cancelled.
                     tracing::debug!("job cancelled before execute future completed");
+                    // Write state and publish result atomically under the same lock
+                    // (same ordering fix as the success/failure arm above).
                     {
                         let mut entry = worker_entry_clone.lock();
                         if entry.state.can_transition_to(JobState::Cancelled) {
                             entry.state = JobState::Cancelled;
                             entry.updated_at = time::OffsetDateTime::now_utc();
                             entry.terminal_at = Some(entry.updated_at);
+                            let _ = result_tx_clone.send(Some(JobResult::Cancelled));
                         }
                     }
                     // ADR-0040: emit cancelled completion notification.
                     worker_notifier.notify_complete(&notify_job_id, &JobResult::Cancelled).await;
-                    let _ = result_tx_clone.send(Some(JobResult::Cancelled));
                 }
             }
 
@@ -370,19 +383,54 @@ impl JobRegistryPort for InMemoryJobRegistry {
             result_rx,
         );
 
-        // --- Step 4: insert slot, register idempotency key, commit quotas ---
-        self.jobs.insert(job_id.clone(), Arc::clone(&slot));
+        // --- Step 4: register idempotency key atomically, insert slot, commit ---
+        //
+        // ADR-0040 at-most-once guarantee: use `entry().or_insert_with()` so that
+        // two concurrent submits with the same dedup key collapse to a single
+        // worker.  The entry API holds the DashMap shard write-lock for the
+        // duration of the closure, making read-and-insert atomic.
+        //
+        // Winning submitter: `or_insert_with` runs the closure → returns `job_id`.
+        // Losing submitter: key already present → closure skipped → returns the
+        //   existing `job_id` from the map.  The losing submitter's worker must be
+        //   signalled to stop and its quota guards committed so the worker (not the
+        //   guards) performs the counter decrement.
+        let canonical_job_id = if let Some(key) = dedup_key {
+            // `or_insert_with` holds the shard write-lock for the duration of the
+            // closure, making read-and-insert atomic.  The returned `RefMut` must
+            // be dereferenced before cloning; `RefMut<'_, K, V>` is not `Clone`.
+            let ref_mut = self
+                .idempotency_index
+                .entry(key)
+                .or_insert_with(|| job_id.clone());
+            ref_mut.value().clone()
+        } else {
+            // No dedup key: always a new unique job.
+            job_id.clone()
+        };
 
-        if let Some(key) = dedup_key {
-            self.idempotency_index.insert(key, job_id.clone());
+        if canonical_job_id == job_id {
+            // We won the dedup race (or no dedup key): register the slot and commit.
+            self.jobs.insert(job_id.clone(), Arc::clone(&slot));
+            global_guard.commit();
+            client_guard.commit();
+            debug!(job_id = %job_id, bucket = %bucket_label, "job submitted");
+        } else {
+            // We lost the dedup race: another concurrent submit already registered
+            // this dedup key.  Cancel our phantom worker (it was never visible to
+            // callers) and commit the quota guards so the worker — not the guards —
+            // performs the decrement when it reaches the cancellation arm.
+            global_guard.commit();
+            client_guard.commit();
+            slot.cancel.cancel();
+            debug!(
+                existing_id = %canonical_job_id,
+                phantom_id = %job_id,
+                "idempotent submit (concurrent): collapsing to existing job"
+            );
         }
 
-        // Commit both guards: the job is now live and will decrement on terminal.
-        global_guard.commit();
-        client_guard.commit();
-
-        debug!(job_id = %job_id, bucket = %bucket_label, "job submitted");
-        Ok(job_id)
+        Ok(canonical_job_id)
     }
 
     /// Returns a point-in-time snapshot of the job's current state.
