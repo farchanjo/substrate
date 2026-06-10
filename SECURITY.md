@@ -7,7 +7,8 @@ two most recent minor versions will be supported.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | yes (latest) |
+| 0.2.x | yes (latest) |
+| 0.1.x | no |
 | < 0.1.0 | no |
 
 ## Reporting a vulnerability

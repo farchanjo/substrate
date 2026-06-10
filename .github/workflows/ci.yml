@@ -83,6 +83,37 @@ jobs:
         run: cargo nextest run --locked --workspace --no-fail-fast
 
   # ---------------------------------------------------------------------------
+  # nextest-subprocess — test suite compiled with the subprocess feature flag.
+  # The subprocess tool surface (spawn/list/cancel/result/signal/search) and
+  # its 26 cucumber integration scenarios are gated behind this feature and
+  # are NOT exercised by the default nextest job above.
+  # ---------------------------------------------------------------------------
+  nextest-subprocess:
+    name: nextest-subprocess
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache cargo registry + git
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run tests (subprocess feature)
+        run: >
+          cargo nextest run
+          --locked
+          -p substrate-mcp-server
+          --features subprocess
+          --no-fail-fast
+
+  # ---------------------------------------------------------------------------
   # deny — dependency license + advisory + source check
   # ---------------------------------------------------------------------------
   deny:
@@ -342,6 +373,7 @@ jobs:
       - fmt
       - clippy
       - nextest
+      - nextest-subprocess
       - deny
       - audit
       - semver-checks
