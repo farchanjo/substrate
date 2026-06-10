@@ -13,9 +13,9 @@ Feature: Operations lasting >= 1 second emit ProgressNotification with progressT
     And each ProgressNotification includes the progressToken from the request
     And each ProgressNotification includes a progress value between 0 and 1 (inclusive)
 
-  Scenario: archive.tar_create emits progress notifications
+  Scenario: archive.tar.create emits progress notifications
     Given archiving "/work/repo/src" will take >= 1 second
-    When the client calls archive.tar_create with src="/work/repo/src" and progressToken="tok-42"
+    When the client calls archive.tar.create with src="/work/repo/src" and progressToken="tok-42"
     Then at least one ProgressNotification with progressToken="tok-42" is emitted
     And the final ProgressNotification has progress=1.0 or total=current
 

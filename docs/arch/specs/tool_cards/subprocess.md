@@ -126,3 +126,26 @@ PID-0/1/2 protection rules (ADR-0035), and delivers the requested signal via `ki
 
 **AVOID**: elicitation required for SIGKILL, SIGTERM, and SIGSTOP per ADR-0004 Layer 4; PID 0/1/2
 protection per ADR-0035 still applies (substrate-mcp-server is excluded from self-signal).
+
+---
+
+## subprocess.search
+
+**USE**: when an agent needs to locate specific log lines or output patterns in a subprocess job's stdout/stderr ring buffer.
+
+**DOES**: decodes the ADR-0054 ring buffer for the specified job, splits on newline boundaries into a logical line array, compiles `pattern` as a Rust `regex::Regex` (10 MiB DFA cap, linear-time NFA/DFA engine), filters matching lines, and returns a paginated `SearchMatch` list with 1-based `line_number` values per stream.
+
+**ARGS**:
+
+- `job_id` (uuid7) — identifier of the subprocess job whose ring buffer is searched
+- `pattern` (string, 1..=1024 bytes) — Rust regex pattern; compiled per-call; invalid patterns return `SUBSTRATE_INVALID_INPUT`
+- `streams` ([]enum: stdout | stderr, default ["stdout","stderr"]) — which streams to search
+- `case_insensitive` (bool, default false) — passed to `RegexBuilder::case_insensitive`
+- `page_cursor` (string, optional) — opaque base64 cursor from a prior `subprocess.search` response
+- `page_size` (int, default 50, max 10000) — number of matching lines per page per ADR-0057
+
+**RETURNS**: `{matches: [SearchMatch], total_matches, next_cursor?}` where each `SearchMatch` carries `{stream, line_number, line_text}`. Hints: `{confirm_destructive: true, cascade_kill_pgid: true, next_action_suggested: "subprocess.result"}`.
+
+**NEXT**: `subprocess.result` (for full aggregate), `subprocess.search` (next page via `next_cursor`)
+
+**AVOID**: binary ring buffers with no `\n` bytes return `SUBSTRATE_INVALID_INPUT` ("aggregate is binary; use full base64 aggregate"); the ring buffer is bounded to `aggregate_buffer_bytes` (default 64 KiB per stream) — lines written before the buffer wrapped are not visible; do not use for forensic completeness, only for recent output inspection.
