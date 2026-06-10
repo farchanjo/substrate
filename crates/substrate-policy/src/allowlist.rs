@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
+use crate::nfc;
+
 /// Validated, canonicalized set of allowlist roots.
 ///
 /// Constructed once at startup from the operator-supplied `[security] roots`
@@ -88,7 +90,11 @@ impl Allowlist {
                 }
             })?;
 
-            canonical_roots.push(canonical);
+            // Normalize the canonicalized root to NFC per ADR-0035 §Decision 6
+            // so prefix containment is stable against NFC/NFD divergence on
+            // macOS APFS/HFS+ volumes. Both stored roots and incoming
+            // candidates are compared in NFC form.
+            canonical_roots.push(nfc::normalize_path(&canonical));
         }
 
         canonical_roots.sort();
@@ -100,11 +106,15 @@ impl Allowlist {
     /// Returns `true` when `candidate` is a descendant of (or equal to) any
     /// configured allowlist root.
     ///
-    /// The check is performed on the byte representation of the path; callers
-    /// must canonicalize `candidate` before invoking this method.
+    /// The candidate is normalized to NFC (ADR-0035 §Decision 6) before the
+    /// prefix comparison so that an NFD-encoded argument matches an
+    /// NFC-encoded root on macOS APFS/HFS+ volumes. Callers must canonicalize
+    /// `candidate` before invoking this method; this method only handles
+    /// Unicode normalization and prefix containment.
     #[must_use]
     pub fn contains(&self, candidate: &Path) -> bool {
-        self.roots.iter().any(|root| candidate.starts_with(root))
+        let normalized = nfc::normalize_path(candidate);
+        self.roots.iter().any(|root| normalized.starts_with(root))
     }
 
     /// Validates `candidate` against the allowlist and returns a [`JailedPath`].
@@ -115,21 +125,26 @@ impl Allowlist {
     /// is performed by the [`PathJailPort`](substrate_domain::PathJailPort)
     /// implementation selected by the factory.
     ///
+    /// The returned [`JailedPath`] carries the NFC-normalized form of
+    /// `candidate` (ADR-0035 §Decision 6) so that all subsequent internal path
+    /// operations use a single, consistent encoding.
+    ///
     /// # Errors
     ///
     /// - `PathOutsideAllowlist` — `candidate` is not under any root.
     pub fn jail(&self, candidate: PathBuf) -> SubstrateResult<JailedPath> {
-        if self.contains(&candidate) {
+        let normalized = nfc::normalize_path(&candidate);
+        if self.contains(&normalized) {
             // SAFETY (semantic): `JailedPath::new_jailed` is documented as
             // `substrate-policy`-only. We have verified the path is within an
             // allowlist root; the kernel-level jail check (openat2 /
             // O_NOFOLLOW_ANY) is the caller's responsibility before invoking
             // this method. Misuse by other crates is caught by
             // `policies/path_jail_construction.rego` in CI.
-            Ok(JailedPath::new_jailed(candidate))
+            Ok(JailedPath::new_jailed(normalized))
         } else {
             Err(SubstrateError::PathOutsideAllowlist {
-                path: candidate.display().to_string(),
+                path: normalized.display().to_string(),
                 correlation_id: None,
             })
         }
@@ -221,6 +236,24 @@ mod tests {
         assert_eq!(
             result.unwrap_err().code(),
             "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
+        );
+    }
+
+    #[test]
+    fn contains_matches_nfd_candidate_under_nfc_root() {
+        let dir = make_tmpdir();
+        let root = std::fs::canonicalize(dir.path()).expect("canonicalize tempdir");
+        let allowlist = Allowlist::new(vec![root.clone()]).expect("valid root");
+
+        // NFC root component "café" vs NFD child "cafe\u{0301}" must match
+        // after NFC normalization (ADR-0035 §Decision 6).
+        let nfc_child = root.join("caf\u{00e9}").join("file.txt");
+        let nfd_child = root.join("cafe\u{0301}").join("file.txt");
+        assert_ne!(nfc_child, nfd_child, "precondition: byte strings differ");
+        assert!(allowlist.contains(&nfc_child));
+        assert!(
+            allowlist.contains(&nfd_child),
+            "NFD-encoded candidate must match after NFC normalization"
         );
     }
 

@@ -16,6 +16,7 @@ use std::path::Path;
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::allowlist::Allowlist;
+use crate::nfc;
 
 /// Userspace path-jail adapter using `strict-path` canonicalization and an
 /// allowlist prefix check.
@@ -97,8 +98,10 @@ impl substrate_domain::PathJailPort for UserspaceJail {
         })?;
 
         // Verify the canonicalized path is beneath the specific root passed to
-        // this call (may be a subset of the full allowlist).
-        if !canonical.starts_with(allowlist_root.as_path()) {
+        // this call (may be a subset of the full allowlist). Both sides are
+        // normalized to NFC (ADR-0035 §Decision 6) so an NFD-encoded
+        // canonical path still matches an NFC-encoded root.
+        if !nfc::is_contained(&canonical, allowlist_root.as_path()) {
             return Err(SubstrateError::PathOutsideAllowlist {
                 path: canonical.display().to_string(),
                 correlation_id: None,

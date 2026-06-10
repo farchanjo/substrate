@@ -30,6 +30,7 @@ use std::path::Path;
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
 
 use crate::allowlist::Allowlist;
+use crate::nfc;
 
 // ---- openat2 ABI definitions ------------------------------------------------
 
@@ -254,34 +255,38 @@ impl substrate_domain::PathJailPort for Openat2Jail {
         // produces a double-prefix phantom path when allowlist_root is a prefix
         // of raw_path (e.g. root=/data, path=/data/sub/f → /data/data/sub/f).
         let proc_link = format!("/proc/self/fd/{}", fd as libc::c_int);
-        let canonical = std::fs::read_link(&proc_link).unwrap_or_else(|err| {
-            // readlink failed (unusual but not impossible — e.g. procfs not
-            // mounted or fd type doesn't support it).  Fall back to the
-            // lexical form and emit a warning so the anomaly is auditable.
-            tracing::warn!(
-                fd = fd as libc::c_int,
-                path = %raw_path.display(),
-                error = %err,
-                "openat2 jail: /proc/self/fd readlink failed; \
-                 falling back to lexical canonical path"
-            );
-            allowlist_root
-                .as_path()
-                .join(raw_path.strip_prefix("/").unwrap_or(raw_path))
-        });
+        let readlink_result = std::fs::read_link(&proc_link);
 
-        // Close the validation fd after we have resolved the canonical path.
-        // SAFETY: `fd` is a valid file descriptor returned by the syscall above.
-        // `libc::close` is the correct way to release it; it cannot fail in a
-        // way that causes UB here (EINTR is benign on Linux for close(2)).
+        // Close the validation fd after we have read the procfs link (success
+        // or failure). SAFETY: `fd` is a valid file descriptor returned by the
+        // syscall above. `libc::close` is the correct way to release it; it
+        // cannot fail in a way that causes UB here (EINTR is benign on Linux
+        // for close(2)).
         unsafe {
             libc::close(fd as libc::c_int);
         }
 
+        // Fail CLOSED on readlink failure (ADR-0035). A lexical fallback would
+        // trivially satisfy its own containment post-check (it is constructed
+        // from allowlist_root), defeating the jail — so we reject instead of
+        // trusting an unverified path.
+        let canonical = readlink_result.map_err(|err| {
+            tracing::warn!(
+                path = %raw_path.display(),
+                error = %err,
+                "openat2 jail: /proc/self/fd readlink failed; rejecting (fail-closed)"
+            );
+            SubstrateError::PathOutsideAllowlist {
+                path: raw_path.display().to_string(),
+                correlation_id: None,
+            }
+        })?;
+
         // Post-check: the kernel-resolved path must still be beneath
         // allowlist_root (defence in depth — rejects magic-link escapes
         // that somehow slipped past RESOLVE_NO_MAGICLINKS on older kernels).
-        if !canonical.starts_with(allowlist_root.as_path()) {
+        // Both sides are normalized to NFC (ADR-0035 §Decision 6).
+        if !nfc::is_contained(&canonical, allowlist_root.as_path()) {
             return Err(SubstrateError::PathOutsideAllowlist {
                 path: canonical.display().to_string(),
                 correlation_id: None,
