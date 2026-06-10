@@ -36,7 +36,7 @@ use crate::resource_limit::{
 };
 use crate::response::{ArchiveDeps, ToolResponse};
 use crate::symlink_guard::{EntryKind, reject_symlink_entry, validate_symlink_target};
-use crate::tmp_path::TmpPath;
+use crate::tmp_path::{TmpPath, crockford_base32};
 use crate::zip_slip_guard::validate_member_path;
 
 /// Input parameters for `archive.zip.extract`.
@@ -250,9 +250,37 @@ fn scan_zip_members(
 }
 
 /// Synchronous ZIP extraction inside `spawn_blocking`.
+///
+/// Extracts into a sibling staging directory `<dest>.tmp.<uuid7>` and atomically
+/// renames it onto `dest_root` only after the full archive succeeds (ADR-0033).
+/// On any error (`DecompressGuard` overflow, I/O, security rejection) the
+/// staging tree is removed so no partial tree is ever visible at `dest_root`.
 fn extract_zip_blocking(
     archive: &std::path::Path,
     dest_root: &std::path::Path,
+) -> SubstrateResult<usize> {
+    let staging = make_staging_dir(dest_root)?;
+
+    let result = extract_zip_into_staging(archive, &staging);
+
+    match result {
+        Ok(count) => {
+            commit_staging(&staging, dest_root)?;
+            Ok(count)
+        },
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Err(e)
+        },
+    }
+}
+
+/// Extracts every ZIP member into `staging`. All members are pre-validated
+/// before any disk write (ADR-0035); files land in `staging` and are promoted
+/// to the final destination only on full success by the caller.
+fn extract_zip_into_staging(
+    archive: &std::path::Path,
+    staging: &std::path::Path,
 ) -> SubstrateResult<usize> {
     use std::io::Read as _;
 
@@ -266,7 +294,7 @@ fn extract_zip_blocking(
     })?;
 
     // Security-first: validate all members before any disk write (ADR-0035).
-    zip_prevalidate_members(&mut zip, dest_root)?;
+    zip_prevalidate_members(&mut zip, staging)?;
 
     // Aggregate ceiling across the whole archive guards against many-member
     // DEFLATE bombs whose individual entries stay below the per-entry limit.
@@ -281,7 +309,7 @@ fn extract_zip_blocking(
         })?;
         let name = entry.name().to_owned();
         let member = std::path::Path::new(&name);
-        let resolved = validate_member_path(dest_root, member)?;
+        let resolved = validate_member_path(staging, member)?;
 
         if entry.is_dir() {
             std::fs::create_dir_all(&resolved).map_err(|e| SubstrateError::IoError {
@@ -310,6 +338,69 @@ fn extract_zip_blocking(
     }
 
     Ok(extracted_count)
+}
+
+/// Creates a sibling staging directory `<dest>.tmp.<uuid7>` for transactional
+/// extraction. The parent of `dest_root` must already exist (it was jailed).
+fn make_staging_dir(dest_root: &std::path::Path) -> SubstrateResult<std::path::PathBuf> {
+    let suffix = crockford_base32(uuid::Uuid::now_v7().as_bytes());
+    let dir_name = match dest_root.file_name().and_then(|n| n.to_str()) {
+        Some(name) => format!("{name}.tmp.{suffix}"),
+        None => format!("extract.tmp.{suffix}"),
+    };
+    let parent = dest_root
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let staging = parent.join(dir_name);
+    std::fs::create_dir_all(&staging).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", staging.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    Ok(staging)
+}
+
+/// Atomically promotes the staging tree onto `dest_root`.
+///
+/// When `dest_root` already exists (the jail canonicalised an existing
+/// directory), its contents are merged from the staging tree entry-by-entry so
+/// the rename does not fail on a non-empty target.
+fn commit_staging(staging: &std::path::Path, dest_root: &std::path::Path) -> SubstrateResult<()> {
+    if std::fs::rename(staging, dest_root).is_ok() {
+        return Ok(());
+    }
+    // Target exists / is non-empty: merge children, then drop the staging dir.
+    merge_into(staging, dest_root)?;
+    let _ = std::fs::remove_dir_all(staging);
+    Ok(())
+}
+
+/// Recursively moves the children of `src` into `dst`, creating directories as
+/// needed and renaming leaf entries.
+fn merge_into(src: &std::path::Path, dst: &std::path::Path) -> SubstrateResult<()> {
+    std::fs::create_dir_all(dst).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", dst.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })?;
+    for entry in std::fs::read_dir(src).map_err(|e| SubstrateError::IoError {
+        path: format!("{}: {e}", src.display()),
+        correlation_id: Some(uuid::Uuid::now_v7()),
+    })? {
+        let entry = entry.map_err(|e| SubstrateError::IoError {
+            path: format!("readdir: {e}"),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() && to.exists() {
+            merge_into(&from, &to)?;
+        } else {
+            std::fs::rename(&from, &to).map_err(|e| SubstrateError::IoError {
+                path: format!("{}: {e}", to.display()),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Pre-validates all ZIP members — Zip Slip + symlink escape checks — before any disk write.
