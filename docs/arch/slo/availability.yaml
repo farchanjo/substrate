@@ -23,16 +23,25 @@ spec:
         counter: true
         good:
           metricSource:
-            metricSourceRef: prometheus-substrate
-            type: prometheus
+            metricSourceRef: substrate-audit-log
+            type: audit-log
             spec:
-              query: sum(rate(substrate_tools_list_success_total[1h]))
+              # ADR-0039: count audit events where tool_name IN
+              # {tools/list, initialize} AND outcome IN {success}
+              filter: |
+                tool_name IN ("tools/list", "initialize")
+                AND outcome = "success"
+              window: 30m
         total:
           metricSource:
-            metricSourceRef: prometheus-substrate
-            type: prometheus
+            metricSourceRef: substrate-audit-log
+            type: audit-log
             spec:
-              query: sum(rate(substrate_tools_list_total[1h]))
+              # ADR-0039: denominator excludes cancelled and timeout
+              filter: |
+                tool_name IN ("tools/list", "initialize")
+                AND outcome IN ("success", "error")
+              window: 30m
   timeWindow:
     - duration: 30d
       isRolling: true
