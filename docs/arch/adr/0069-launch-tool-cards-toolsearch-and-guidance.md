@@ -155,11 +155,15 @@ down`. Each response carries exactly one `next_action_suggested` and at most one
 The point of the notifications is that the model watches a running stack while it
 develops, rather than re-reading logs:
 
-- `launch.up` is bucket E (always async, streaming). It returns a Task handle
-  (the `progressToken`) and a `job_id`, sets `polling_endpoint` to
-  `launch.status`, and emits `notifications/progress` for each per-service
-  `STARTED` / `READY` transition during bring-up
-  ([ADR-0049](0049-mcp-tasks-primitive-adoption.md)).
+- `launch.up` is bucket E (always async, streaming). It returns a
+  `CreateTaskResult { taskId }` (the `taskId` doubles as the `job_id` alias),
+  sets `polling_endpoint` to `launch.status`, and routes each per-service
+  `STARTED` / `READY` lifecycle transition over `notifications/tasks/status`
+  keyed by that `taskId` ([ADR-0049](0049-mcp-tasks-primitive-adoption.md)
+  dual-stack model). Continuous per-service telemetry (cpu/memory/line counters)
+  rides the separate `progressToken` -> `notifications/progress` channel only when
+  the client issues the combined task-augmented request; lifecycle never travels
+  over the progress channel.
 - The `launch.up` result carries a `resource_link` to
   `launch://stack/<id>/events` (the distilled lifecycle and semantic event
   stream) and to `launch://stack/<id>/service/<svc>/log` (raw drill-down), per
@@ -168,7 +172,8 @@ develops, rather than re-reading logs:
   pokes and reads the delta by cursor; a client that does not degrades to
   `launch.status` / `launch.logs` polling.
 - `launch.restart` and `launch.reload` are bucket C async Tasks and emit the same
-  progress and event signals scoped to the affected services.
+  `notifications/tasks/status` lifecycle and event signals scoped to the affected
+  services.
 - The deprecated `notifications/message` (logging) path is not used (SEP-2577).
 
 This is what lets the model close the loop: edit code, `launch.reload`, watch the
@@ -179,7 +184,10 @@ feedback loop, not a log scrape.
 
 Every spawning or killing tool (`launch.up`, `launch.down`, `launch.restart`,
 `launch.reload`) and the authority-granting `launch.trust` set
-`hints.confirm_destructive: true`, mirroring the subprocess provenance marker
+`hints.confirm_destructive: true`. This follows the subprocess precedent for
+destructive tools but deliberately does NOT apply the subprocess all-tools
+provenance marker: launch's read-side tools (`launch.list`, `launch.status`,
+`launch.logs`) set it false
 ([ADR-0007](0007-tool-card-narrative-arc.md) amendment 2026-05-24). Async tools
 carry the ADR-0040 job keys (`job_id`, `job_state`, `job_progress_pct`,
 `polling_endpoint`, `estimated_completion_ms`, `sequence_number`). Launch adds two
@@ -231,11 +239,13 @@ requiring it to invent a polling cadence.
   `See substrate skill.`, and contains a launch-domain noun (asserted by
   `xtask check-cards`).
 - Unit test: no two `launch.*` descriptions share a leading verb.
-- Integration test: a `launch.up` response sets `next_action_suggested =
-  launch_status`, `confirm_destructive = true`, `polling_endpoint =
-  launch.status`, and carries a `resource_link` to the events resource.
+- Integration test: a `launch.up` response is a `CreateTaskResult { taskId }`,
+  sets `next_action_suggested = launch_status`, `confirm_destructive = true`,
+  `polling_endpoint = launch.status`, and carries a `resource_link` to the events
+  resource.
 - Integration test: a `launch.up` Task emits per-service `STARTED` / `READY`
-  progress notifications over its progress token.
+  lifecycle events over `notifications/tasks/status` keyed by its `taskId`; any
+  telemetry counters ride the separate `progressToken` channel.
 - Small-model bench: a 27B model completes the `init -> trust -> up -> reload ->
   down` workflow on a fixture profile using only descriptions and hints, with no
   orchestration prompt, at the ADR-0007 selection-accuracy bar or better.
@@ -248,8 +258,9 @@ requiring it to invent a polling cadence.
   launch tools
 - [ADR-0049](0049-mcp-tasks-primitive-adoption.md) — Tasks/progress that
   `launch.up` rides
-- [ADR-0062](0062-tool-naming-convention.md) — logical vs wire names; hints use
-  wire form
+- [ADR-0062](0062-tool-naming-convention.md) — logical vs wire names;
+  `next_action_suggested` and `alternative_tool` use wire form, while
+  `polling_endpoint` uses the logical (dot) form (`launch.status`)
 - [ADR-0063](0063-launch-orchestration-bounded-context.md) — the nine launch
   tools specified here
 - [ADR-0066](0066-launch-event-stream-and-notification-model.md) — the event

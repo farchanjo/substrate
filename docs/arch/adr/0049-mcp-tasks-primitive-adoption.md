@@ -240,6 +240,21 @@ Both paths write to and read from the same `InMemoryJobRegistry`. A cancellation
 issued via `tasks/cancel` is immediately reflected in `job.status`, and vice
 versa, because there is no separate state store per namespace.
 
+### Combined task-augmented dispatch (2025-11-25)
+
+The two push channels are distinct and addressed differently: the `tasks/*` path
+returns `CreateTaskResult { taskId }` and pushes `notifications/tasks/status`
+keyed by `taskId`, while the ADR-0040 path uses `progressToken` and
+`notifications/progress`. A single `2025-11-25` `tools/call` MAY be augmented with
+BOTH a task and a `progressToken` (the combined task-augmented request). When it
+is, structural lifecycle transitions travel over `notifications/tasks/status`
+(keyed by `taskId`) and fine-grained telemetry travels over
+`notifications/progress` (keyed by `progressToken`); neither channel carries the
+other's payload. `launch.up`
+([ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md)) is the first tool
+to use the combined dispatch: per-service `STARTED` / `READY` lifecycle over
+`tasks/status`, optional cpu/memory counters over `progress`.
+
 ## Implementation Plan
 
 The following five `ServerHandler` trait overrides must be added to

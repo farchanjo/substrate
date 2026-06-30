@@ -84,10 +84,12 @@ source for notifications and for replay.
     client reads the delta from the cursor. The cursor is an opaque
     [ADR-0008](0008-mcp-features-map.md) value encoded in the URI because
     `resources/read` has no native range.
-  - Continuous telemetry: while a `launch.up` Task is in flight, the Task's
-    `progressToken` carries `notifications/progress` for the Task's lifetime
-    (per the MCP `2025-11-25` task-augmented-request rule), suitable for
-    cpu/memory/line counters.
+  - Continuous telemetry: while a `launch.up` Task is in flight, a combined
+    task-augmented request may also carry a `progressToken`, whose
+    `notifications/progress` stream is reserved for cpu/memory/line counters.
+    Structural lifecycle transitions (`STARTED` / `READY` / `CRASHED`) travel over
+    `notifications/tasks/status` keyed by the `taskId`, not the progress channel
+    ([ADR-0049](0049-mcp-tasks-primitive-adoption.md) dual-stack model).
   - Raw output: a subscribable resource
     `launch://stack/<id>/service/<svc>/log?since=<cursor>` for drill-down.
 
