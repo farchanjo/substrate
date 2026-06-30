@@ -30,7 +30,7 @@ use unicode_normalization::UnicodeNormalization;
 ///
 /// This is idempotent: normalizing an already-NFC path yields the same path.
 #[must_use]
-pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path) -> PathBuf {
     path.to_str().map_or_else(
         || path.to_path_buf(),
         |utf8| PathBuf::from(utf8.nfc().collect::<String>()),
@@ -44,7 +44,7 @@ pub(crate) fn normalize_path(path: &Path) -> PathBuf {
 /// containment post-check, so a kernel-resolved path in one normalization form
 /// still matches a stored root in the other form on macOS APFS/HFS+ volumes.
 #[must_use]
-pub(crate) fn is_contained(candidate: &Path, root: &Path) -> bool {
+pub fn is_contained(candidate: &Path, root: &Path) -> bool {
     normalize_path(candidate).starts_with(normalize_path(root))
 }
 

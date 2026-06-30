@@ -205,7 +205,7 @@ impl substrate_domain::PathJailPort for ONoFollowAnyJail {
         }
 
         // Final cross-check against the full allowlist set.
-        self.allowlist.jail(canonical)
+        self.allowlist.jail(&canonical)
     }
 }
 

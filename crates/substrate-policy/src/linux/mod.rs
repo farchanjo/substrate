@@ -294,7 +294,7 @@ impl substrate_domain::PathJailPort for Openat2Jail {
         }
 
         // Final allowlist cross-check for defence in depth.
-        self.allowlist.jail(canonical)
+        self.allowlist.jail(&canonical)
     }
 }
 

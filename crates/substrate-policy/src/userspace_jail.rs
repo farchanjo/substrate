@@ -109,7 +109,7 @@ impl substrate_domain::PathJailPort for UserspaceJail {
         }
 
         // Cross-check against the full allowlist.
-        self.allowlist.jail(canonical)
+        self.allowlist.jail(&canonical)
     }
 }
 

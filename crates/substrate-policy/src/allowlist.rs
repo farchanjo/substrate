@@ -132,8 +132,8 @@ impl Allowlist {
     /// # Errors
     ///
     /// - `PathOutsideAllowlist` — `candidate` is not under any root.
-    pub fn jail(&self, candidate: PathBuf) -> SubstrateResult<JailedPath> {
-        let normalized = nfc::normalize_path(&candidate);
+    pub fn jail(&self, candidate: &Path) -> SubstrateResult<JailedPath> {
+        let normalized = nfc::normalize_path(candidate);
         if self.contains(&normalized) {
             // SAFETY (semantic): `JailedPath::new_jailed` is documented as
             // `substrate-policy`-only. We have verified the path is within an
@@ -216,7 +216,7 @@ mod tests {
         let allowlist = Allowlist::new(vec![root.clone()]).expect("valid root");
 
         let child = root.join("readme.txt");
-        let result = allowlist.jail(child.clone());
+        let result = allowlist.jail(&child);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().as_path(), child.as_path());
     }
@@ -231,7 +231,7 @@ mod tests {
             .parent()
             .expect("tempdir must have a parent")
             .join("escape.txt");
-        let result = allowlist.jail(outside);
+        let result = allowlist.jail(&outside);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().code(),
@@ -247,12 +247,15 @@ mod tests {
 
         // NFC root component "café" vs NFD child "cafe\u{0301}" must match
         // after NFC normalization (ADR-0035 §Decision 6).
-        let nfc_child = root.join("caf\u{00e9}").join("file.txt");
-        let nfd_child = root.join("cafe\u{0301}").join("file.txt");
-        assert_ne!(nfc_child, nfd_child, "precondition: byte strings differ");
-        assert!(allowlist.contains(&nfc_child));
+        let composed_child = root.join("caf\u{00e9}").join("file.txt");
+        let decomposed_child = root.join("cafe\u{0301}").join("file.txt");
+        assert_ne!(
+            composed_child, decomposed_child,
+            "precondition: byte strings differ"
+        );
+        assert!(allowlist.contains(&composed_child));
         assert!(
-            allowlist.contains(&nfd_child),
+            allowlist.contains(&decomposed_child),
             "NFD-encoded candidate must match after NFC normalization"
         );
     }

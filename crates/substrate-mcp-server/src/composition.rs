@@ -128,7 +128,7 @@ pub(crate) async fn wire(
     // the factory. Each PathBuf is already canonical (done by Allowlist::new).
     let allowlist_roots: Vec<JailedPath> = allowlist
         .iter_roots()
-        .map(|p| allowlist.jail(p.to_path_buf()))
+        .map(|p| allowlist.jail(p))
         // Roots are guaranteed to satisfy containment — unwrap is safe here.
         .collect::<SubstrateResult<Vec<_>>>()?;
 
