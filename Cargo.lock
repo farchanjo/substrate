@@ -2478,6 +2478,7 @@ dependencies = [
  "substrate-fs-mutation",
  "substrate-fs-query",
  "substrate-jobs",
+ "substrate-launch",
  "substrate-network-info",
  "substrate-policy",
  "substrate-process",

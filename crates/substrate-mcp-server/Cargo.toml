@@ -23,6 +23,10 @@ fs-index = ["substrate-fs-index/fs-index", "substrate-fs-mutation/fs-index"]
 fs-index-watch = ["fs-index", "substrate-fs-index/fs-index-watch"]
 outbound-net = ["tokio/net"]
 subprocess = ["dep:substrate-subprocess"]
+# launch orchestration BC (ADR-0063..0069). Off by default. Implies `subprocess`
+# because the LaunchRegistry orchestrates every managed Service through the
+# injected `Arc<dyn SubprocessPort>` wired by the composition root.
+launch = ["dep:substrate-launch", "subprocess"]
 
 [dependencies]
 substrate-domain = { path = "../substrate-domain" }
@@ -38,6 +42,7 @@ substrate-system-info = { path = "../substrate-system-info" }
 substrate-text = { path = "../substrate-text" }
 substrate-archive = { path = "../substrate-archive" }
 substrate-subprocess = { path = "../substrate-subprocess", optional = true }
+substrate-launch = { path = "../substrate-launch", optional = true }
 substrate-network-info = { path = "../substrate-network-info" }
 
 rmcp = { workspace = true }
