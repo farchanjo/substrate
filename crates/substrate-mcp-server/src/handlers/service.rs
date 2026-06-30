@@ -599,6 +599,53 @@ mod descriptions {
         "Regex search over captured subprocess stdout/stderr with pagination. Returns matching lines and total count. See substrate skill."
     }
 
+    // ---- launch (feature-gated) ---------------------------------------------
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_init() -> &'static str {
+        "Scaffold a .substrate.toml launch profile for a project. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_list() -> &'static str {
+        "List a profile's service catalog without a trust check. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_trust() -> &'static str {
+        "Bless a profile into the TOFU trust store. Destructive. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_up() -> &'static str {
+        "Bring a stack up in readiness-gated dependency order. Destructive. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_status() -> &'static str {
+        "Snapshot launch stack handles and service states. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_logs() -> &'static str {
+        "Read a stack's event log tail by cursor. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_restart() -> &'static str {
+        "Restart one service of a stack. Destructive. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_reload() -> &'static str {
+        "Reconcile a running stack against an edited profile. Destructive. See substrate skill."
+    }
+
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_down() -> &'static str {
+        "Cascade-stop a stack in reverse order. Destructive. See substrate skill."
+    }
+
     // ---- network-info -------------------------------------------------------
 
     pub(super) const fn net_tcp_list() -> &'static str {
@@ -843,6 +890,166 @@ fn registry_subprocess() -> Vec<Tool> {
     ]
 }
 
+/// Converts a JSON object into the `Arc<Map>` form expected by `Tool::new`.
+///
+/// Launch-local mirror of the subprocess/network schema helpers so the launch
+/// cards compile independently of the `subprocess` schema gate.
+#[cfg(feature = "launch")]
+fn launch_schema_from_json(
+    value: serde_json::Value,
+) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    // Consume `value` by move (no clone) so the helper stays clippy-clean under
+    // `pedantic`'s `needless_pass_by_value`, unlike the by-value siblings above.
+    let map = if let serde_json::Value::Object(map) = value {
+        map
+    } else {
+        serde_json::Map::new()
+    };
+    std::sync::Arc::new(map)
+}
+
+/// Reusable `{ stack_id }` string property schema fragment.
+#[cfg(feature = "launch")]
+fn launch_stack_id_property() -> serde_json::Value {
+    serde_json::json!({
+        "type": "string",
+        "description": "Stack id (UUIDv7 Crockford base32, 26 chars)."
+    })
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_init() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "profile_path": { "type": "string", "description": "Target path for the scaffolded .substrate.toml." },
+            "project_type_hint": { "type": "string", "description": "Project type hint, e.g. \"rust\" or \"node\"." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_profile_path() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["profile_path"],
+        "properties": {
+            "profile_path": { "type": "string", "description": "Path to the .substrate.toml profile." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_up() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["profile_path"],
+        "properties": {
+            "profile_path": { "type": "string", "description": "Path to the trusted .substrate.toml profile." },
+            "on_client_disconnect": { "type": "string", "enum": ["shutdown", "detach"], "description": "Disconnect policy override; defaults to the profile." },
+            "orphan_ttl_secs": { "type": "integer", "minimum": 0, "maximum": 86400, "description": "Orphan TTL override in seconds (detach only)." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_status() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "properties": { "stack_id": launch_stack_id_property() },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_logs() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["stack_id"],
+        "properties": {
+            "stack_id": launch_stack_id_property(),
+            "service": { "type": "string", "description": "Restrict events to a single service." },
+            "since": { "type": "string", "description": "Opaque cursor from a previous response." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_restart() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["stack_id", "service"],
+        "properties": {
+            "stack_id": launch_stack_id_property(),
+            "service": { "type": "string", "description": "Service alias to restart." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_reload() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["stack_id"],
+        "properties": {
+            "stack_id": launch_stack_id_property(),
+            "profile_path": { "type": "string", "description": "New profile path; omit to re-read the pinned path." }
+        },
+        "additionalProperties": false
+    }))
+}
+
+#[cfg(feature = "launch")]
+fn schema_launch_down() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["stack_id"],
+        "properties": { "stack_id": launch_stack_id_property() },
+        "additionalProperties": false
+    }))
+}
+
+/// launch BC tool cards (compiled only with the `launch` feature).
+#[cfg(feature = "launch")]
+fn registry_launch() -> Vec<Tool> {
+    vec![
+        Tool::new("launch_init", descriptions::launch_init(), schema_launch_init()),
+        Tool::new(
+            "launch_list",
+            descriptions::launch_list(),
+            schema_launch_profile_path(),
+        ),
+        Tool::new(
+            "launch_trust",
+            descriptions::launch_trust(),
+            schema_launch_profile_path(),
+        ),
+        Tool::new("launch_up", descriptions::launch_up(), schema_launch_up()),
+        Tool::new(
+            "launch_status",
+            descriptions::launch_status(),
+            schema_launch_status(),
+        ),
+        Tool::new("launch_logs", descriptions::launch_logs(), schema_launch_logs()),
+        Tool::new(
+            "launch_restart",
+            descriptions::launch_restart(),
+            schema_launch_restart(),
+        ),
+        Tool::new(
+            "launch_reload",
+            descriptions::launch_reload(),
+            schema_launch_reload(),
+        ),
+        Tool::new("launch_down", descriptions::launch_down(), schema_launch_down()),
+    ]
+}
+
 /// network-info BC tool cards (always-on; Noop on unsupported platforms).
 fn registry_network() -> Vec<Tool> {
     vec![
@@ -869,7 +1076,7 @@ fn registry_network() -> Vec<Tool> {
     ]
 }
 
-/// Returns the static list of all 47 substrate tools (53 with `subprocess` feature).
+/// Returns the static list of all 45 substrate tools (51 with `subprocess`, 60 with `launch`).
 ///
 /// Each entry carries a thin description (<= 100 chars) plus a schemars-derived
 /// `inputSchema`. The companion `substrate` skill body at
@@ -891,6 +1098,8 @@ pub(crate) fn tool_registry() -> Vec<Tool> {
     tools.extend(registry_jobs());
     #[cfg(feature = "subprocess")]
     tools.extend(registry_subprocess());
+    #[cfg(feature = "launch")]
+    tools.extend(registry_launch());
     tools.extend(registry_network());
     tools
 }
@@ -1678,11 +1887,19 @@ mod tests {
         // 5 fs-query + 8 fs-mutation + 5 process + 8 sys-info + 4 text +
         // 7 archive + 4 job + 4 network-info = 45 base.
         // (process adds proc_stats + proc_top; sys-info adds sys_mem + sys_cpu.)
-        // +6 subprocess when feature enabled = 51.
+        // +6 subprocess when that feature is enabled = 51.
+        // +9 launch when that feature is enabled; `launch` implies `subprocess`,
+        // so the launch build carries 45 + 6 + 9 = 60 tools.
         // The dispatch match arms in `dispatcher.rs` define the authoritative
         // count; this test pins parity between the registry and the dispatcher.
         let tools = tool_registry();
-        let expected = if cfg!(feature = "subprocess") { 51 } else { 45 };
+        let expected = if cfg!(feature = "launch") {
+            60
+        } else if cfg!(feature = "subprocess") {
+            51
+        } else {
+            45
+        };
         assert_eq!(
             tools.len(),
             expected,

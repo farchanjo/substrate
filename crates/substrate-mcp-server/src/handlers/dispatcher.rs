@@ -229,6 +229,12 @@ pub(crate) struct ToolDispatcher {
     #[cfg(feature = "subprocess")]
     pub(crate) subprocess: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
 
+    /// Optional launch orchestrator port — wired when the `launch` Cargo feature
+    /// is active (ADR-0063). Routes every managed Service through the subprocess
+    /// port; never spawns processes directly.
+    #[cfg(feature = "launch")]
+    pub(crate) launch: Arc<dyn substrate_domain::ports::launch::LaunchPort>,
+
     /// Network-info port — always-on (Noop adapter on unsupported platforms per ADR-0058).
     ///
     /// Wired unconditionally: `NetworkInfoFactory::build` selects the best
@@ -658,6 +664,58 @@ impl ToolDispatcher {
             "subprocess_search" => {
                 let port = Arc::clone(&self.subprocess);
                 crate::handlers::subprocess_tools::handle_subprocess_search(args, port).await
+            },
+            // ---- launch.* tools (feature-gated) -----------------------------
+            //
+            // Buckets per ADR-0069: init/trust=D, list/status/logs=A, up=E,
+            // restart/reload/down=C. All nine dispatch inline through the launch
+            // port: the port API completes the orchestrated operation and returns
+            // a domain value, so `launch_err` maps `LaunchError` at the edge with
+            // its numeric `-32044..-32056` code (see `launch_tools::launch_err`).
+            #[cfg(feature = "launch")]
+            "launch_init" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_init(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_list" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_list(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_trust" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_trust(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_up" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_up(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_status" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_status(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_logs" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_logs(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_restart" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_restart(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_reload" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_reload(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_down" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_down(args, port).await
             },
             // ---- network.* tools (always-on; Noop on unsupported platforms) --
             "net_tcp_list" => {

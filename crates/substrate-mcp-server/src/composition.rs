@@ -361,6 +361,28 @@ pub(crate) async fn wire(
         (port_a, port_b)
     };
 
+    // ---- LaunchRegistry (ADR-0063..0069) — feature-gated -------------------
+    //
+    // The launch orchestrator port is wired only when the `launch` Cargo feature
+    // is active. The `launch` feature implies `subprocess`, so `subprocess_port`
+    // above is always in scope here: the registry routes every managed Service
+    // through that injected `Arc<dyn SubprocessPort>` and never spawns processes
+    // directly (no `no_subprocess.rego` exception needed per ADR-0063 §"MVP").
+    //
+    // `state_root` holds the per-Stack durable state files and the TOFU trust
+    // store (`<state_root>/launch-trust.toml`). It falls back to the first policy
+    // root and then to the system temp dir so the registry always has a home.
+    #[cfg(feature = "launch")]
+    let launch_port: std::sync::Arc<dyn substrate_domain::ports::launch::LaunchPort> = {
+        let state_root = config
+            .policy
+            .roots
+            .first()
+            .cloned()
+            .unwrap_or_else(std::env::temp_dir);
+        substrate_launch::LaunchRegistry::new(Arc::clone(&subprocess_port), state_root)
+    };
+
     // ---- ToolDispatcher (ADR-0022) ------------------------------------------
     let dispatcher = ToolDispatcher {
         fs_query: fs_query_deps,
@@ -377,6 +399,8 @@ pub(crate) async fn wire(
         pid_cpu_cache,
         #[cfg(feature = "subprocess")]
         subprocess: subprocess_port,
+        #[cfg(feature = "launch")]
+        launch: launch_port,
         network: network_port,
     };
 
