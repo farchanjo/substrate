@@ -54,6 +54,7 @@ _read_only_tools := {
     "net.tcp_list", "net.udp_list", "net.tcp_stats", "net.connection_count",
     "job.list", "job.result", "job.status",
     "subprocess.list", "subprocess.result", "subprocess.search",
+    "launch.list", "launch.status", "launch.logs",
 }
 
 # Writable (create/copy), non-destructive, non-idempotent, closed-world tools.
@@ -62,6 +63,7 @@ _write_create_tools := {
     "archive.tar.create", "archive.tar.extract",
     "archive.zip.create", "archive.zip.extract",
     "archive.gzip.compress", "archive.gzip.decompress",
+    "launch.init", "launch.trust", "launch.reload",
 }
 
 # Destructive, non-idempotent tools.
@@ -70,6 +72,7 @@ _destructive_nonidempotent_tools := {
     "proc.signal",
     "subprocess.spawn", "subprocess.signal", "subprocess.cancel",
     "job.cancel",
+    "launch.up", "launch.down", "launch.restart",
 }
 
 # Destructive but idempotent tools.

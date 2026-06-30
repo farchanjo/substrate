@@ -15,7 +15,7 @@ import "strings"
 // C_always_async: job dispatch is mandatory, no streaming (e.g. archive.tar.create).
 // D_sync_side_effect: fast commit, audit fire-and-forget (e.g. fs.mkdir, proc.signal).
 // E_always_async_streaming: always async with streaming progress (subprocess.spawn
-// only) per the ADR-0040 2026-05-24 amendment and ADR-0052/ADR-0054.
+// and launch.up) per the ADR-0040 2026-05-24 amendment, ADR-0052/ADR-0054, and ADR-0069.
 #ToolBucket: "A_sync_inline" | "B_auto_mode" | "C_always_async" | "D_sync_side_effect" | "E_always_async_streaming"
 
 // #ToolAnnotations carries MCP hint booleans that guide client behavior.

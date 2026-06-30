@@ -38,7 +38,7 @@ package schemas
 // C: always async (job mandatory, no streaming; e.g. archive.tar.create).
 // D: sync side-effect (commit fast, audit async).
 // E: always async with streaming progress; introduced by the ADR-0040 2026-05-24
-// amendment and assigned exclusively to subprocess.spawn per ADR-0052/ADR-0054.
+// amendment and assigned to subprocess.spawn and launch.up per ADR-0052/ADR-0054/ADR-0069.
 #JobBucket: "A_sync_inline" | "B_auto_mode" | "C_always_async" | "D_sync_side_effect" | "E_always_async_streaming"
 
 // #ProgressEvent is the push-channel payload emitted via MCP 2025-11-25

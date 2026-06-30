@@ -76,8 +76,9 @@ user-scope operator config (`auto_bless_paths`), not a Profile field.
   content, blessed_at)` re-verified on every Profile load.
 - `SupervisorRegistry` (entity) — the durable state-file `(supervisor_pid,
   start_epoch, policy, config_hash, children)` written atomically.
-- `StackChild` (value object) — `(name, pid, pgid)` for one supervised child; the
-  `pgid` is the cascade-reap unit.
+- `StackChild` (value object) — `(name, pid, pgid, start_epoch)` for one supervised
+  child; the `pgid` is the cascade-reap unit and `start_epoch` pins the child's
+  start-time against pid recycling (ADR-0068).
 - `LaunchEvent` (value object) — one event-log entry: `kind`, `service`, `seq`,
   opaque `cursor`, optional `stream`, redacted `message`, optional `exit_code`.
 - `DisconnectPolicy` / `StackState` / `LaunchEventKind` (value objects) — the
@@ -88,7 +89,8 @@ user-scope operator config (`auto_bless_paths`), not a Profile field.
 All tools are namespaced `launch.*` per [ADR-0062](../../adr/0062-tool-naming-convention.md).
 
 **launch.init** scaffolds a default `.substrate.toml` with project-type
-auto-detection. Bucket A (sync inline).
+auto-detection. Bucket D (sync side-effect): it writes a scaffold file, so it
+commits fast and audits asynchronously rather than running inline (ADR-0069).
 
 **launch.list** enumerates the Services in the Profile read-only; it requires no
 trust because it executes nothing. Bucket A.
@@ -102,7 +104,8 @@ It rides the MCP Tasks primitive
 handle immediately.
 
 **launch.down** stops a Stack in reverse topological order with cascade kill, and
-clears the durable registry entry. Bucket D (sync side-effect).
+clears the durable registry entry. Bucket C (always async): the reverse-topological
+cascade kill returns a Task receipt and runs as a job, never inline (ADR-0069).
 
 **launch.status** returns structured status of running Stacks and per-Service
 health; it is the pull floor and triggers reaper-on-boot reconciliation.

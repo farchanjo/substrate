@@ -476,6 +476,28 @@ The TOML `[jobs]` section remains optional purely for operator tuning. When it i
 
 **Rationale:** a prior implementation treated an absent `[jobs]` section as "control-plane disabled" and substituted a null-object registry whose every method returned `SUBSTRATE_INTERNAL_ERROR`. Because Bucket B promotion and all Bucket C tools (`archive.tar.*`, `archive.zip.*`, large `fs.read`/`fs.hash`/`fs.copy`, `text.search`/`text.count_lines`) route through `JobRegistryPort::submit`, this silently broke every long-running and large-input tool whenever the default config lacked a `[jobs]` table — which is the common case. Making the registry unconditional removes the failure mode; the former `NullJobRegistry` stub has been deleted.
 
+### 2026-06-30 — Bucket E extended to launch.up (StackHandle) per ADR-0069
+
+Bucket E (always-async with streaming progress) was introduced for the single-process `subprocess.spawn`. [ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md) assigns `launch.up` to Bucket E as well: a Stack bring-up is always async and streams per-service lifecycle. The E-vs-C criterion is now explicit:
+
+- **Bucket E** — always-async *with* a streaming progress/lifecycle channel during the operation (`subprocess.spawn`, `launch.up`).
+- **Bucket C** — always-async *without* a streaming channel; a job receipt is returned and polled to completion (`archive.tar.*`, `launch.restart` / `launch.reload` / `launch.down`).
+
+The `JobEntry` payload union gains a `StackHandle` variant for `launch.up`, carrying the multi-process Stack rather than a single child:
+
+```text
+StackHandle {
+    stack_id:         Uuid7,
+    profile_path:     String,
+    service_handles:  Vec<SubprocessHandle>,
+    stack_state:      StackState,
+}
+```
+
+Unlike `subprocess.spawn` (which rides `progressToken` / `notifications/progress`), `launch.up` rides the MCP Tasks primitive ([ADR-0049](0049-mcp-tasks-primitive-adoption.md)): it returns `CreateTaskResult { taskId }` (the `taskId` aliases the `job_id`) and routes per-service `STARTED` / `READY` lifecycle over `notifications/tasks/status`. The existing `JobState` machine and Bucket E receipt keys apply unchanged.
+
+Cross-references: [ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md), [ADR-0049](0049-mcp-tasks-primitive-adoption.md).
+
 ## Links
 
 - MCP specification 2025-11-25 notifications/progress schema: https://spec.modelcontextprotocol.io

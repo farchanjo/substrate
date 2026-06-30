@@ -80,6 +80,15 @@ Chosen option: "Full feature matrix", because the features are interdependent (e
 | subprocess.result | true | false | true | false |
 | subprocess.search | true | false | true | false |
 | subprocess.cancel | false | false | true | false |
+| launch.init | false | false | false | false |
+| launch.list | true | false | true | false |
+| launch.trust | false | false | false | false |
+| launch.up | false | **true** | false | true |
+| launch.status | true | false | true | true |
+| launch.logs | true | false | true | true |
+| launch.restart | false | **true** | false | true |
+| launch.reload | false | false | false | true |
+| launch.down | false | **true** | false | true |
 
 The `job.*`, `net.*`, and `subprocess.*` rows above were added by the
 2026-06-10 amendment to cover the job, network-info, and subprocess bounded
@@ -90,6 +99,16 @@ contexts introduced by [ADR-0040](0040-async-job-control-plane.md),
 (spawn executes arbitrary allowlisted binaries) in parity with `proc.signal`;
 `net.*` introspection rows mirror `proc.list` (volatile live state, hence
 `openWorldHint: true`).
+
+The `launch.*` rows were added by the 2026-06-30 amendment for the launch BC
+([ADR-0063](0063-launch-orchestration-bounded-context.md) /
+[ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md)). Process-touching
+launch tools (`up` / `down` / `restart` / `reload` / `status` / `logs`) carry
+`openWorldHint: true` in parity with `subprocess.spawn` and the `net.*` /
+`proc.list` live-state rows; `init` / `list` / `trust` stay closed-world (they
+touch only the local profile and trust store). The coarser `tool_annotations.rego`
+4-profile matrix records the closed-world default for all of them, exactly as it
+does for `subprocess.*` / `net.*`.
 
 ### outputSchema via schemars
 
@@ -135,6 +154,13 @@ Progress payload:
 {"progress": 0.42, "total": 1.0, "message": "hashing 420/1000 files"}
 ```
 
+The launch async tools (`launch.up` bucket E; `launch.restart` / `launch.reload` /
+`launch.down` bucket C) do NOT use this legacy `$/progress` table: they ride the
+MCP Tasks primitive and emit `notifications/tasks/status` keyed by `taskId`
+([ADR-0049](0049-mcp-tasks-primitive-adoption.md),
+[ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md)), with optional
+cpu/memory telemetry over a combined `progressToken`.
+
 ### Cancellation Propagation
 
 All tools accept cancellation via `$/cancelRequest`. The cancellation token is threaded through the async call chain via `tokio_util::sync::CancellationToken`. Upon cancellation:
@@ -156,6 +182,11 @@ Elicitation (form-mode, 2025-11-25) is triggered for operations that are destruc
 | archive.tar.create | When output path exists | `overwrite: bool`, `dest: string (readonly)` |
 | archive.zip.create | When output path exists | `overwrite: bool`, `dest: string (readonly)` |
 | fs.set_permissions | mode octal ≤ 0o444 (removing write/exec broadly) | `confirm: bool`, `mode: string (readonly)` |
+| launch.trust | Always (authority grant) | `confirm: bool`, `profile: string (readonly)` |
+| launch.up | Always (spawns the stack) | `confirm: bool`, `profile: string (readonly)` |
+| launch.restart | Always | `confirm: bool`, `service: string (readonly)` |
+| launch.reload | Always | `confirm: bool`, `profile: string (readonly)` |
+| launch.down | Always (cascade kill) | `confirm: bool`, `stack: string (readonly)` |
 
 When the client does not support elicitation (pre-2025-11-25), the tool returns an error with code `-32001` (elicitation required but unsupported) and takes no action.
 
