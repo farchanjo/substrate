@@ -73,11 +73,104 @@ fn schema_empty() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> 
 fn schema_from_json(
     value: serde_json::Value,
 ) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
-    let map = value
-        .as_object()
-        .cloned()
-        .unwrap_or_else(serde_json::Map::new);
+    // Consume `value` by move (no clone) so the helper stays clippy-clean
+    // under `needless_pass_by_value`.
+    let map = if let serde_json::Value::Object(map) = value {
+        map
+    } else {
+        serde_json::Map::new()
+    };
     std::sync::Arc::new(map)
+}
+
+/// `restart_policy` sub-schema for `subprocess.spawn` (ADR-0056).
+#[cfg(feature = "subprocess")]
+fn schema_spawn_restart_policy() -> serde_json::Value {
+    serde_json::json!({
+        "oneOf": [
+            { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "Never" } } },
+            {
+                "type": "object",
+                "required": ["kind", "max_retries", "backoff_ms"],
+                "properties": {
+                    "kind": { "const": "OnFailure" },
+                    "max_retries": { "type": "integer", "minimum": 1, "maximum": 100 },
+                    "backoff_ms": { "type": "integer", "minimum": 100, "maximum": 300_000 }
+                }
+            },
+            {
+                "type": "object",
+                "required": ["kind", "backoff_ms"],
+                "properties": {
+                    "kind": { "const": "Always" },
+                    "backoff_ms": { "type": "integer", "minimum": 100, "maximum": 300_000 }
+                }
+            }
+        ],
+        "description": "ADR-0056 restart policy controlling supervisor re-spawn on child exit."
+    })
+}
+
+/// `health_probe` sub-schema for `subprocess.spawn` (ADR-0056).
+#[cfg(feature = "subprocess")]
+fn schema_spawn_health_probe() -> serde_json::Value {
+    serde_json::json!({
+        "oneOf": [
+            { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "None" } } },
+            {
+                "type": "object",
+                "required": ["kind", "url", "expected_status", "interval_ms", "startup_grace_ms"],
+                "properties": {
+                    "kind": { "const": "HttpGet" },
+                    "url": { "type": "string", "pattern": "^https?://" },
+                    "expected_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+                    "interval_ms": { "type": "integer", "minimum": 100, "maximum": 60_000 },
+                    "startup_grace_ms": { "type": "integer", "minimum": 0, "maximum": 600_000 }
+                }
+            },
+            {
+                "type": "object",
+                "required": ["kind", "host", "port", "interval_ms", "startup_grace_ms"],
+                "properties": {
+                    "kind": { "const": "PortOpen" },
+                    "host": { "type": "string" },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                    "interval_ms": { "type": "integer", "minimum": 100, "maximum": 60_000 },
+                    "startup_grace_ms": { "type": "integer", "minimum": 0, "maximum": 600_000 }
+                }
+            },
+            {
+                "type": "object",
+                "required": ["kind", "regex", "timeout_ms"],
+                "properties": {
+                    "kind": { "const": "LogPattern" },
+                    "regex": { "type": "string", "minLength": 1 },
+                    "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 600_000 }
+                }
+            }
+        ],
+        "description": "ADR-0056 health probe gating Starting -> Ready transition. None = Ready immediately."
+    })
+}
+
+/// `log_rotation` sub-schema for `subprocess.spawn` (ADR-0056).
+#[cfg(feature = "subprocess")]
+fn schema_spawn_log_rotation() -> serde_json::Value {
+    serde_json::json!({
+        "oneOf": [
+            { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "None" } } },
+            {
+                "type": "object",
+                "required": ["kind", "max_bytes_per_file", "keep_files"],
+                "properties": {
+                    "kind": { "const": "BySize" },
+                    "max_bytes_per_file": { "type": "integer", "minimum": 1_048_576, "maximum": 1_073_741_824 },
+                    "keep_files": { "type": "integer", "minimum": 1, "maximum": 20 }
+                }
+            }
+        ],
+        "description": "ADR-0056 log rotation for capture_kind=tmp_file. Cumulative cap = max_bytes_per_file * keep_files."
+    })
 }
 
 #[cfg(feature = "subprocess")]
@@ -114,81 +207,9 @@ fn schema_subprocess_spawn() -> std::sync::Arc<serde_json::Map<String, serde_jso
                 "pattern": "^[a-z0-9-]{1,64}$",
                 "description": "ADR-0056 supervisor alias. Idempotent re-spawn: spawn with existing non-terminal name returns the existing handle."
             },
-            "restart_policy": {
-                "oneOf": [
-                    { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "Never" } } },
-                    {
-                        "type": "object",
-                        "required": ["kind", "max_retries", "backoff_ms"],
-                        "properties": {
-                            "kind": { "const": "OnFailure" },
-                            "max_retries": { "type": "integer", "minimum": 1, "maximum": 100 },
-                            "backoff_ms": { "type": "integer", "minimum": 100, "maximum": 300000 }
-                        }
-                    },
-                    {
-                        "type": "object",
-                        "required": ["kind", "backoff_ms"],
-                        "properties": {
-                            "kind": { "const": "Always" },
-                            "backoff_ms": { "type": "integer", "minimum": 100, "maximum": 300000 }
-                        }
-                    }
-                ],
-                "description": "ADR-0056 restart policy controlling supervisor re-spawn on child exit."
-            },
-            "health_probe": {
-                "oneOf": [
-                    { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "None" } } },
-                    {
-                        "type": "object",
-                        "required": ["kind", "url", "expected_status", "interval_ms", "startup_grace_ms"],
-                        "properties": {
-                            "kind": { "const": "HttpGet" },
-                            "url": { "type": "string", "pattern": "^https?://" },
-                            "expected_status": { "type": "integer", "minimum": 100, "maximum": 599 },
-                            "interval_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
-                            "startup_grace_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
-                        }
-                    },
-                    {
-                        "type": "object",
-                        "required": ["kind", "host", "port", "interval_ms", "startup_grace_ms"],
-                        "properties": {
-                            "kind": { "const": "PortOpen" },
-                            "host": { "type": "string" },
-                            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-                            "interval_ms": { "type": "integer", "minimum": 100, "maximum": 60000 },
-                            "startup_grace_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
-                        }
-                    },
-                    {
-                        "type": "object",
-                        "required": ["kind", "regex", "timeout_ms"],
-                        "properties": {
-                            "kind": { "const": "LogPattern" },
-                            "regex": { "type": "string", "minLength": 1 },
-                            "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 600000 }
-                        }
-                    }
-                ],
-                "description": "ADR-0056 health probe gating Starting -> Ready transition. None = Ready immediately."
-            },
-            "log_rotation": {
-                "oneOf": [
-                    { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "None" } } },
-                    {
-                        "type": "object",
-                        "required": ["kind", "max_bytes_per_file", "keep_files"],
-                        "properties": {
-                            "kind": { "const": "BySize" },
-                            "max_bytes_per_file": { "type": "integer", "minimum": 1048576, "maximum": 1073741824 },
-                            "keep_files": { "type": "integer", "minimum": 1, "maximum": 20 }
-                        }
-                    }
-                ],
-                "description": "ADR-0056 log rotation for capture_kind=tmp_file. Cumulative cap = max_bytes_per_file * keep_files."
-            }
+            "restart_policy": schema_spawn_restart_policy(),
+            "health_probe": schema_spawn_health_probe(),
+            "log_rotation": schema_spawn_log_rotation()
         },
         "additionalProperties": false
     }))
@@ -333,10 +354,13 @@ fn pagination_schema_object_unconditional() -> serde_json::Value {
 fn net_schema_from_json(
     value: serde_json::Value,
 ) -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
-    let map = value
-        .as_object()
-        .cloned()
-        .unwrap_or_else(serde_json::Map::new);
+    // Consume `value` by move (no clone) so the helper stays clippy-clean
+    // under `needless_pass_by_value`.
+    let map = if let serde_json::Value::Object(map) = value {
+        map
+    } else {
+        serde_json::Map::new()
+    };
     std::sync::Arc::new(map)
 }
 
@@ -1257,14 +1281,14 @@ impl SubstrateService {
         let structured = serde_json::json!({
             // Flat root fields (backward-compat with root-level assertions)
             "code": err.code(),
-            "message_en_us": message.clone(),
-            "message": message.clone(),
+            "message_en_us": &message,
+            "message": &message,
             "recovery_hint": err.recovery_hint(),
             // Nested `error` object — primary path for cucumber assertions:
             // result.structuredContent.error.{code,recovery_hint,correlation_id}
             "error": {
                 "code": err.code(),
-                "message_en_us": message.clone(),
+                "message_en_us": &message,
                 "message": message,
                 "recovery_hint": err.recovery_hint(),
                 "correlation_id": correlation_id_str,

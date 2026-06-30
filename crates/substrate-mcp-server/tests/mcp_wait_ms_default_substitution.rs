@@ -367,8 +367,7 @@ fn job_result_with_explicit_zero_wait_ms_returns_fast() {
     // blocks for the full default wait window.
     assert!(
         elapsed < Duration::from_millis(500),
-        "job_result with wait_ms=0 took {:?}; expected < 500 ms",
-        elapsed
+        "job_result with wait_ms=0 took {elapsed:?}; expected < 500 ms"
     );
 
     // The response must be a result object (JSON-RPC protocol level).
@@ -433,17 +432,15 @@ fn boot_rejects_invalid_wait_window() {
     let t0 = Instant::now();
 
     let exit_status = loop {
-        match child.try_wait().expect("try_wait failed") {
-            Some(status) => break status,
-            None => {
-                if t0.elapsed() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("boot_rejects_invalid_wait_window: server did not exit within 10 s");
-                }
-                thread::sleep(Duration::from_millis(50));
-            },
+        if let Some(status) = child.try_wait().expect("try_wait failed") {
+            break status;
         }
+        if t0.elapsed() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("boot_rejects_invalid_wait_window: server did not exit within 10 s");
+        }
+        thread::sleep(Duration::from_millis(50));
     };
 
     // ADR-0036: composition root failure → exit code 73.
@@ -478,19 +475,15 @@ fn boot_rejects_zero_default_wait_window() {
     let t0 = Instant::now();
 
     let exit_status = loop {
-        match child.try_wait().expect("try_wait failed") {
-            Some(status) => break status,
-            None => {
-                if t0.elapsed() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!(
-                        "boot_rejects_zero_default_wait_window: server did not exit within 10 s"
-                    );
-                }
-                thread::sleep(Duration::from_millis(50));
-            },
+        if let Some(status) = child.try_wait().expect("try_wait failed") {
+            break status;
         }
+        if t0.elapsed() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("boot_rejects_zero_default_wait_window: server did not exit within 10 s");
+        }
+        thread::sleep(Duration::from_millis(50));
     };
 
     let code = exit_status.code().unwrap_or(-1);

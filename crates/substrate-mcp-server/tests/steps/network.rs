@@ -331,7 +331,7 @@ async fn then_by_state_values_nonneg(world: &mut SubstrateWorld) {
     };
 
     for (key, val) in map {
-        let n = val.as_u64().or_else(|| val.as_i64().map(|i| i as u64));
+        let n = val.as_u64().or_else(|| val.as_i64().map(i64::cast_unsigned));
         assert!(
             n.is_some(),
             "by_state['{key}'] is not a non-negative integer: {val}"
@@ -382,7 +382,7 @@ async fn then_total_matches_tcp_list_count(world: &mut SubstrateWorld) {
 }
 
 /// `captured_at parses as a valid RFC 3339 timestamp` — shared by both
-/// net_connection_count and net_tcp_stats scenarios.
+/// `net_connection_count` and `net_tcp_stats` scenarios.
 #[then(regex = r#"^captured_at parses as a valid RFC 3339 timestamp$"#)]
 async fn then_captured_at_is_rfc3339(world: &mut SubstrateWorld) {
     if world.skip_scenario {
@@ -409,7 +409,7 @@ async fn then_captured_at_is_rfc3339(world: &mut SubstrateWorld) {
     let looks_like_rfc3339 = ts.contains('T')
         && (ts.ends_with('Z') || ts.contains('+') || {
             // Allow negative UTC offsets after the time portion (e.g., "-05:00")
-            let after_t = ts.splitn(2, 'T').nth(1).unwrap_or("");
+            let after_t = ts.split_once('T').map_or("", |x| x.1);
             after_t.contains('-')
         });
     assert!(
@@ -682,7 +682,7 @@ async fn then_entries_pid_null_or_absent(world: &mut SubstrateWorld) {
     for entry in list {
         let pid_val = entry.get("pid");
         // The pid field must be absent or explicitly null.
-        let is_absent_or_null = pid_val.is_none() || pid_val.is_some_and(|v| v.is_null());
+        let is_absent_or_null = pid_val.is_none_or(serde_json::Value::is_null);
         assert!(
             is_absent_or_null,
             "resolve_pid=false: entry must not carry a pid value, got: {entry}"

@@ -1664,7 +1664,7 @@ pub(crate) fn decode_page_cursor(token: &str) -> SubstrateResult<substrate_domai
 }
 
 /// Maps a base64url ASCII character to its 6-bit value, or `None` when invalid.
-fn base64url_value(c: u8) -> Option<u8> {
+const fn base64url_value(c: u8) -> Option<u8> {
     match c {
         b'A'..=b'Z' => Some(c - b'A'),
         b'a'..=b'z' => Some(c - b'a' + 26),
@@ -1750,7 +1750,7 @@ mod tests {
     }
 
     /// A token with characters outside the base64url alphabet is rejected with
-    /// SUBSTRATE_INVALID_ARGUMENT rather than silently decoding to garbage.
+    /// `SUBSTRATE_INVALID_ARGUMENT` rather than silently decoding to garbage.
     #[test]
     fn malformed_cursor_returns_invalid_argument() {
         let err = decode_page_cursor("not base64url!!").expect_err("must reject");

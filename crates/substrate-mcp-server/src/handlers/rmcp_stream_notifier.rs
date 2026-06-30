@@ -13,8 +13,8 @@
 //!
 //! rmcp 1.7's `ProgressNotificationParam` exposes only `progress_token`,
 //! `progress`, `total`, and `message`. Stream-extension fields specified in
-//! ADR-0054 (stream, chunk_base64, chunk_bytes, chunk_seq, byte_offset,
-//! job_state) are packed as a JSON object inside `message` until rmcp adds
+//! ADR-0054 (stream, `chunk_base64`, `chunk_bytes`, `chunk_seq`, `byte_offset`,
+//! `job_state`) are packed as a JSON object inside `message` until rmcp adds
 //! native `_meta` support for the progress notification payload. Clients parse
 //! `message` as JSON to retrieve the stream chunk.
 //!

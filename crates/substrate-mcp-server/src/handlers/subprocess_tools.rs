@@ -66,7 +66,7 @@ impl CancelSignal for NoCancel {
 
 // ---- Error helpers ----------------------------------------------------------
 
-/// Generates a fresh UUIDv7 correlation id for an outbound error envelope.
+/// Generates a fresh `UUIDv7` correlation id for an outbound error envelope.
 fn new_correlation_id() -> uuid::Uuid {
     uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
 }
@@ -184,7 +184,7 @@ pub(crate) async fn handle_subprocess_spawn(
 /// "caller omitted the field" (apply `PageSize::default()`) from "caller sent 0"
 /// (return `SUBSTRATE_INVALID_ARGUMENT`). The port boundary always receives a
 /// validated [`PageSize`] per ADR-0060.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct SubprocessListRequest {
     /// Restrict results to these states; `None` returns all states.
@@ -199,17 +199,6 @@ pub(crate) struct SubprocessListRequest {
     pub(crate) page_size: Option<u32>,
     /// Caller client identifier for cross-client scoping.
     pub(crate) client_id: Option<String>,
-}
-
-impl Default for SubprocessListRequest {
-    fn default() -> Self {
-        Self {
-            state_filter: None,
-            page_cursor: None,
-            page_size: None,
-            client_id: None,
-        }
-    }
 }
 
 /// Dispatches `subprocess.list` — list live subprocess handles. See substrate skill.
@@ -350,6 +339,28 @@ const fn default_true() -> bool {
     true
 }
 
+/// Applies line pagination (ADR-0057) to a captured-output aggregate when the
+/// caller supplied a `pagination` cursor, or returns the registry-provided
+/// pre-paginated fallback fields otherwise.
+///
+/// Shared by the stdout and stderr pagination paths in
+/// [`handle_subprocess_result`], which are otherwise identical apart from
+/// which aggregate/fallback fields they read.
+fn paginate_or_fallback(
+    pagination: Option<&substrate_domain::subprocess::pagination::Pagination>,
+    aggregate: &[u8],
+    fallback_lines: Option<Vec<String>>,
+    fallback_total_lines: Option<u64>,
+    fallback_next_offset: Option<u64>,
+) -> (Option<Vec<String>>, Option<u64>, Option<u64>) {
+    let Some(pag) = pagination else {
+        return (fallback_lines, fallback_total_lines, fallback_next_offset);
+    };
+    let text = String::from_utf8_lossy(aggregate).into_owned();
+    let (lines, total, next) = substrate_subprocess::registry::paginate_lines(&text, pag);
+    (Some(lines), Some(total), next)
+}
+
 /// Dispatches `subprocess.result` — retrieve terminal result and output. See substrate skill.
 ///
 /// `default_wait_ms` is sourced from `jobs.quotas.result_default_wait_ms` per ADR-0059
@@ -394,19 +405,17 @@ pub(crate) async fn handle_subprocess_result(
     // Build the LLM-facing content text.
     // When TmpFile captures are present, append a one-line note so the model
     // can correlate the structured payload paths with the human-readable summary.
-    let tmp_note = match (&result.stdout_tmp_path, &result.stderr_tmp_path) {
-        (Some(p), _) => format!(
-            " Captures persisted to {}.",
-            p.parent()
-                .map_or_else(|| p.display().to_string(), |d| d.display().to_string())
-        ),
-        (None, Some(p)) => format!(
-            " Captures persisted to {}.",
-            p.parent()
-                .map_or_else(|| p.display().to_string(), |d| d.display().to_string())
-        ),
-        (None, None) => String::new(),
-    };
+    let tmp_note = result
+        .stdout_tmp_path
+        .as_ref()
+        .or(result.stderr_tmp_path.as_ref())
+        .map_or_else(String::new, |p| {
+            format!(
+                " Captures persisted to {}.",
+                p.parent()
+                    .map_or_else(|| p.display().to_string(), |d| d.display().to_string())
+            )
+        });
     let content = format!(
         "subprocess.result: job_id={} state={:?} exit_code={:?} stdout={}B stderr={}B.{tmp_note}",
         req.job_id,
@@ -431,33 +440,21 @@ pub(crate) async fn handle_subprocess_result(
     // into lines; the paginated slice is returned alongside the existing base64
     // aggregate fields (backward-compatible — old callers that do not supply
     // `pagination` see `null` for all six optional fields).
-    let (stdout_lines, stdout_total_lines, stdout_next_offset) =
-        if let Some(ref pag) = req.pagination {
-            let stdout_text = String::from_utf8_lossy(&result.stdout_aggregate).into_owned();
-            let (lines, total, next) =
-                substrate_subprocess::registry::paginate_lines(&stdout_text, pag);
-            (Some(lines), Some(total), next)
-        } else {
-            (
-                result.stdout_lines,
-                result.stdout_total_lines,
-                result.stdout_next_offset,
-            )
-        };
+    let (stdout_lines, stdout_total_lines, stdout_next_offset) = paginate_or_fallback(
+        req.pagination.as_ref(),
+        &result.stdout_aggregate,
+        result.stdout_lines,
+        result.stdout_total_lines,
+        result.stdout_next_offset,
+    );
 
-    let (stderr_lines, stderr_total_lines, stderr_next_offset) =
-        if let Some(ref pag) = req.pagination {
-            let stderr_text = String::from_utf8_lossy(&result.stderr_aggregate).into_owned();
-            let (lines, total, next) =
-                substrate_subprocess::registry::paginate_lines(&stderr_text, pag);
-            (Some(lines), Some(total), next)
-        } else {
-            (
-                result.stderr_lines,
-                result.stderr_total_lines,
-                result.stderr_next_offset,
-            )
-        };
+    let (stderr_lines, stderr_total_lines, stderr_next_offset) = paginate_or_fallback(
+        req.pagination.as_ref(),
+        &result.stderr_aggregate,
+        result.stderr_lines,
+        result.stderr_total_lines,
+        result.stderr_next_offset,
+    );
 
     // Derive a pagination-aware next_action hint: suggest subprocess.result with
     // a follow-up offset when more output pages remain.
@@ -524,7 +521,7 @@ pub(crate) async fn handle_subprocess_search(
     let total = result.total_matches;
     let next = result.next_offset;
 
-    let content = format!("subprocess.search: matches={n} total={total} next_offset={next:?}.",);
+    let content = format!("subprocess.search: matches={n} total={total} next_offset={next:?}.");
 
     let structured = json!({
         "matches": result.matches.iter().map(|m| json!({
@@ -628,6 +625,37 @@ pub(crate) async fn handle_subprocess_signal(
     })
 }
 
+// ---- Base64 helper ----------------------------------------------------------
+
+/// Minimal RFC 4648 base64 encoder (standard alphabet, no padding stripping).
+///
+/// Avoids pulling a runtime dep into the handler layer; output is valid
+/// standard base64 readable by any JSON consumer.
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let combined = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHA[((combined >> 18) & 0x3F) as usize]);
+        out.push(ALPHA[((combined >> 12) & 0x3F) as usize]);
+        out.push(if chunk.len() >= 2 {
+            ALPHA[((combined >> 6) & 0x3F) as usize]
+        } else {
+            b'='
+        });
+        out.push(if chunk.len() == 3 {
+            ALPHA[(combined & 0x3F) as usize]
+        } else {
+            b'='
+        });
+    }
+    // SAFETY: every byte pushed is ASCII from ALPHA or '='.
+    String::from_utf8(out).unwrap_or_default()
+}
+
 // ---- Unit tests -------------------------------------------------------------
 
 #[cfg(test)]
@@ -662,7 +690,7 @@ mod tests {
     // ---- ADR-0060 / ADR-0061: Default impl unit tests -----------------------
 
     /// `SubprocessListRequest::default()` must have `page_size: None` on the wire
-    /// struct (the handler converts None → PageSize::default() = 50).
+    /// struct (the handler converts None → `PageSize::default()` = 50).
     #[test]
     fn subprocess_list_request_default_page_size_is_none() {
         let req = SubprocessListRequest::default();
@@ -706,26 +734,20 @@ mod tests {
     /// `PageSize` conversion: None → default 50, Some(valid) → Ok, Some(0) → Err.
     #[test]
     fn page_size_conversion_from_option() {
-        let default_ps = match None::<u32> {
-            Some(n) => PageSize::try_from(n).expect("valid"),
-            None => PageSize::default(),
-        };
+        let default_ps =
+            None::<u32>.map_or_else(PageSize::default, |n| PageSize::try_from(n).expect("valid"));
         assert_eq!(
             default_ps.get(),
             50,
             "None maps to PageSize::default() = 50"
         );
 
-        let explicit_ps = match Some(200_u32) {
-            Some(n) => PageSize::try_from(n).expect("valid"),
-            None => PageSize::default(),
-        };
+        let explicit_ps = Some(200_u32)
+            .map_or_else(PageSize::default, |n| PageSize::try_from(n).expect("valid"));
         assert_eq!(explicit_ps.get(), 200);
 
-        let zero_result: Result<PageSize, _> = match Some(0_u32) {
-            Some(n) => PageSize::try_from(n),
-            None => Ok(PageSize::default()),
-        };
+        let zero_result: Result<PageSize, _> =
+            Some(0_u32).map_or_else(|| Ok(PageSize::default()), PageSize::try_from);
         assert!(zero_result.is_err(), "page_size=0 must be rejected");
     }
 
@@ -817,8 +839,8 @@ mod tests {
 
     /// `Value::Null` input must produce the one registered handle.
     ///
-    /// ADR-0060: absent page_size → PageSize::default() = 50 → port receives
-    /// a valid PageSize, never zero.
+    /// ADR-0060: absent `page_size` → `PageSize::default()` = 50 → port receives
+    /// a valid `PageSize`, never zero.
     #[tokio::test]
     async fn handle_subprocess_list_null_args_returns_existing_handle() {
         let port: Arc<dyn SubprocessPort> = Arc::new(OneHandlePort::new());
@@ -939,35 +961,4 @@ mod tests {
             "absent page_size → default 50 → 1 handle returned"
         );
     }
-}
-
-// ---- Base64 helper ----------------------------------------------------------
-
-/// Minimal RFC 4648 base64 encoder (standard alphabet, no padding stripping).
-///
-/// Avoids pulling a runtime dep into the handler layer; output is valid
-/// standard base64 readable by any JSON consumer.
-fn base64_encode(bytes: &[u8]) -> String {
-    const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
-        let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
-        let combined = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHA[((combined >> 18) & 0x3F) as usize]);
-        out.push(ALPHA[((combined >> 12) & 0x3F) as usize]);
-        out.push(if chunk.len() >= 2 {
-            ALPHA[((combined >> 6) & 0x3F) as usize]
-        } else {
-            b'='
-        });
-        out.push(if chunk.len() == 3 {
-            ALPHA[(combined & 0x3F) as usize]
-        } else {
-            b'='
-        });
-    }
-    // SAFETY: every byte pushed is ASCII from ALPHA or '='.
-    String::from_utf8(out).unwrap_or_default()
 }

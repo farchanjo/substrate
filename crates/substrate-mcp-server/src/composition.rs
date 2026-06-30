@@ -285,36 +285,36 @@ pub(crate) async fn wire(
         // ADR-0055 orphan reaper: sweep stale transit .tmp.<uuid7> files older
         // than `startup.orphan_reap_age_secs` before any new subprocess can
         // create transit files. Best-effort — failures are logged and ignored.
-        if !startup_cfg.disable_orphan_reaper {
-            if let Some(ref tmp_root_path) = tmp_root {
-                let reap_age = std::time::Duration::from_secs(startup_cfg.orphan_reap_age_secs);
-                let reap_budget =
-                    std::time::Duration::from_secs(startup_cfg.orphan_reap_max_duration_secs);
-                match tokio::time::timeout(
-                    reap_budget,
-                    substrate_subprocess::run_orphan_reaper_once(tmp_root_path, reap_age),
-                )
-                .await
-                {
-                    Ok(Ok(stats)) => {
-                        tracing::info!(
-                            reaped = stats.reaped,
-                            skipped_young = stats.skipped_young,
-                            skipped_unrelated = stats.skipped_unrelated,
-                            errors = stats.errors,
-                            "orphan reaper completed at startup"
-                        );
-                    },
-                    Ok(Err(e)) => {
-                        tracing::warn!(error = %e, "orphan reaper failed to read tmp_root (non-fatal)");
-                    },
-                    Err(_elapsed) => {
-                        tracing::warn!(
-                            budget_secs = startup_cfg.orphan_reap_max_duration_secs,
-                            "orphan reaper exceeded duration budget; continuing startup"
-                        );
-                    },
-                }
+        if !startup_cfg.disable_orphan_reaper
+            && let Some(ref tmp_root_path) = tmp_root
+        {
+            let reap_age = std::time::Duration::from_secs(startup_cfg.orphan_reap_age_secs);
+            let reap_budget =
+                std::time::Duration::from_secs(startup_cfg.orphan_reap_max_duration_secs);
+            match tokio::time::timeout(
+                reap_budget,
+                substrate_subprocess::run_orphan_reaper_once(tmp_root_path, reap_age),
+            )
+            .await
+            {
+                Ok(Ok(stats)) => {
+                    tracing::info!(
+                        reaped = stats.reaped,
+                        skipped_young = stats.skipped_young,
+                        skipped_unrelated = stats.skipped_unrelated,
+                        errors = stats.errors,
+                        "orphan reaper completed at startup"
+                    );
+                },
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "orphan reaper failed to read tmp_root (non-fatal)");
+                },
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        budget_secs = startup_cfg.orphan_reap_max_duration_secs,
+                        "orphan reaper exceeded duration budget; continuing startup"
+                    );
+                },
             }
         }
 
