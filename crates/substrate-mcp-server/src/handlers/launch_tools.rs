@@ -318,7 +318,10 @@ pub(crate) async fn handle_launch_up(
         );
     }
     let mut hints = destructive_hints("launch_status", Some(&stack_id));
-    hints.polling_endpoint = Some("launch_status".to_owned());
+    // `polling_endpoint` uses the logical (dot) tool name per ADR-0069 §"Links"
+    // (ADR-0062 amendment): `next_action_suggested` / `alternative_tool` use
+    // the wire name (underscore), `polling_endpoint` uses the logical name.
+    hints.polling_endpoint = Some("launch.status".to_owned());
     hints.job_state = Some(handle.state.to_string());
     Ok(DispatchedResponse {
         content,

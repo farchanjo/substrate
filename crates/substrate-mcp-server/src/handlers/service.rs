@@ -1200,12 +1200,20 @@ impl SubstrateService {
         is_error: bool,
     ) -> CallToolResult {
         // Build the combined structured value: the dispatched structured_content
-        // plus a `_text` field for the model-oriented summary.
+        // plus a `_text` field for the model-oriented summary and the `hints`
+        // map every handler computes (ADR-0007 + ADR-0040 extension). `Hints`
+        // skip-serializes every `None` field, so an all-default Hints still
+        // adds a (mostly empty) "hints" key — harmless, and keeps the key
+        // present for clients that always look for it.
         let mut combined = dispatched.structured_content.clone();
         if let Value::Object(ref mut map) = combined {
             map.insert(
                 "_text".to_owned(),
                 Value::String(dispatched.content.clone()),
+            );
+            map.insert(
+                "hints".to_owned(),
+                serde_json::to_value(&dispatched.hints).unwrap_or(Value::Null),
             );
         }
 
