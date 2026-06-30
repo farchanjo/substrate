@@ -17,6 +17,7 @@ members = [
     "crates/substrate-signal-sys",
     "crates/substrate-subprocess",
     "crates/substrate-network-info",
+    "crates/substrate-launch",
 ]
 
 [workspace.package]

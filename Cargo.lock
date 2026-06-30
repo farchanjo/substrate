@@ -2431,6 +2431,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "substrate-launch"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "dashmap",
+ "rstest",
+ "serde",
+ "serde_json",
+ "substrate-domain",
+ "substrate-policy",
+ "tempfile",
+ "time",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "substrate-mcp-server"
 version = "0.2.0"
 dependencies = [

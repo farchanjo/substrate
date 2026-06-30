@@ -1,0 +1,34 @@
+[package]
+name = "substrate-launch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Launch BC adapter: declarative process orchestration over SubprocessPort. ADR-0063..0069."
+
+[lints]
+workspace = true
+
+[dependencies]
+substrate-domain = { path = "../substrate-domain" }
+substrate-policy  = { path = "../substrate-policy" }
+tokio = { workspace = true, features = ["rt", "macros", "fs", "sync", "time"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# toml declared locally per plan (matches workspace version but noted as FLAG for reviewers).
+toml = { workspace = true }
+# blake3: mmap DISABLED per ADR-0032; uses workspace declaration.
+blake3 = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rstest = { workspace = true }
+tokio-test = { workspace = true }
