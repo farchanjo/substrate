@@ -34,6 +34,7 @@ async-trait = { workspace = true }
 base64-simd = { workspace = true }
 dashmap = { workspace = true }
 regex = { workspace = true }
+globset = { workspace = true }
 # libc required for watchdog pipe fd manipulation (fcntl F_GETFD/F_SETFD) per ADR-0053.
 # Not in workspace deps; declared locally.
 libc = "0.2"

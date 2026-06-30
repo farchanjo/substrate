@@ -556,11 +556,19 @@ pub struct SubprocessConfig {
     #[serde(default)]
     pub tmp_root: Option<PathBuf>,
 
-    /// Allowlisted absolute binary paths permitted for `subprocess.spawn` per ADR-0052 §"Layer 1".
+    /// Allowlisted absolute binary paths (or glob patterns) permitted for
+    /// `subprocess.spawn` per ADR-0052 §"Layer 1".
     ///
     /// Empty list (default) means deny-all: every spawn request is rejected with
     /// `SubprocessError::BinaryNotAllowlisted`. Each entry MUST be an absolute path
     /// to an executable file; relative paths fail validation at startup.
+    ///
+    /// An entry containing a glob metacharacter (`*`, `?`, `[`, `{`) is matched as
+    /// a pattern against the binary's canonicalized (symlink-resolved) path rather
+    /// than compared literally, e.g. `/usr/local/bin/*` or `/Users/me/.cargo/bin/*`.
+    /// This is still default-deny and still operator-configured; it widens what a
+    /// single entry covers, not the security model itself (ADR-0052 amendment
+    /// 2026-06-30).
     ///
     /// References: ADR-0052 §"Layer 1 — Binary Allowlist".
     #[serde(default)]

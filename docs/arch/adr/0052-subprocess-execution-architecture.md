@@ -395,3 +395,15 @@ exec path.
 ## Amendment 2026-06-30: launch detached supervisor — Option C scoped exception (ADR-0068)
 
 [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) carves a narrow, opt-in exception to the no-sidecar / socket-free Option C recorded in this ADR, for launch detached mode only: a launch Stack with `on_client_disconnect = "detach"` is supervised by the same `substrate` binary in a documented `--supervise <stack>` mode, detached via `setsid`, communicating only over the filesystem and FIFOs (no second artifact, no socket — the STDIO-only transport and single-binary distribution are preserved). Every Service spawn still passes the Layer 5 controls and the check-to-exec invariant above. Every other context retains the in-server, no-detached-supervisor model of this ADR.
+
+## Amendment 2026-06-30: binary allowlist glob patterns (Layer 1)
+
+`security.subprocess_binary_allowlist` (Layer 1) gains an opt-in glob form alongside the existing literal-path entries. An entry containing a glob metacharacter (`*`, `?`, `[`, `{`) is compiled as a [`globset`](https://docs.rs/globset) pattern (built with `literal_separator(true)`) instead of compared verbatim; every other entry keeps today's exact-literal-path behavior unchanged. The model stays default-deny — an operator must still explicitly list every directory or pattern they intend to permit, and an empty allowlist still rejects every spawn.
+
+`literal_separator(true)` is a deliberate, security-relevant choice: a single `*` matches within one path segment only (`/usr/local/bin/*` covers direct entries of that directory, never a subdirectory's contents), so a glob entry cannot silently widen into an unintended nested tree. Recursive coverage (e.g. an arbitrarily-nested cargo workspace target directory) requires an explicit `**` segment, e.g. `/Users/me/dev/**/target/debug/*`.
+
+The existing TOCTOU and regular-file protections are preserved unconditionally for glob entries: `resolve_binary_allowed` first canonicalizes the requested binary and verifies the resolved target is a regular file (this ADR's "exec the canonicalized binary" invariant above, unchanged), and only THEN tests the canonical resolved path — never the raw, caller-supplied path — against the configured glob set. A glob therefore cannot be satisfied by a symlink that resolves outside the pattern's coverage, exactly as a literal entry cannot today.
+
+A glob entry that fails to compile (invalid syntax) is retained as an inert literal path rather than rejected at startup or silently dropped — a typo in a pattern narrows the allowlist (it becomes a literal that will essentially never match a real exec target) rather than ever widening it.
+
+Cross-references: [ADR-0004](0004-security-model.md) §"Layer 5 binary/cwd allowlist"; implemented in `crates/substrate-subprocess/src/registry.rs` (`BinaryAllowlist`, `resolve_binary_allowed`).

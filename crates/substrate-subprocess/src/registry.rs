@@ -85,58 +85,139 @@ impl substrate_domain::ports::fs_index::CancelSignal for NoCancel {
     }
 }
 
-/// A simple binary allowlist: a set of absolute path strings.
+/// A binary allowlist: a set of absolute path strings, plus optional glob patterns.
 ///
 /// Empty = deny-all (default per ADR-0052 §"Binary allowlist").
 ///
 /// # Security (ADR-0052 §"Binary allowlist", symlink hardening)
 ///
-/// The configured `entries` are compared verbatim by [`BinaryAllowlist::allows`].
+/// The configured literal `entries` are compared verbatim by [`BinaryAllowlist::allows`].
 /// That literal check is insufficient on its own because an allowlisted symlink
 /// resolves to an arbitrary target binary, so the registry spawn path additionally
 /// canonicalizes both the configured entries AND the requested binary, then compares
 /// the resolved real paths and requires the resolved target to be a regular file.
 /// See [`canonicalize_existing`] and the binary check in `SubprocessRegistry::spawn`.
+///
+/// # Glob patterns (ADR-0052 amendment 2026-06-30)
+///
+/// A configured entry containing a glob metacharacter (`*`, `?`, `[`, `{`) is
+/// compiled as a [`globset::Glob`] instead of treated as a literal path. Glob
+/// entries are matched against the binary's CANONICAL (symlink-resolved) path
+/// after `resolve_binary_allowed` has already verified the target is a regular
+/// file — the same TOCTOU and regular-file protections apply to glob matches as
+/// to literal matches; only the membership test itself differs. An entry whose
+/// glob syntax fails to compile is kept as an inert literal (matches nothing
+/// real) rather than rejected at construction, so a malformed entry narrows
+/// rather than silently widens the allowlist.
 #[derive(Debug, Clone)]
 pub struct BinaryAllowlist {
-    /// Absolute paths of permitted binaries, as configured (unresolved).
+    /// Absolute paths of permitted binaries, as configured (unresolved). Excludes
+    /// entries that compiled as glob patterns.
     entries: Vec<PathBuf>,
+
+    /// Compiled glob patterns extracted from configured entries, matched against
+    /// the binary's canonical resolved path string.
+    globs: Arc<globset::GlobSet>,
+}
+
+/// Returns `true` when `entry` contains a glob metacharacter substrate's glob
+/// dialect recognizes (`*`, `?`, `[`, `{`).
+fn looks_like_glob(entry: &str) -> bool {
+    entry.contains(['*', '?', '[', '{'])
 }
 
 impl BinaryAllowlist {
-    /// Constructs the allowlist from a list of absolute paths.
+    /// Constructs the allowlist from a list of absolute paths and/or glob patterns.
+    ///
+    /// Entries containing a glob metacharacter are compiled as patterns; all
+    /// other entries are treated as literal paths exactly as before. A pattern
+    /// that fails to compile is kept as an inert literal entry instead of being
+    /// dropped or causing construction to fail, so a typo narrows the allowlist
+    /// rather than silently widening or panicking it.
     #[must_use]
-    pub const fn new(entries: Vec<PathBuf>) -> Self {
-        Self { entries }
+    pub fn new(entries: Vec<PathBuf>) -> Self {
+        let mut literals = Vec::with_capacity(entries.len());
+        let mut builder = globset::GlobSetBuilder::new();
+        for entry in entries {
+            let as_str = entry.to_string_lossy();
+            if looks_like_glob(&as_str) {
+                // `literal_separator(true)`: a single `*` must NOT cross a path
+                // separator, so `/usr/local/bin/*` covers only direct entries of
+                // that directory, never a subdirectory's contents. Recursive
+                // coverage requires an explicit `**` segment.
+                match globset::GlobBuilder::new(&as_str)
+                    .literal_separator(true)
+                    .build()
+                {
+                    Ok(glob) => {
+                        builder.add(glob);
+                        continue;
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            entry = %as_str,
+                            error = %e,
+                            "binary_allowlist entry looks like a glob but failed to compile; \
+                             treating as an inert literal path"
+                        );
+                    },
+                }
+            }
+            literals.push(entry);
+        }
+        let globs = builder.build().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "binary_allowlist glob set failed to build; no globs active");
+            globset::GlobSet::empty()
+        });
+        Self {
+            entries: literals,
+            globs: Arc::new(globs),
+        }
     }
 
     /// Constructs an empty (deny-all) allowlist.
     #[must_use]
-    pub const fn deny_all() -> Self {
+    pub fn deny_all() -> Self {
         Self {
             entries: Vec::new(),
+            globs: Arc::new(globset::GlobSet::empty()),
         }
     }
 
-    /// Returns `true` when `path` literally matches a configured allowlist entry.
+    /// Returns `true` when `path` literally matches a configured allowlist entry,
+    /// or matches a configured glob pattern.
     ///
-    /// This is a verbatim (unresolved) comparison. It is necessary but NOT
+    /// The literal comparison is verbatim (unresolved). It is necessary but NOT
     /// sufficient: a configured symlink entry would match a request that names the
     /// symlink yet resolve to an arbitrary target. The registry spawn path performs
     /// the canonical, regular-file-verified membership check; this method is retained
     /// for the cheap literal fast-path and for unit tests.
     #[must_use]
     pub fn allows(&self, path: &std::path::Path) -> bool {
-        self.entries.iter().any(|e| e == path)
+        self.entries.iter().any(|e| e == path) || self.globs.is_match(path)
     }
 
-    /// Returns a snapshot of the configured (unresolved) allowlist entries.
+    /// Returns a snapshot of the configured (unresolved) literal allowlist entries.
     ///
     /// Used by the registry spawn path to canonicalize each entry inside a
-    /// `spawn_blocking` closure before comparing resolved real paths.
+    /// `spawn_blocking` closure before comparing resolved real paths. Does not
+    /// include glob-pattern entries; check those separately via [`Self::matches_glob`].
     #[must_use]
     pub fn entries(&self) -> Vec<PathBuf> {
         self.entries.clone()
+    }
+
+    /// Returns `true` when the (already-canonicalized) `path` matches a
+    /// configured glob pattern.
+    ///
+    /// Callers MUST pass the canonical, symlink-resolved path here, not the raw
+    /// requested path — `resolve_binary_allowed` is the only intended caller,
+    /// after it has already canonicalized the request and verified it is a
+    /// regular file, so glob matches get the exact same TOCTOU/symlink
+    /// protections as literal matches.
+    #[must_use]
+    pub fn matches_glob(&self, path: &std::path::Path) -> bool {
+        self.globs.is_match(path)
     }
 }
 
@@ -1553,11 +1634,13 @@ where
 /// Resolves and validates `req.binary_path` against the canonicalized allowlist.
 ///
 /// Per ADR-0052 binary-allowlist hardening:
-/// 1. Each configured allowlist entry is canonicalized (resolving symlinks to the
-///    real target). Entries that cannot be resolved are skipped — a broken or
-///    dangling allowlist entry must never widen the permitted set.
+/// 1. Each configured literal allowlist entry is canonicalized (resolving symlinks
+///    to the real target). Entries that cannot be resolved are skipped — a broken
+///    or dangling allowlist entry must never widen the permitted set.
 /// 2. `req.binary_path` is canonicalized to its real target.
-/// 3. The resolved binary must equal one of the resolved entries.
+/// 3. The resolved binary must equal one of the resolved literal entries, OR match
+///    one of the configured glob patterns (ADR-0052 amendment 2026-06-30) against
+///    that SAME canonical path — a glob never matches the raw, unresolved request.
 /// 4. The resolved binary must be a regular file (rejects directories, FIFOs,
 ///    devices, and sockets that a crafted symlink could otherwise point at).
 ///
@@ -1575,6 +1658,7 @@ async fn resolve_binary_allowed(
 ) -> Result<PathBuf, SubprocessError> {
     let display = binary_path.display().to_string();
     let entries = allowlist.entries();
+    let allowlist = allowlist.clone();
 
     // Canonicalize the requested binary first; a missing binary is a spawn error.
     let resolved = canonicalize_existing(binary_path.to_path_buf(), move |e| {
@@ -1594,10 +1678,11 @@ async fn resolve_binary_allowed(
         if !regular_file {
             return false;
         }
-        entries
+        let literal_match = entries
             .iter()
             .filter_map(|e| std::fs::canonicalize(e).ok())
-            .any(|canon| canon == resolved_for_check)
+            .any(|canon| canon == resolved_for_check);
+        literal_match || allowlist.matches_glob(&resolved_for_check)
     })
     .await
     .map_err(|join_err| SubprocessError::SpawnFailed {
@@ -1667,6 +1752,103 @@ mod tests {
             !al.allows(std::path::Path::new("/usr/bin/false")),
             "allowlist must reject an unconfigured binary"
         );
+    }
+
+    #[test]
+    fn binary_allowlist_glob_entry_matches_directory_prefix() {
+        let al = BinaryAllowlist::new(vec![PathBuf::from("/usr/local/bin/*")]);
+        assert!(
+            al.allows(std::path::Path::new("/usr/local/bin/cargo")),
+            "glob entry must match a binary directly under the wildcarded directory"
+        );
+        assert!(
+            !al.allows(std::path::Path::new("/usr/bin/cargo")),
+            "glob entry must not match a binary outside the wildcarded directory"
+        );
+    }
+
+    #[test]
+    fn binary_allowlist_glob_entry_matches_name_pattern() {
+        let al = BinaryAllowlist::new(vec![PathBuf::from("/opt/tools/*-cli")]);
+        assert!(al.allows(std::path::Path::new("/opt/tools/foo-cli")));
+        assert!(!al.allows(std::path::Path::new("/opt/tools/foo-daemon")));
+    }
+
+    #[test]
+    fn binary_allowlist_recursive_glob_matches_nested_cargo_workspace() {
+        // Mirrors a real operator config: arbitrarily deep cargo workspace
+        // nesting under ~/dev, any project, debug or release.
+        let al = BinaryAllowlist::new(vec![
+            PathBuf::from("/Users/dev/dev/**/target/debug/*"),
+            PathBuf::from("/Users/dev/dev/**/target/release/*"),
+        ]);
+        assert!(al.allows(std::path::Path::new(
+            "/Users/dev/dev/rhodes/src/backend/fleet/target/debug/rhodes-node"
+        )));
+        assert!(al.allows(std::path::Path::new(
+            "/Users/dev/dev/underdog/src/backend/data-plane/target/release/levi"
+        )));
+        assert!(al.allows(std::path::Path::new(
+            "/Users/dev/dev/simple-crate/target/debug/simple-crate"
+        )));
+        assert!(
+            !al.allows(std::path::Path::new("/Users/dev/dev/rhodes/target/debug/build/foo")),
+            "must not match inside a target/debug/build subdirectory (extra path segment)"
+        );
+        assert!(!al.allows(std::path::Path::new("/etc/passwd")));
+    }
+
+    #[test]
+    fn binary_allowlist_glob_two_wildcard_segments() {
+        // Mirrors a real operator config: Homebrew's per-formula bin dirs
+        // (/opt/homebrew/opt/<formula>/bin/<tool>), two independent single-
+        // segment wildcards in the same pattern.
+        let al = BinaryAllowlist::new(vec![PathBuf::from("/opt/homebrew/opt/*/bin/*")]);
+        assert!(al.allows(std::path::Path::new("/opt/homebrew/opt/openjdk/bin/java")));
+        assert!(al.allows(std::path::Path::new("/opt/homebrew/opt/go@1.26/bin/go")));
+        assert!(
+            !al.allows(std::path::Path::new("/opt/homebrew/opt/openjdk/bin/sub/java")),
+            "must not cross an extra path segment under bin/"
+        );
+        assert!(
+            !al.allows(std::path::Path::new("/opt/homebrew/opt/openjdk/lib/java")),
+            "must not match outside the bin/ segment"
+        );
+    }
+
+    #[test]
+    fn binary_allowlist_malformed_glob_is_inert_not_widening() {
+        // An unbalanced bracket is invalid glob syntax; the entry must fall back
+        // to an inert literal path (matching only that exact, never-real string)
+        // rather than panicking or silently widening the allowlist into a
+        // catch-all wildcard.
+        let al = BinaryAllowlist::new(vec![PathBuf::from("/usr/bin/[unterminated")]);
+        assert!(
+            !al.allows(std::path::Path::new("/usr/bin/anything")),
+            "a malformed glob must not act as a wildcard over its prefix"
+        );
+        assert!(
+            !al.allows(std::path::Path::new("/usr/local/bin/cargo")),
+            "a malformed glob must not widen the allowlist to unrelated paths"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_binary_allowed_accepts_real_binary_via_glob() {
+        let allowlist = BinaryAllowlist::new(vec![PathBuf::from("/bin/*")]);
+        let resolved = resolve_binary_allowed(&allowlist, std::path::Path::new("/bin/echo"))
+            .await
+            .expect("a glob covering /bin/* must allow /bin/echo");
+        assert!(resolved.ends_with("echo"));
+    }
+
+    #[tokio::test]
+    async fn resolve_binary_allowed_rejects_real_binary_outside_glob() {
+        let allowlist = BinaryAllowlist::new(vec![PathBuf::from("/opt/nonexistent-tools/*")]);
+        let err = resolve_binary_allowed(&allowlist, std::path::Path::new("/bin/echo"))
+            .await
+            .expect_err("a glob that does not cover /bin must reject /bin/echo");
+        assert!(matches!(err, SubprocessError::BinaryNotAllowed { .. }));
     }
 
     #[test]
@@ -1749,7 +1931,7 @@ mod tests {
             restart_policy: None,
             health_probe: None,
             log_rotation: None,
-        };
+            parent_death_signal: None,        };
 
         let handle_snapshot = registry
             .spawn(req, &NoCancel)
