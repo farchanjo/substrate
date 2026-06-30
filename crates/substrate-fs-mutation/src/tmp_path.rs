@@ -88,8 +88,7 @@ impl TmpPath {
         let suffix = crockford_base32(uuid.as_bytes());
         let base = target
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".to_owned());
+            .map_or_else(|| "file".to_owned(), |n| n.to_string_lossy().into_owned());
         let file_name = format!("{base}.tmp.{suffix}");
 
         let parent = target.parent().unwrap_or_else(|| Path::new("."));

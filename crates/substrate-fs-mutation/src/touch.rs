@@ -57,9 +57,9 @@ pub async fn handle_fs_touch(
         jail_new_path(&req.path, deps, allowlist_root)?
     };
 
+    let path = jailed.as_path().to_path_buf();
     if file_exists {
         // Zone B: update timestamps via utimensat.
-        let path = jailed.as_path().to_path_buf();
         tokio::task::spawn_blocking(move || touch_existing(&path))
             .await
             .map_err(|e| SubstrateError::InternalError {
@@ -73,7 +73,6 @@ pub async fn handle_fs_touch(
         // between the jail check and the open(). O_NOFOLLOW causes ELOOP/ENOTDIR
         // (mapped to SUBSTRATE_IO_ERROR) when the final path component is a
         // symlink, closing the race window.
-        let path = jailed.as_path().to_path_buf();
         tokio::task::spawn_blocking(move || create_no_follow(&path))
             .await
             .map_err(|e| SubstrateError::InternalError {
@@ -136,7 +135,7 @@ fn jail_new_path(
 /// # Errors
 ///
 /// Returns [`SubstrateError::IoError`] for any OS error including the
-/// O_NOFOLLOW rejection case (which surfaces as `ELOOP`/`ENOTDIR`).
+/// `O_NOFOLLOW` rejection case (which surfaces as `ELOOP`/`ENOTDIR`).
 fn create_no_follow(path: &Path) -> SubstrateResult<()> {
     use nix::fcntl::{OFlag, open};
     use nix::sys::stat::Mode;
