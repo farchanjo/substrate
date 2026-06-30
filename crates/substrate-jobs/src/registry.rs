@@ -322,21 +322,15 @@ impl JobRegistryPort for InMemoryJobRegistry {
                         }
                     };
                     // Write state and publish result to the watch channel under the
-                    // same mutex lock.  This eliminates the window between
-                    // "state=terminal visible" and "result present in watch channel":
-                    // any reader that observes a terminal state will always find the
-                    // result ready in `result_rx.borrow()` (Fix for race in ADR-0040).
-                    {
-                        let mut entry = worker_entry_clone.lock();
-                        if entry.state.can_transition_to(next_state) {
-                            entry.state = next_state;
-                            entry.updated_at = time::OffsetDateTime::now_utc();
-                            entry.terminal_at = Some(entry.updated_at);
-                            // Send a clone into the watch while the lock is held.
-                            // The original `job_result` is kept for the notify call below.
-                            let _ = result_tx_clone.send(Some(clone_job_result(&job_result)));
-                        }
-                    }
+                    // same mutex lock (Fix for race in ADR-0040) — see
+                    // `transition_to_terminal_and_publish` for the invariant.
+                    // The original `job_result` is kept for the notify call below.
+                    transition_to_terminal_and_publish(
+                        &worker_entry_clone,
+                        next_state,
+                        clone_job_result(&job_result),
+                        &result_tx_clone,
+                    );
                     // ADR-0040: emit terminal progress notification after the watch
                     // channel is set so the audit trail is complete (async — must
                     // not hold the entry mutex across this await).
@@ -347,15 +341,12 @@ impl JobRegistryPort for InMemoryJobRegistry {
                     tracing::debug!("job cancelled before execute future completed");
                     // Write state and publish result atomically under the same lock
                     // (same ordering fix as the success/failure arm above).
-                    {
-                        let mut entry = worker_entry_clone.lock();
-                        if entry.state.can_transition_to(JobState::Cancelled) {
-                            entry.state = JobState::Cancelled;
-                            entry.updated_at = time::OffsetDateTime::now_utc();
-                            entry.terminal_at = Some(entry.updated_at);
-                            let _ = result_tx_clone.send(Some(JobResult::Cancelled));
-                        }
-                    }
+                    transition_to_terminal_and_publish(
+                        &worker_entry_clone,
+                        JobState::Cancelled,
+                        JobResult::Cancelled,
+                        &result_tx_clone,
+                    );
                     // ADR-0040: emit cancelled completion notification.
                     worker_notifier.notify_complete(&notify_job_id, &JobResult::Cancelled).await;
                 }
@@ -400,19 +391,22 @@ impl JobRegistryPort for InMemoryJobRegistry {
         //   existing `job_id` from the map.  The losing submitter's worker must be
         //   signalled to stop and its quota guards committed so the worker (not the
         //   guards) performs the counter decrement.
-        let canonical_job_id = if let Some(key) = dedup_key {
-            // `or_insert_with` holds the shard write-lock for the duration of the
-            // closure, making read-and-insert atomic.  The returned `RefMut` must
-            // be dereferenced before cloning; `RefMut<'_, K, V>` is not `Clone`.
-            let ref_mut = self
-                .idempotency_index
-                .entry(key)
-                .or_insert_with(|| job_id.clone());
-            ref_mut.value().clone()
-        } else {
-            // No dedup key: always a new unique job.
-            job_id.clone()
-        };
+        let canonical_job_id = dedup_key.map_or_else(
+            || {
+                // No dedup key: always a new unique job.
+                job_id.clone()
+            },
+            |key| {
+                // `or_insert_with` holds the shard write-lock for the duration of the
+                // closure, making read-and-insert atomic.  The returned `RefMut` must
+                // be dereferenced before cloning; `RefMut<'_, K, V>` is not `Clone`.
+                let ref_mut = self
+                    .idempotency_index
+                    .entry(key)
+                    .or_insert_with(|| job_id.clone());
+                ref_mut.value().clone()
+            },
+        );
 
         if canonical_job_id == job_id {
             // We won the dedup race (or no dedup key): register the slot and commit.
@@ -614,6 +608,39 @@ impl JobRegistryPort for InMemoryJobRegistry {
             jobs: page,
             next_cursor,
         })
+    }
+}
+
+/// Writes a terminal state transition and publishes the result to the watch
+/// channel under the same `entry` lock (ADR-0040: eliminates the window
+/// between "state=terminal visible" and "result present in watch channel" —
+/// any reader that observes a terminal state via `JobSlot::snapshot()` is
+/// guaranteed to also find the result ready in `result_rx.borrow()`).
+///
+/// A standalone `fn` (rather than an inline block inside the `tokio::select!`
+/// arm) because lint attributes attached inside a `tokio::select!` arm do not
+/// reliably bind to the macro-expanded drop-check diagnostic, so this is the
+/// only scope `#[expect(clippy::significant_drop_tightening)]` can attach to.
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "entry must stay locked through result_tx.send(): dropping it \
+              right after the field writes (as clippy suggests) would let a \
+              concurrent status()/result() call observe the terminal state \
+              before the watch channel carries the result, reintroducing the \
+              ADR-0040 race this function fixes"
+)]
+fn transition_to_terminal_and_publish(
+    entry_mutex: &parking_lot::Mutex<JobEntry>,
+    next_state: JobState,
+    terminal_result: JobResult,
+    result_tx: &watch::Sender<Option<JobResult>>,
+) {
+    let mut entry = entry_mutex.lock();
+    if entry.state.can_transition_to(next_state) {
+        entry.state = next_state;
+        entry.updated_at = time::OffsetDateTime::now_utc();
+        entry.terminal_at = Some(entry.updated_at);
+        let _ = result_tx.send(Some(terminal_result));
     }
 }
 
