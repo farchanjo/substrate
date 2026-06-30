@@ -9,6 +9,7 @@
 //! - [`errors`] — canonical error taxonomy with stable `SUBSTRATE_*` codes (ADR-0010).
 //! - [`hints`] — structured response hints map (ADR-0007 + ADR-0040 extension).
 //! - [`jobs`] — async job control-plane value objects (ADR-0040).
+//! - [`launch`] — launch BC domain types: profile, trust, stack, event, state, errors (ADR-0063).
 //! - [`ports`] — inbound port traits implemented by adapter crates.
 //! - [`network`] — network-info BC domain types: socket, stats, request/result (ADR-0058).
 //! - [`subprocess`] — subprocess BC domain types: request, handle, state, stream, errors (ADR-0052).
@@ -21,6 +22,7 @@ pub mod capabilities;
 pub mod errors;
 pub mod hints;
 pub mod jobs;
+pub mod launch;
 pub mod network;
 pub mod ports;
 pub mod subprocess;
@@ -36,6 +38,7 @@ pub use value_objects::job_id::JobId;
 pub use value_objects::page_cursor::PageCursor;
 pub use value_objects::pagination::PageSize;
 pub use value_objects::process_group::ProcessGroup;
+pub use value_objects::stack_id::StackId;
 pub use value_objects::subprocess_id::SubprocessId;
 
 // ---- Flat re-exports from errors -------------------------------------------
@@ -66,6 +69,18 @@ pub use subprocess::request::{CaptureKind, StdinKind, SubprocessRequest};
 pub use subprocess::state::SubprocessState;
 pub use subprocess::stream::{Stream, StreamChunk};
 
+// ---- Flat re-exports from launch -------------------------------------------
+
+pub use launch::errors::LaunchError;
+pub use launch::event::{LaunchEvent, LaunchEventKind};
+pub use launch::profile::{
+    CommandSpec, DependencyRestartMode, LaunchChannelBounds, LaunchOperatorConfig, LaunchProfile,
+    LaunchService, ServiceName, StreamMux,
+};
+pub use launch::stack::{StackChild, StackHandle, SupervisorRegistry};
+pub use launch::state::{DisconnectPolicy, StackState};
+pub use launch::trust::TrustRecord;
+
 // ---- Flat re-exports from ports --------------------------------------------
 
 pub use ports::dir_walker::DirWalkerPort;
@@ -74,6 +89,7 @@ pub use ports::fs_index::FsIndexPort;
 pub use ports::fs_watcher::FsWatcherPort;
 pub use ports::hash::HashPort;
 pub use ports::job_registry::JobRegistryPort;
+pub use ports::launch::{DynLaunchPort, LaunchPort, ReloadReport, ServiceCatalogEntry};
 pub use ports::path_jail::PathJailPort;
 pub use ports::stat::StatPort;
 pub use ports::subprocess::SubprocessPort;
