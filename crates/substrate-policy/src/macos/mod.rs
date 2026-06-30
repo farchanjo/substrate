@@ -190,6 +190,19 @@ impl substrate_domain::PathJailPort for ONoFollowAnyJail {
             });
         }
 
+        // Reject paths lexically outside every configured allowlist root before
+        // the symlink-rejecting canonicalization. A path that leaves the jail
+        // through an interior symlink (e.g. /tmp -> /private/tmp on macOS) would
+        // otherwise surface as a SymlinkEscape from `open_dir_nofollow` even
+        // though it is plainly outside the allowlist; the allowlist verdict is
+        // the more precise one and must take precedence.
+        if !self.allowlist.contains(raw_path) {
+            return Err(SubstrateError::PathOutsideAllowlist {
+                path: raw_path.display().to_string(),
+                correlation_id: None,
+            });
+        }
+
         // Recover the kernel-canonical path (resolves APFS firmlinks, CWD)
         // without requiring read permission on the target file.
         let canonical = resolve_canonical_nofollow(raw_path)?;
