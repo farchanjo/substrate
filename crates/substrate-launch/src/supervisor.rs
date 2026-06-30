@@ -92,6 +92,7 @@ pub(crate) fn build_request(
         restart_policy: service.restart_policy.clone(),
         health_probe: service.health_probe.clone(),
         log_rotation: None,
+        parent_death_signal: None,
     })
 }
 
