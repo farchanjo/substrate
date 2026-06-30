@@ -82,18 +82,14 @@ async fn drain_to_newline(
         }
 
         // Look for `\n` in the currently buffered chunk (SIMD — ADR-0043).
-        match memchr::memchr(b'\n', filled) {
-            Some(pos) => {
-                // Consume up to and including the newline, then stop.
-                reader.consume(pos + 1);
-                break;
-            },
-            None => {
-                // No newline yet; consume the entire buffered chunk and loop.
-                let len = filled.len();
-                reader.consume(len);
-            },
+        if let Some(pos) = memchr::memchr(b'\n', filled) {
+            // Consume up to and including the newline, then stop.
+            reader.consume(pos + 1);
+            break;
         }
+        // No newline yet; consume the entire buffered chunk and loop.
+        let len = filled.len();
+        reader.consume(len);
     }
     Ok(())
 }

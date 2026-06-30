@@ -86,10 +86,10 @@ pub fn decode_cursor(cursor: &str) -> SubstrateResult<usize> {
     clippy::needless_pass_by_value,
     reason = "public API takes ownership to allow callers to move the full match vec; changing to slice would break the call site idiom"
 )]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Result return preserved for call-site stability and forward-compat; PageSize already guarantees non-zero at the type level"
-)]
+// clippy::unnecessary_wraps does not fire here: clippy skips `pub fn` items for
+// this lint to avoid suggesting a public-API-breaking return-type change, even
+// though the body is currently infallible. See the doc comment above for why
+// the Result return is kept anyway (forward-compat).
 pub fn paginate(
     all_matches: Vec<MatchRecord>,
     skipped_binary_count: u64,

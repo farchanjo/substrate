@@ -345,37 +345,33 @@ fn read_line_capped(
         }
 
         // Search for `\n` in the available buffer (SIMD — ADR-0043).
-        match memchr::memchr(b'\n', available) {
-            Some(pos) => {
-                // Newline found within the available bytes.
-                if !overflowed {
-                    // Take up to the newline (including it if within cap).
-                    let take = (pos + 1).min(max_bytes - total_stored);
-                    buf.extend_from_slice(&available[..take]);
-                    total_stored += take;
-                }
-                // Consume up to and including the newline.
-                reader.consume(pos + 1);
-                break;
-            },
-            None => {
-                // No newline in available chunk; take what we can.
-                if !overflowed {
-                    let headroom = max_bytes.saturating_sub(total_stored);
-                    let take = available.len().min(headroom);
-                    if take > 0 {
-                        buf.extend_from_slice(&available[..take]);
-                        total_stored += take;
-                    }
-                    if total_stored >= max_bytes {
-                        // Line exceeded the cap; mark overflowed and drain.
-                        overflowed = true;
-                    }
-                }
-                let len = available.len();
-                reader.consume(len);
-            },
+        if let Some(pos) = memchr::memchr(b'\n', available) {
+            // Newline found within the available bytes.
+            if !overflowed {
+                // Take up to the newline (including it if within cap).
+                let take = (pos + 1).min(max_bytes - total_stored);
+                buf.extend_from_slice(&available[..take]);
+                total_stored += take;
+            }
+            // Consume up to and including the newline.
+            reader.consume(pos + 1);
+            break;
         }
+        // No newline in available chunk; take what we can.
+        if !overflowed {
+            let headroom = max_bytes.saturating_sub(total_stored);
+            let take = available.len().min(headroom);
+            if take > 0 {
+                buf.extend_from_slice(&available[..take]);
+                total_stored += take;
+            }
+            if total_stored >= max_bytes {
+                // Line exceeded the cap; mark overflowed and drain.
+                overflowed = true;
+            }
+        }
+        let len = available.len();
+        reader.consume(len);
     }
 
     Ok(total_stored)
