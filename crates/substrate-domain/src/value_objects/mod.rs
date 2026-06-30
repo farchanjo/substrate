@@ -8,6 +8,7 @@ pub mod job_id;
 pub mod page_cursor;
 pub mod pagination;
 pub mod process_group;
+pub mod stack_id;
 pub mod subprocess_id;
 
 pub use client_id::ClientId;
@@ -18,4 +19,5 @@ pub use job_id::JobId;
 pub use page_cursor::PageCursor;
 pub use pagination::PageSize;
 pub use process_group::ProcessGroup;
+pub use stack_id::StackId;
 pub use subprocess_id::SubprocessId;
