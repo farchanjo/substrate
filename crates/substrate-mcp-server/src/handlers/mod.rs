@@ -17,6 +17,8 @@
 pub(crate) mod dispatcher;
 pub(crate) mod initialize;
 pub(crate) mod job_tools;
+#[cfg(feature = "launch")]
+pub(crate) mod launch_tools;
 pub(crate) mod network_tools;
 pub(crate) mod rmcp_progress_notifier;
 #[cfg(feature = "subprocess")]
