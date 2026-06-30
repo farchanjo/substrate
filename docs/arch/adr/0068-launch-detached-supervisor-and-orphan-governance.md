@@ -186,16 +186,20 @@ stateDiagram-v2
 
 ### New error codes
 
-Extending [ADR-0010](0010-error-taxonomy.md):
+Extending [ADR-0010](0010-error-taxonomy.md); these four occupy `-32050` through
+`-32053` (see the 2026-06-30 launch amendment there for the canonical range). The
+code is named `SUPERVISOR_UNREACHABLE`, not `SIDECAR_UNREACHABLE`: the launch
+ubiquitous language names the component a Supervisor and rejects "sidecar".
 
-- `SUBSTRATE_LAUNCH_ORPHAN_REAPED` — recovery hint: `"a previously detached
-  process was reaped on startup; re-run launch.up to restart the stack"`.
-- `SUBSTRATE_LAUNCH_ORPHAN_ADOPTED` — recovery hint: `"a detached process was
-  re-adopted on startup; use launch.status to inspect it"`.
-- `SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED` — recovery hint: `"the detached stack
-  exceeded launch.orphan_ttl_secs without a client; re-run launch.up"`.
-- `SUBSTRATE_LAUNCH_SIDECAR_UNREACHABLE` — recovery hint: `"the detached
-  supervisor is not responding; run launch.status to trigger reaper-on-boot"`.
+- `SUBSTRATE_LAUNCH_ORPHAN_REAPED` (-32050) — recovery hint: `"a previously
+  detached process was reaped on startup; re-run launch.up to restart the stack"`.
+- `SUBSTRATE_LAUNCH_ORPHAN_ADOPTED` (-32051) — recovery hint: `"a detached process
+  was re-adopted on startup; use launch.status to inspect it"`.
+- `SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED` (-32052) — recovery hint: `"the detached
+  stack exceeded launch.orphan_ttl_secs without a client; re-run launch.up"`.
+- `SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` (-32053) — recovery hint: `"the
+  detached supervisor is not responding; run launch.status to trigger
+  reaper-on-boot"`.
 
 ## Consequences
 

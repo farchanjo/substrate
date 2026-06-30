@@ -158,16 +158,17 @@ command set.
 
 ### New error codes
 
-Extending [ADR-0010](0010-error-taxonomy.md):
+Extending [ADR-0010](0010-error-taxonomy.md); these four occupy `-32044` through
+`-32047` (see the 2026-06-30 launch amendment there for the canonical range):
 
-- `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED` — recovery hint: `"run launch.trust to
-  bless this profile after reviewing the resolved command set"`.
-- `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` — recovery hint: `"the config file
-  must be a regular file, not a symlink; replace the symlink with the real file"`.
-- `SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR` — recovery hint: `"remove world-write
-  permission from the directory containing .substrate.toml"`.
-- `SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE` — recovery hint: `"set the trust store
-  to mode 0600 owned by the current user"`.
+- `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED` (-32044) — recovery hint: `"run
+  launch.trust to bless this profile after reviewing the resolved command set"`.
+- `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` (-32045) — recovery hint: `"the
+  config file must be a regular file, not a symlink; replace it with the real file"`.
+- `SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR` (-32046) — recovery hint: `"remove
+  world-write permission from the directory containing .substrate.toml"`.
+- `SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE` (-32047) — recovery hint: `"set the
+  trust store to mode 0600 owned by the current user"`.
 
 ### Trust flow diagram
 

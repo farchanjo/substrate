@@ -148,7 +148,7 @@ When substrate fails before the MCP `initialize` handshake, it cannot use the JS
 
 ### Recovery Hint Length Cap
 
-Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 43 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, and subprocess codes added by later amendments).
+Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 53 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
 
 ### JSON-RPC Standard Code Pass-Through
 
@@ -210,7 +210,7 @@ The top-level `recovery_hint` in the JSON-RPC `data` object retains its generic 
 - Unit tests assert that every `thiserror` variant maps to a known stable code.
 - Integration tests assert the `data` shape conforms to the CUE schema in `docs/arch/schemas/error_catalog.cue`.
 - `cargo-deny` ensures no dependency introduces a conflicting JSON-RPC error range.
-- `spec validate --lane full` validates CUE schema coverage for all 43 codes in the catalog (13 original + 6 kernel-induced documented here, plus the job, capability, startup, and subprocess codes added by later amendments).
+- `spec validate --lane full` validates CUE schema coverage for all 53 codes in the catalog (13 original + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
 - CUE schema asserts `len(recovery_hint) <= 150` for every code.
 - Integration tests for `SUBSTRATE_INVALID_ARGUMENT` assert `offending_field` is present in `data`.
 - Integration tests for proc-namespace errors assert `structuredContent.hints.error_recovery` carries the proc-specific hint.
@@ -270,3 +270,20 @@ Nine new runtime error codes are introduced for the subprocess BC. See [ADR-0052
 - `SUBSTRATE_SUBPROCESS_KILLED` (-32040) — subprocess received SIGKILL after the drain window expired (either from explicit `subprocess.cancel force=true`, from a timeout cascade, or from substrate shutdown drain). Category: cancellation. Cross-ref: ADR-0053 cascade, ADR-0055 orphan reaper.
 - `SUBSTRATE_ELICITATION_REQUIRED` (-32041) — tool requires operator confirmation via the MCP elicitation flow before execution proceeds; re-invoke with `elicitation_confirmed: true`. Category: user_consent. Cross-ref: ADR-0052 elicitation mandate, ADR-0004 Layer 4.
 - `SUBSTRATE_STREAM_CHUNK_DROPPED` (-32042) — a stream chunk for a subprocess job was dropped due to mpsc backpressure; the client was not draining the notifications/progress channel fast enough. Category: backpressure. Cross-ref: ADR-0054 bounded mpsc channel model.
+
+### 2026-06-30 — Launch BC error codes (ADR-0064 / ADR-0065 / ADR-0068)
+
+Ten new runtime error codes are introduced for the launch BC, occupying `-32044` through `-32053` in the substrate-reserved JSON-RPC range. See [ADR-0064](0064-launch-profile-trust-model.md) (trust model), [ADR-0065](0065-launch-dependency-graph-and-reconciler-reload.md) (dependency graph), and [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) (detached supervisor) for the corresponding decisions. All carry a `recovery_hint` ≤ 150 characters and are registered in `error_catalog.cue`.
+
+**Additions:**
+
+- `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED` (-32044) — Category: security. Cross-ref: ADR-0064 trust gate.
+- `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` (-32045) — Category: security. Cross-ref: ADR-0064 step 1 (O_NOFOLLOW).
+- `SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR` (-32046) — Category: security. Cross-ref: ADR-0064 step 2 (world-writable parent).
+- `SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE` (-32047) — Category: security. Cross-ref: ADR-0064 trust store permissions.
+- `SUBSTRATE_LAUNCH_CYCLE_DETECTED` (-32048) — Category: input. Cross-ref: ADR-0065 DAG validation.
+- `SUBSTRATE_LAUNCH_DEPENDENCY_FAILED` (-32049) — Category: lifecycle. Cross-ref: ADR-0065 readiness gate.
+- `SUBSTRATE_LAUNCH_ORPHAN_REAPED` (-32050) — Category: lifecycle. Cross-ref: ADR-0068 reaper-on-boot.
+- `SUBSTRATE_LAUNCH_ORPHAN_ADOPTED` (-32051) — Category: lifecycle. Cross-ref: ADR-0068 adopt path.
+- `SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED` (-32052) — Category: lifecycle. Cross-ref: ADR-0068 orphan TTL.
+- `SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` (-32053) — Category: lifecycle. Cross-ref: ADR-0068 detached supervisor liveness.

@@ -52,7 +52,18 @@ package schemas
 	"SUBSTRATE_SUBPROCESS_KILLED" |
 	"SUBSTRATE_ELICITATION_REQUIRED" |
 	"SUBSTRATE_STREAM_CHUNK_DROPPED" |
-	"SUBSTRATE_INVALID_STATE_TRANSITION"
+	"SUBSTRATE_INVALID_STATE_TRANSITION" |
+	// Launch BC errors per ADR-0064 + ADR-0065 + ADR-0068 (-32044 through -32053)
+	"SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED" |
+	"SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED" |
+	"SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR" |
+	"SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE" |
+	"SUBSTRATE_LAUNCH_CYCLE_DETECTED" |
+	"SUBSTRATE_LAUNCH_DEPENDENCY_FAILED" |
+	"SUBSTRATE_LAUNCH_ORPHAN_REAPED" |
+	"SUBSTRATE_LAUNCH_ORPHAN_ADOPTED" |
+	"SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED" |
+	"SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE"
 
 // #ErrorCategory classifies codes by operational concern.
 // "job" added per ADR-0010 amendment for async-job BC per ADR-0040.
@@ -346,5 +357,66 @@ package schemas
 		http_jsonrpc_code: -32043
 		recovery_hint:     "Report the correlation_id; this is an internal state machine violation."
 		category:          "internal"
+	}
+	// Launch BC errors per ADR-0064 (trust) + ADR-0065 (deps) + ADR-0068 (orphan).
+	SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED"
+		http_jsonrpc_code: -32044
+		recovery_hint:     "Run launch.trust to bless this .substrate.toml after reviewing it; its inode/content tuple is not in the trust store."
+		category:          "security"
+	}
+	SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED"
+		http_jsonrpc_code: -32045
+		recovery_hint:     "The .substrate.toml path is a symlink; replace it with a regular file. Symlinked config is rejected per ADR-0064."
+		category:          "security"
+	}
+	SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR"
+		http_jsonrpc_code: -32046
+		recovery_hint:     "The config's parent directory is world-writable or not owned by you; fix its ownership and permissions before launch.up."
+		category:          "security"
+	}
+	SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE"
+		http_jsonrpc_code: -32047
+		recovery_hint:     "Set ~/.config/substrate to mode 0700 and trust.toml to 0600 owned by you; the trust store permissions are too loose."
+		category:          "security"
+	}
+	SUBSTRATE_LAUNCH_CYCLE_DETECTED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_CYCLE_DETECTED"
+		http_jsonrpc_code: -32048
+		recovery_hint:     "Remove the dependency cycle from depends_on in .substrate.toml; run launch.list to inspect the graph before retrying."
+		category:          "input"
+	}
+	SUBSTRATE_LAUNCH_DEPENDENCY_FAILED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_DEPENDENCY_FAILED"
+		http_jsonrpc_code: -32049
+		recovery_hint:     "Check launch.status for the failed dependency; fix its readiness probe or set required=false to make it optional."
+		category:          "lifecycle"
+	}
+	SUBSTRATE_LAUNCH_ORPHAN_REAPED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_ORPHAN_REAPED"
+		http_jsonrpc_code: -32050
+		recovery_hint:     "A previously detached process was reaped on startup; re-run launch.up to restart the stack."
+		category:          "lifecycle"
+	}
+	SUBSTRATE_LAUNCH_ORPHAN_ADOPTED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_ORPHAN_ADOPTED"
+		http_jsonrpc_code: -32051
+		recovery_hint:     "A detached process was re-adopted on startup; use launch.status to inspect it."
+		category:          "lifecycle"
+	}
+	SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED"
+		http_jsonrpc_code: -32052
+		recovery_hint:     "The detached stack exceeded launch.orphan_ttl_secs without a client; re-run launch.up to restart it."
+		category:          "lifecycle"
+	}
+	SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE"
+		http_jsonrpc_code: -32053
+		recovery_hint:     "The detached supervisor is not responding; run launch.status to trigger reaper-on-boot."
+		category:          "lifecycle"
 	}
 }

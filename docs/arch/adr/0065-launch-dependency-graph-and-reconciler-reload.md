@@ -113,6 +113,18 @@ An added edge to a not-yet-ready dependency does not kill the dependent; it emit
 an advisory event and takes effect on that dependent's next restart. A removed
 edge is metadata only.
 
+### New error codes
+
+Extending [ADR-0010](0010-error-taxonomy.md); these two occupy `-32048` and
+`-32049` (see the 2026-06-30 launch amendment there for the canonical range):
+
+- `SUBSTRATE_LAUNCH_CYCLE_DETECTED` (-32048) — recovery hint: `"remove the
+  dependency cycle from depends_on in .substrate.toml; run launch.list to inspect
+  the graph before retrying"`.
+- `SUBSTRATE_LAUNCH_DEPENDENCY_FAILED` (-32049) — recovery hint: `"check
+  launch.status for the failed dependency; fix its readiness probe or set
+  required=false to make it optional"`.
+
 ### Non-atomicity and degradation
 
 Reload is incremental best-effort, not transactional. A Service that fails to
@@ -191,6 +203,8 @@ flowchart TD
 
 ## Links
 
+- [ADR-0010](0010-error-taxonomy.md) — error taxonomy extended with the launch
+  dependency-graph codes (`CYCLE_DETECTED`, `DEPENDENCY_FAILED`)
 - [ADR-0056](0056-subprocess-supervisor-semantics.md) — per-process readiness
   (`Ready`), health probes, restart policy, crash-loop budget reused here
 - [ADR-0063](0063-launch-orchestration-bounded-context.md) — launch BC; Stack and
