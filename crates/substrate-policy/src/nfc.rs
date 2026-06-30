@@ -30,7 +30,17 @@ use unicode_normalization::UnicodeNormalization;
 ///
 /// This is idempotent: normalizing an already-NFC path yields the same path.
 #[must_use]
-pub fn normalize_path(path: &Path) -> PathBuf {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "clippy::redundant_pub_crate and clippy::unreachable_pub directly \
+              contradict each other for a pub(crate) item inside a private \
+              module (each lint's suggested fix is what the other flags); \
+              pub(crate) is the semantically correct choice — this helper is \
+              used across sibling modules (allowlist.rs, linux/mod.rs, \
+              macos/mod.rs, userspace_jail.rs) but is intentionally not part \
+              of substrate-policy's public crate API"
+)]
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     path.to_str().map_or_else(
         || path.to_path_buf(),
         |utf8| PathBuf::from(utf8.nfc().collect::<String>()),
@@ -44,7 +54,13 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 /// containment post-check, so a kernel-resolved path in one normalization form
 /// still matches a stored root in the other form on macOS APFS/HFS+ volumes.
 #[must_use]
-pub fn is_contained(candidate: &Path, root: &Path) -> bool {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "see normalize_path above — clippy::redundant_pub_crate and \
+              clippy::unreachable_pub contradict each other for a pub(crate) \
+              item inside a private module"
+)]
+pub(crate) fn is_contained(candidate: &Path, root: &Path) -> bool {
     normalize_path(candidate).starts_with(normalize_path(root))
 }
 
