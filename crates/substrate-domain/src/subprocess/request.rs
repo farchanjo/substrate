@@ -140,6 +140,17 @@ pub struct SubprocessRequest {
     /// Default: `None` (tmp file grows unbounded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_rotation: Option<LogRotation>,
+
+    /// POSIX signal number to bind via `PR_SET_PDEATHSIG` (Linux only) so this
+    /// child dies if its spawning process dies, even across re-parenting.
+    ///
+    /// Set only by the launch BC's detached supervisor (ADR-0068) for Services
+    /// it spawns; `None` for every ordinary `subprocess.spawn` call, which has
+    /// no supervisor concept. macOS and Windows ignore this field (no kernel
+    /// parent-death primitive for arbitrary children; ADR-0068 documents the
+    /// `pgid` + reaper-on-boot fallback for those platforms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_death_signal: Option<i32>,
 }
 
 impl SubprocessRequest {

@@ -184,7 +184,7 @@ async fn given_subprocess_running_sleep_100(world: &mut SubstrateWorld) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     match registry.spawn(req, &NoCancel).await {
         Ok(handle) => {

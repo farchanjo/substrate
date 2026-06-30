@@ -123,7 +123,7 @@ async fn when_spawn_binary_with_args(
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match &result {
@@ -193,7 +193,7 @@ async fn when_spawn_binary(world: &mut SubstrateWorld, binary_path: String) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match &result {

@@ -120,7 +120,7 @@ async fn given_three_jobs_running(world: &mut SubstrateWorld) {
             restart_policy: None,
             health_probe: None,
             log_rotation: None,
-        };
+            parent_death_signal: None,        };
         match registry.spawn(req, &NoCancel).await {
             Ok(handle) => {
                 job_ids.push(handle.job_id.to_string());
@@ -397,7 +397,7 @@ async fn given_subprocess_with_pdeathsig(world: &mut SubstrateWorld) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     match registry.spawn(req, &NoCancel).await {
         Ok(handle) => {

@@ -167,7 +167,7 @@ async fn when_client_spawns_fifth(world: &mut SubstrateWorld) {
             restart_policy: None,
             health_probe: None,
             log_rotation: None,
-        };
+            parent_death_signal: None,        };
         if let Ok(h) = registry.spawn(req, &NoCancel).await {
             job_ids.push(h.job_id)
         } else {
@@ -220,7 +220,7 @@ async fn when_client_spawns_fifth(world: &mut SubstrateWorld) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     match registry.spawn(fifth_req, &NoCancel).await {
         Ok(h) => {

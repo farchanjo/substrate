@@ -86,7 +86,7 @@ async fn given_spawn_without_elicitation(world: &mut SubstrateWorld) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match result {
@@ -150,7 +150,7 @@ async fn given_spawn_with_banned_env(world: &mut SubstrateWorld, banned_key: Str
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match result {
@@ -264,7 +264,7 @@ async fn then_reinvocation_also_blocked(_world: &mut SubstrateWorld) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-    };
+        parent_death_signal: None,    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match result {
