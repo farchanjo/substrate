@@ -160,14 +160,17 @@ fn initialize_returns_protocol_2025_11_25_and_capabilities() {
 
 // ---- tools/list test ---------------------------------------------------------
 
-/// Expected `tools/list` length. The four always-on tools proc_stats,
-/// proc_top, sys_mem, and sys_cpu were added to the registry in addition to the
-/// original 41; the `subprocess` feature contributes six more
+/// Expected `tools/list` length. The four always-on tools `proc_stats`,
+/// `proc_top`, `sys_mem`, and `sys_cpu` were added to the registry in addition to
+/// the original 41; the `subprocess` feature contributes six more
 /// (spawn/list/cancel/result/signal/search).
-#[cfg(not(feature = "subprocess"))]
-const EXPECTED_TOOLS: usize = 45;
-#[cfg(feature = "subprocess")]
+// `launch` implies `subprocess`, so the launch build carries 45 + 6 + 9 = 60.
+#[cfg(feature = "launch")]
+const EXPECTED_TOOLS: usize = 60;
+#[cfg(all(feature = "subprocess", not(feature = "launch")))]
 const EXPECTED_TOOLS: usize = 51;
+#[cfg(all(not(feature = "subprocess"), not(feature = "launch")))]
+const EXPECTED_TOOLS: usize = 45;
 
 #[test]
 fn tools_list_returns_expected_tool_count() {
