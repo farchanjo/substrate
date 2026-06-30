@@ -450,3 +450,9 @@ of an existing job.
   to zero on each re-spawn
 - [ADR-0007](0007-tool-card-narrative-arc.md) — tool card narrative arc; `subprocess.spawn`
   description amended for idempotent-by-name AVOID/NEXT hints
+- [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) — launch detached
+  supervisor; Option C scoped exception, per-process restart policy reused
+
+## Amendment — 2026-06-30 — Launch detached supervisor: Option C scoped exception (ADR-0068)
+
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) carves a narrow, opt-in exception to the no-sidecar Option C recorded here, for launch detached mode only: a Stack with `on_client_disconnect = "detach"` is supervised by the same `substrate` binary in `--supervise` mode (no second artifact, no socket), so a Stack can outlive the MCP server while staying governable. Every other context retains the in-server, no-sidecar supervisor model of this ADR; the per-process `RestartPolicy`/`HealthProbe` semantics defined here are reused unchanged by the launch supervisor.

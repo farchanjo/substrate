@@ -67,10 +67,12 @@ Option C.
 ### Scoped exception to the anti-sidecar posture
 
 This ADR carves a narrow exception to
-[ADR-0015](0015-distribution.md), [ADR-0052](0052-subprocess-execution-architecture.md)
-(Option C), and [ADR-0056](0056-subprocess-supervisor-semantics.md) (Option C),
-and extends [ADR-0055](0055-orphan-reaper-on-startup.md) from a file-only reaper
-to a process reaper with an adopt-or-reap decision. The exception is bounded by:
+[ADR-0052](0052-subprocess-execution-architecture.md) (Option C) and
+[ADR-0056](0056-subprocess-supervisor-semantics.md) (Option C), and extends
+[ADR-0055](0055-orphan-reaper-on-startup.md) from a file-only reaper to a process
+reaper with an adopt-or-reap decision. The single-binary distribution invariant of
+[ADR-0015](0015-distribution.md) is **preserved, not excepted** — `--supervise` is
+the same artifact. The exception is bounded by:
 
 - **Same binary.** The detached supervisor is `substrate` invoked as
   `--supervise <stack>`, not a second artifact. The distribution remains a single
@@ -308,7 +310,7 @@ The supervisor-hardening codes below occupy `-32054` through `-32056` (see the
   filesystem/FIFO only, no socket
 - [ADR-0010](0010-error-taxonomy.md) — error taxonomy extended with orphan codes
 - [ADR-0015](0015-distribution.md) — single binary; `--supervise` is the same
-  binary (scoped exception)
+  binary (invariant preserved, not excepted)
 - [ADR-0033](0033-transactional-write-pattern.md) — atomic temp-plus-rename for the
   registry
 - [ADR-0052](0052-subprocess-execution-architecture.md) — Option C (sidecar)

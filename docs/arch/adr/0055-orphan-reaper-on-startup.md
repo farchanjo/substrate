@@ -265,3 +265,8 @@ transactional write pattern even without the subprocess feature).
 - [ADR-0038](0038-audit-event-semantics.md) — audit event semantics
 - [ADR-0052](0052-subprocess-execution-architecture.md) — subprocess BC architecture
 - [ADR-0053](0053-process-lifecycle-cascade-contract.md) — cascade kill contract; watchdog pipe
+- [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) — launch reaper extends this file-only reaper to a process adopt-or-reap reaper
+
+## Amendment — 2026-06-30 — Extended to a process adopt-or-reap reaper by the launch BC (ADR-0068)
+
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) extends the startup reaper recorded here from a temporary-file-only reaper to one that also adopts or reaps **detached supervised processes** on boot. The launch supervisor records each child with a `start_epoch` start-time pin; the reaper re-validates the live start-time before any adopt/re-attach/`killpg`, treating a mismatch as pid recycling (`SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED`, no signal sent). The temporary-file reaping recorded in this ADR is unchanged and runs alongside the process reaper.

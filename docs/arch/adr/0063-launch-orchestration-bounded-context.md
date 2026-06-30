@@ -138,14 +138,20 @@ Supervisor is the owner of the children. Two execution modes:
   server re-attaches to it.
 
 This is a scoped exception to the anti-sidecar posture of
-[ADR-0015](0015-distribution.md), [ADR-0052](0052-subprocess-execution-architecture.md)
-(Option C), and [ADR-0056](0056-subprocess-supervisor-semantics.md) (Option C),
-justified narrowly: the detached supervisor is the *same* distributed binary in a
-documented mode (no second artifact), communicates only over the filesystem and
-FIFOs (no network or Unix socket, preserving [ADR-0005](0005-stdio-transport.md)),
-and exists solely to make detached survival governable. Amendment notes are added
-to the affected ADRs. Detached mode is opt-in; the default ships the in-session
-model those ADRs already sanction.
+[ADR-0052](0052-subprocess-execution-architecture.md) (Option C) and
+[ADR-0056](0056-subprocess-supervisor-semantics.md) (Option C), justified narrowly:
+the detached supervisor is the *same* distributed binary in a documented mode (no
+second artifact, so the single-binary invariant of
+[ADR-0015](0015-distribution.md) is preserved, not excepted), communicates only
+over the filesystem and FIFOs (no network or Unix socket, preserving
+[ADR-0005](0005-stdio-transport.md)), and exists solely to make detached survival
+governable. Dated forward-link amendments are added to the four affected ADRs —
+[ADR-0015](0015-distribution.md) (invariant held),
+[ADR-0052](0052-subprocess-execution-architecture.md) and
+[ADR-0056](0056-subprocess-supervisor-semantics.md) (Option C scoped exception),
+and [ADR-0055](0055-orphan-reaper-on-startup.md) (file reaper extended to process
+adopt-or-reap). Detached mode is opt-in; the default ships the in-session model
+those ADRs already sanction.
 
 ### Zero-orphan guarantee (defence in depth)
 

@@ -62,3 +62,8 @@ Chosen option: "single static binary with full signing, notarization, SBOM, and 
 - ADR-0014 — Build reproducibility (reproducible builds feed the signing pipeline)
 - ADR-0021 — Minimum supported OS versions (constrains Darwin SDK and musl target selection)
 - ADR-0023 — CI/CD pipeline (release workflow orchestration)
+- [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) — launch detached supervisor; `--supervise` keeps the single-binary invariant
+
+## Amendment — 2026-06-30 — Launch detached supervisor preserves the single-binary invariant (ADR-0068)
+
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) runs the launch detached supervisor as the same `substrate` binary in a documented `--supervise <stack>` mode (`setsid`-detached, filesystem/FIFO IPC only, no second artifact and no socket). The single-binary distribution invariant recorded in this ADR is therefore **preserved, not excepted**: there is no separate supervisor artifact to build, sign, or distribute.

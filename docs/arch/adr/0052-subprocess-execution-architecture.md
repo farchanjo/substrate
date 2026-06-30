@@ -391,3 +391,7 @@ Cross-references: [ADR-0004](0004-security-model.md) — Layer 5 binary/cwd
 allowlist; [ADR-0035](0035-path-safety-hardening.md) — filesystem TOCTOU class
 and kernel-atomic resolution that this invariant mirrors for the subprocess
 exec path.
+
+## Amendment 2026-06-30: launch detached supervisor — Option C scoped exception (ADR-0068)
+
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) carves a narrow, opt-in exception to the no-sidecar / socket-free Option C recorded in this ADR, for launch detached mode only: a launch Stack with `on_client_disconnect = "detach"` is supervised by the same `substrate` binary in a documented `--supervise <stack>` mode, detached via `setsid`, communicating only over the filesystem and FIFOs (no second artifact, no socket — the STDIO-only transport and single-binary distribution are preserved). Every Service spawn still passes the Layer 5 controls and the check-to-exec invariant above. Every other context retains the in-server, no-detached-supervisor model of this ADR.
