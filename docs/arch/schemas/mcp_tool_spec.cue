@@ -3,10 +3,11 @@ package schemas
 
 import "strings"
 
-// #ToolNamespace enumerates the eight stable tool namespaces.
+// #ToolNamespace enumerates the nine stable tool namespaces.
 // The "job" namespace was added 2026-05-21 per ADR-0040 (async job control-plane).
 // The "subprocess" namespace was added per ADR-0052 and "net" per ADR-0058.
-#ToolNamespace: "fs" | "proc" | "sys" | "text" | "archive" | "job" | "subprocess" | "net"
+// The "launch" namespace was added per ADR-0069 (declarative process orchestration).
+#ToolNamespace: "fs" | "proc" | "sys" | "text" | "archive" | "job" | "subprocess" | "net" | "launch"
 
 // #ToolBucket classifies every tool into a dispatch bucket per ADR-0040.
 // A_sync_inline: snapshot-instant, always synchronous (e.g. sys.uname, sys.info).
@@ -38,8 +39,8 @@ import "strings"
 #ToolSpec: {
 	// name must follow <namespace>_<snake_case> and be non-empty (wire form per
 	// ADR-0062). "job" namespace added 2026-05-21 per ADR-0040; "subprocess" per
-	// ADR-0052; "net" per ADR-0058.
-	name: string & =~"^(fs|proc|sys|text|archive|job|subprocess|net)_[a-z][a-z0-9_]*$"
+	// ADR-0052; "net" per ADR-0058; "launch" per ADR-0069.
+	name: string & =~"^(fs|proc|sys|text|archive|job|subprocess|net|launch)_[a-z][a-z0-9_]*$"
 
 	// description is the thin one-liner shown verbatim in client tool listings.
 	// Capped at 100 chars per the ADR-0007 2026-05-22 amendment (MCP + skill

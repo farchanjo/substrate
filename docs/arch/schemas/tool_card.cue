@@ -51,8 +51,9 @@ import "strings"
 	// job_progress_pct is the completion percentage 0-100; absent for terminal or not-yet-started jobs (per ADR-0040).
 	job_progress_pct?: int & >=0 & <=100
 
-	// polling_endpoint names the control-plane tool to call for status or result retrieval (per ADR-0040).
-	polling_endpoint?: "job.status" | "job.result"
+	// polling_endpoint names the control-plane tool to call for status or result retrieval
+	// (per ADR-0040). "launch.status" added per ADR-0069 for launch-stack bring-up tasks.
+	polling_endpoint?: "job.status" | "job.result" | "launch.status"
 
 	// estimated_completion_ms is a best-effort completion estimate in milliseconds; absent when unknown (per ADR-0040).
 	estimated_completion_ms?: int & >=0
@@ -65,6 +66,12 @@ import "strings"
 
 	// walker_tier_used is a diagnostic annotation identifying the DirWalker tier chosen at runtime (per ADR-0042).
 	walker_tier_used?: string
+
+	// stack_id is the UUIDv7 of the launch Stack a response belongs to (per ADR-0069). Launch BC only.
+	stack_id?: =~"^[0-9A-HJKMNP-TV-Z]{26}$"
+
+	// stack_state is the current launch StackState for the associated stack (per ADR-0069). Launch BC only.
+	stack_state?: "Pending" | "Starting" | "Running" | "Degraded" | "Draining" | "Detached" | "Down"
 }
 
 // #ToolArg describes a single named argument accepted by a tool.
