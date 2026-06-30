@@ -65,6 +65,8 @@ rmcp = { version = "1.7", default-features = false, features = ["server", "trans
 # Security / filesystem
 strict-path = "0.2"
 nix = { version = "0.30", features = ["fs", "process", "signal", "user", "hostname"] }
+# PIPE_BUF (control-FIFO atomic-write framing bound, ADR-0068) only; no other libc use.
+libc = "0.2"
 # Unicode NFC normalization for path-jail comparison (ADR-0035 Decision 6)
 unicode-normalization = "0.1"
 
