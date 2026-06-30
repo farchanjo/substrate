@@ -34,13 +34,6 @@
 //! `run_stdio_server` and call `Arc<dyn JobRegistryPort>::cancel(&job_id)` where
 //! `job_id == progressToken` (triple-equality per ADR-0040 §3.1).
 
-// All items in this module are wired to rmcp in Wave G. Until then the
-// scaffolding compiles but is not yet called by the dispatch loop.
-#![expect(
-    dead_code,
-    reason = "Wave G wires ToolDispatcher into the rmcp STDIO dispatch loop; all items used then"
-)]
-
 use std::sync::Arc;
 
 use serde_json::Value;
