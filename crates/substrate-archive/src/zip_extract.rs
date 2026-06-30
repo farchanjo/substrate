@@ -344,10 +344,10 @@ fn extract_zip_into_staging(
 /// extraction. The parent of `dest_root` must already exist (it was jailed).
 fn make_staging_dir(dest_root: &std::path::Path) -> SubstrateResult<std::path::PathBuf> {
     let suffix = crockford_base32(uuid::Uuid::now_v7().as_bytes());
-    let dir_name = match dest_root.file_name().and_then(|n| n.to_str()) {
-        Some(name) => format!("{name}.tmp.{suffix}"),
-        None => format!("extract.tmp.{suffix}"),
-    };
+    let dir_name = dest_root.file_name().and_then(|n| n.to_str()).map_or_else(
+        || format!("extract.tmp.{suffix}"),
+        |name| format!("{name}.tmp.{suffix}"),
+    );
     let parent = dest_root
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));

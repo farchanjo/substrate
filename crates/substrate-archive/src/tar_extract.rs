@@ -269,7 +269,7 @@ fn scan_tar_members(
 /// routed through target validation so a crafted entry cannot escape the root
 /// (ADR-0035). Devices, FIFOs, and other special types map to `Other` and are
 /// skipped during extraction.
-fn classify_entry(entry_type: tar::EntryType) -> EntryKind {
+const fn classify_entry(entry_type: tar::EntryType) -> EntryKind {
     match entry_type {
         tar::EntryType::Symlink | tar::EntryType::Link => EntryKind::Symlink,
         tar::EntryType::Regular | tar::EntryType::Continuous => EntryKind::File,
@@ -341,10 +341,10 @@ fn extract_tar_blocking(
 /// extraction. The parent of `dest_root` must already exist (it was jailed).
 fn make_staging_dir(dest_root: &std::path::Path) -> SubstrateResult<std::path::PathBuf> {
     let suffix = crockford_base32(uuid::Uuid::now_v7().as_bytes());
-    let dir_name = match dest_root.file_name().and_then(|n| n.to_str()) {
-        Some(name) => format!("{name}.tmp.{suffix}"),
-        None => format!("extract.tmp.{suffix}"),
-    };
+    let dir_name = dest_root.file_name().and_then(|n| n.to_str()).map_or_else(
+        || format!("extract.tmp.{suffix}"),
+        |name| format!("{name}.tmp.{suffix}"),
+    );
     let parent = dest_root
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
@@ -435,7 +435,7 @@ fn extract_entries<R: std::io::Read>(
         if kind == EntryKind::Directory {
             create_dir_all_mapped(&resolved)?;
         } else if kind == EntryKind::Symlink {
-            extract_symlink_entry(&mut entry, dest_root, &resolved)?;
+            extract_symlink_entry(&entry, dest_root, &resolved)?;
         } else if kind == EntryKind::File {
             extract_file_entry(&mut entry, &resolved, &mut total_guard)?;
         } else {
@@ -457,7 +457,7 @@ fn create_dir_all_mapped(path: &std::path::Path) -> SubstrateResult<()> {
 
 /// Validates and restores a symlink (or hard-linked) member (ADR-0004 §symlink-validation).
 fn extract_symlink_entry<R: std::io::Read>(
-    entry: &mut tar::Entry<'_, R>,
+    entry: &tar::Entry<'_, R>,
     dest_root: &std::path::Path,
     resolved: &std::path::Path,
 ) -> SubstrateResult<()> {
