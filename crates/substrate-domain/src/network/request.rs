@@ -52,16 +52,16 @@ impl NetworkTcpListRequest {
     /// - [`SubstrateError::InvalidArgument`] when `state_filter` is `Some` but empty.
     /// - [`SubstrateError::InvalidArgument`] when `pagination` fails its own validation.
     pub fn validate(&self) -> Result<(), SubstrateError> {
-        if let Some(ref states) = self.state_filter {
-            if states.is_empty() {
-                return Err(SubstrateError::InvalidArgument {
-                    offending_field: "state_filter".to_string(),
-                    reason: "state_filter must contain at least one TcpState when set; \
-                             omit the field to return all states"
-                        .to_string(),
-                    correlation_id: None,
-                });
-            }
+        if let Some(ref states) = self.state_filter
+            && states.is_empty()
+        {
+            return Err(SubstrateError::InvalidArgument {
+                offending_field: "state_filter".to_string(),
+                reason: "state_filter must contain at least one TcpState when set; \
+                         omit the field to return all states"
+                    .to_string(),
+                correlation_id: None,
+            });
         }
         if let Some(ref p) = self.pagination {
             p.validate().map_err(|e| SubstrateError::InvalidArgument {

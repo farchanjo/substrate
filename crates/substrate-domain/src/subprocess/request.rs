@@ -153,7 +153,19 @@ impl SubprocessRequest {
     ///
     /// Returns the first validation failure encountered as a `SubprocessError`.
     pub fn validate(&self) -> Result<(), SubprocessError> {
-        // binary_path must be absolute.
+        self.validate_paths()?;
+        self.validate_env()?;
+        self.validate_timeout()?;
+        self.validate_elicitation()?;
+        self.validate_name()?;
+        self.validate_restart_policy()?;
+        self.validate_health_probe()?;
+        self.validate_log_rotation()?;
+        Ok(())
+    }
+
+    /// Validates `binary_path` and `cwd` are absolute paths.
+    fn validate_paths(&self) -> Result<(), SubprocessError> {
         if !self.binary_path.is_absolute() {
             return Err(SubprocessError::InvalidRequest {
                 msg: format!(
@@ -163,21 +175,23 @@ impl SubprocessRequest {
             });
         }
 
-        // cwd must be absolute.
         if !self.cwd.is_absolute() {
             return Err(SubprocessError::InvalidRequest {
                 msg: format!("cwd must be absolute; got '{}'", self.cwd.display()),
             });
         }
 
-        // Check env_allowlist for banned keys.
+        Ok(())
+    }
+
+    /// Validates `env_allowlist` and `env_override` against `BANNED_ENV_VARS`.
+    fn validate_env(&self) -> Result<(), SubprocessError> {
         for key in &self.env_allowlist {
             if BANNED_ENV_VARS.contains(&key.as_str()) {
                 return Err(SubprocessError::EnvBanned { var: key.clone() });
             }
         }
 
-        // Check env_override for banned keys.
         for key in self.env_override.keys() {
             if BANNED_ENV_VARS.contains(&key.as_str()) {
                 return Err(SubprocessError::EnvBanned { var: key.clone() });
@@ -187,7 +201,11 @@ impl SubprocessRequest {
         // stdin_file_path is required iff stdin_kind is FilePath.
         // (FilePath carries the path directly in the enum variant — always present.)
 
-        // Validate timeout_secs range.
+        Ok(())
+    }
+
+    /// Validates `timeout_secs` falls within `MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS`.
+    fn validate_timeout(&self) -> Result<(), SubprocessError> {
         if let Some(secs) = self.timeout_secs
             && !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&secs)
         {
@@ -198,17 +216,28 @@ impl SubprocessRequest {
             });
         }
 
-        // Elicitation confirmation check: informational only at validate() time;
-        // the port implementation must also check this before spawning.
+        Ok(())
+    }
+
+    /// Validates `elicitation_confirmed` is `true`.
+    ///
+    /// Informational only at `validate()` time; the port implementation must
+    /// also check this before spawning.
+    fn validate_elicitation(&self) -> Result<(), SubprocessError> {
         if !self.elicitation_confirmed {
             return Err(SubprocessError::ElicitationRequired {
                 tool: "subprocess.spawn".to_owned(),
             });
         }
 
-        // Validate `name` format: ^[a-z0-9-]{1,64}$
-        // The regex crate is not a substrate-domain dependency (zero infra deps rule
-        // per ADR-0022); validate inline with a hand-rolled ASCII predicate.
+        Ok(())
+    }
+
+    /// Validates `name` matches `^[a-z0-9-]{1,64}$`.
+    ///
+    /// The regex crate is not a substrate-domain dependency (zero infra deps rule
+    /// per ADR-0022); validated inline with a hand-rolled ASCII predicate.
+    fn validate_name(&self) -> Result<(), SubprocessError> {
         if let Some(name) = &self.name {
             if name.is_empty() || name.len() > 64 {
                 return Err(SubprocessError::InvalidRequest {
@@ -225,7 +254,11 @@ impl SubprocessRequest {
             }
         }
 
-        // Validate `restart_policy` bounds.
+        Ok(())
+    }
+
+    /// Validates `restart_policy` bounds.
+    fn validate_restart_policy(&self) -> Result<(), SubprocessError> {
         match &self.restart_policy {
             None | Some(RestartPolicy::Never) => {},
             Some(RestartPolicy::OnFailure {
@@ -258,7 +291,11 @@ impl SubprocessRequest {
             },
         }
 
-        // Validate `health_probe` bounds.
+        Ok(())
+    }
+
+    /// Validates `health_probe` bounds.
+    fn validate_health_probe(&self) -> Result<(), SubprocessError> {
         match &self.health_probe {
             None | Some(HealthProbe::None) => {},
             Some(HealthProbe::HttpGet {
@@ -338,7 +375,11 @@ impl SubprocessRequest {
             },
         }
 
-        // Validate `log_rotation` bounds and cross-field constraint with `capture_kind`.
+        Ok(())
+    }
+
+    /// Validates `log_rotation` bounds and cross-field constraint with `capture_kind`.
+    fn validate_log_rotation(&self) -> Result<(), SubprocessError> {
         match &self.log_rotation {
             None | Some(LogRotation::None) => {},
             Some(LogRotation::BySize {

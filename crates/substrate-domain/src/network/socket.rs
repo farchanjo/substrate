@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 /// IP transport-layer protocol for a socket entry.
 ///
-/// Serialized as `"Tcp"` / `"Udp"` (PascalCase) to match the CUE wire format.
+/// Serialized as `"Tcp"` / `"Udp"` (`PascalCase`) to match the CUE wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum Protocol {
@@ -26,7 +26,7 @@ pub enum Protocol {
 
 /// IP address family for a socket entry.
 ///
-/// Serialized as `"Inet"` / `"Inet6"` (PascalCase) to match the CUE wire format.
+/// Serialized as `"Inet"` / `"Inet6"` (`PascalCase`) to match the CUE wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum AddrFamily {
@@ -40,7 +40,7 @@ pub enum AddrFamily {
 
 /// TCP connection state as reported by the OS.
 ///
-/// Serialized as PascalCase (e.g., `"Established"`, `"TimeWait"`) to match the
+/// Serialized as `PascalCase` (e.g., `"Established"`, `"TimeWait"`) to match the
 /// CUE wire format. `Unknown` covers any OS-reported state that falls outside the
 /// RFC 793 state machine (e.g., Linux internal states on SYN cookies).
 ///
@@ -105,7 +105,7 @@ mod tests {
         );
     }
 
-    /// Verify that every named variant serializes to and from PascalCase.
+    /// Verify that every named variant serializes to and from `PascalCase`.
     #[test]
     fn tcp_state_all_variants_round_trip() {
         let cases: &[(TcpState, &str)] = &[

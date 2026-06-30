@@ -100,7 +100,7 @@ pub enum LogRotation {
     /// Keeps the last `keep_files` rotated files; the oldest beyond that limit
     /// are unlinked. Cumulative storage cap = `max_bytes_per_file * keep_files`.
     BySize {
-        /// Maximum size of each rotated file in bytes. Range: 1_048_576..=1_073_741_824 (1 MiB..=1 GiB).
+        /// Maximum size of each rotated file in bytes. Range: `1_048_576..=1_073_741_824` (1 MiB..=1 GiB).
         max_bytes_per_file: u64,
         /// Number of rotated files to keep. Range: 1..=20.
         keep_files: u8,

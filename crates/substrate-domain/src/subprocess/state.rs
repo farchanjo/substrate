@@ -87,30 +87,29 @@ impl SubprocessState {
     pub const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Pending, Self::Starting | Self::Cancelled)
-                | (
-                    Self::Starting,
-                    Self::Running | Self::Failed | Self::Cancelled
-                )
-                | (
-                    Self::Running,
-                    Self::Ready
-                        | Self::Succeeded
-                        | Self::Failed
-                        | Self::Cancelled
-                        | Self::Killed
-                        | Self::TimedOut
-                )
-                | (
-                    Self::Ready,
-                    Self::Restarting
-                        | Self::Succeeded
-                        | Self::Failed
-                        | Self::Cancelled
-                        | Self::Killed
-                        | Self::TimedOut
-                )
-                | (Self::Restarting, Self::Starting | Self::Cancelled)
+            (
+                Self::Pending | Self::Restarting,
+                Self::Starting | Self::Cancelled
+            ) | (
+                Self::Starting,
+                Self::Running | Self::Failed | Self::Cancelled
+            ) | (
+                Self::Running,
+                Self::Ready
+                    | Self::Succeeded
+                    | Self::Failed
+                    | Self::Cancelled
+                    | Self::Killed
+                    | Self::TimedOut
+            ) | (
+                Self::Ready,
+                Self::Restarting
+                    | Self::Succeeded
+                    | Self::Failed
+                    | Self::Cancelled
+                    | Self::Killed
+                    | Self::TimedOut
+            )
         )
     }
 }

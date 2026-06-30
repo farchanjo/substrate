@@ -1,7 +1,7 @@
 //! `StreamChunkObserver` — push-channel abstraction for subprocess stdout/stderr chunks per ADR-0054.
 //!
 //! Implementations receive each `StreamChunk` produced by the per-job dispatcher task
-//! (the GoF Mediator) and the terminal sentinel on subprocess exit. The dispatcher
+//! (the `GoF` Mediator) and the terminal sentinel on subprocess exit. The dispatcher
 //! iterates `Vec<Arc<dyn StreamChunkObserver>>` and calls `on_chunk` synchronously
 //! per-observer. The `NoopStreamObserver` is the null object for headless/test contexts.
 //!
