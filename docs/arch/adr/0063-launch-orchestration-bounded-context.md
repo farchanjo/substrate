@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -307,3 +307,24 @@ sequenceDiagram
 - [ADR-0056](0056-subprocess-supervisor-semantics.md) — per-process supervisor
   semantics composed by each Service; Option C scoped exception
 - [ADR-0062](0062-tool-naming-convention.md) — `launch.*` tool namespace
+
+## Amendments
+
+### 2026-06-30 — Accepted; MVP landed as the substrate-launch crate
+
+The launch BC is implemented as the `substrate-launch` workspace crate (gated
+behind the default-off Cargo feature `launch`) and registered in
+`substrate-mcp-server` as nine `launch.*` tools. Status moves from `proposed` to
+`accepted`. The MVP composes every Service through the injected `SubprocessPort`
+(no `tokio::process::Command` in `substrate-launch`, so no `no_subprocess.rego`
+exception is required): `launch.init` / `list` / `trust` / `up` (in-session,
+readiness-gated topological start) / `status` / `logs` / `restart` / `reload`
+(diff: added/removed/edge-only) / `down` (reverse-topological).
+
+The **detached supervisor** ([ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md):
+`--supervise` self-fork, control FIFO, `mio` reactor, reaper-on-boot, orphan
+adopt/reap, TTL, PID-recycle, PIPE_BUF framing) is deferred to **Milestone 2**.
+Until then an `on_client_disconnect = detach` request returns
+`SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` before any spawn, and the MVP enforces
+`shutdown` semantics. Reload subgraph-degrade and event-replay summary are
+likewise deferred (tail-only logs in the MVP).

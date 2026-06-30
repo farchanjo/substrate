@@ -260,6 +260,26 @@ flowchart TD
 - Security test: an intermediate parent component is a symlink; assert
   `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` via the full-path symlink-safe open.
 
+## Amendments
+
+### 2026-06-30 — MVP trust gate: leaf-only O_NOFOLLOW (full-path guard deferred)
+
+The `substrate-launch` MVP implements the TOFU gate with a per-target
+`O_NOFOLLOW` open of the Profile leaf plus an `lstat` leaf check
+(`SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` on a symlinked leaf), the
+world-writable parent-directory check (`SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR`),
+the `0600`/owner trust-store gate, the BLAKE3-over-the-opened-bytes hash, the
+full-tuple trust lookup, and parse-from-hashed-buffer — the five-step
+TOCTOU-closed sequence. It does NOT yet provide the **intermediate-parent-symlink**
+guarantee of the Validation bullet above: `substrate-policy`'s
+`openat2(RESOLVE_NO_SYMLINKS)` / `O_NOFOLLOW_ANY` helper is private
+(`pub(crate)`), and the workspace forbids `unsafe` in `substrate-launch`, so the
+full-path symlink-safe open lands when the policy helper is exported (or a
+`substrate-launch-sys` crate is added) — tracked with the detached supervisor as
+**Milestone 2**. The leaf `O_NOFOLLOW` + parent-directory-permission +
+content-hash subset still closes the clone-and-run and co-resident-swap threats
+for the MVP.
+
 ## Links
 
 - [ADR-0004](0004-security-model.md) — defense-in-depth security model; trust is
