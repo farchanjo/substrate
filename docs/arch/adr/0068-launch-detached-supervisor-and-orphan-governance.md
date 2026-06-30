@@ -342,3 +342,89 @@ for the deviations they each defer to it. Nothing in this ADR is built yet:
 `--supervise` self-fork, control FIFO, `mio` reactor, `pidfd`/`kqueue`
 child-exit sources, and reaper-on-boot all remain **Milestone 2** work. The
 MVP enforces `shutdown` semantics unconditionally.
+
+### 2026-06-30 — Milestone 2 implemented (Linux + macOS); deviations from the literal design
+
+The detached supervisor is built and `on_client_disconnect = detach` works end
+to end: `LaunchRegistry::up` forks `substrate --supervise <stack_id> --profile
+<path>` (`ProcessDetachLauncher`, `crates/substrate-launch/src/registry.rs`)
+and polls the durable `supervisor.json` (100ms interval, 10s timeout) before
+returning; a fresh MCP server reaps/re-attaches detached Stacks left by a
+prior session at startup (`reaper::reconcile_sweep`, wired into
+`composition.rs`). Three deliberate deviations from this ADR's literal
+mechanism, each preserving the functional guarantee while avoiding new
+architectural surface:
+
+- **Reactor is a `tokio::select! { biased; .. }` loop, not a hand-rolled `mio`
+  reactor.** The control FIFO is read via blocking `std::fs::File` I/O inside
+  `tokio::task::spawn_blocking` (`crates/substrate-launch/src/control_fifo.rs`),
+  not `tokio::net::unix::pipe` — that API requires tokio's `net` Cargo
+  feature, which this project gates behind the opt-in `outbound-net` feature
+  (ADR-0005/ADR-0006 STDIO-only posture) and which was not warranted for a
+  local FIFO. Child-exit and the TTL/reconcile timers are ordinary
+  `tokio::select!` arms (`crates/substrate-launch/src/detached.rs`); tokio's
+  own internal reactor already provides the event-driven multiplexing this
+  ADR asked of `mio` directly.
+- **Child-exit detection is poll-based (every 500ms via `SubprocessPort::list()`
+  diffing), not push-based `pidfd`/`kqueue EVFILT_PROC`.** `substrate-launch`
+  only ever sees children through the injected `SubprocessPort` trait (no
+  await-on-exit primitive exists on that surface), so a raw `pidfd`/`kqueue`
+  source would require either widening the port or duplicating subprocess
+  internals across the hexagonal boundary. This is the literal mechanism this
+  ADR's own "Monitor (reconcile sweep)" section already describes as a
+  periodic-timer reconciliation, so it is faithful to the spec, not a
+  shortcut.
+- **`PR_SET_PDEATHSIG` on Linux is real (`SIGKILL`, via the
+  `SubprocessRequest.parent_death_signal` field threaded into
+  `substrate-subprocess/src/pre_exec.rs`); macOS has no WatchdogPipe
+  trampoline for arbitrary Service commands.** macOS's existing
+  best-effort `WatchdogPipe` (`substrate-subprocess/src/watchdog.rs`,
+  ADR-0053) only self-terminates a child that reads its own
+  `SUBSTRATE_WATCHDOG_FD` environment variable — an arbitrary user command
+  (`npm run dev`, `cargo run`, ...) cannot be made to cooperate. macOS
+  detached Stacks therefore rely on `pgid` tracking + reaper-on-boot as the
+  actual zero-orphan mechanism, exactly as this ADR already sanctions for the
+  "adopted/arbitrary children" case (§"Cross-platform parent-death binding").
+  This is a real, currently-uncovered gap: a `SIGKILL`'d macOS supervisor
+  whose children never read the watchdog fd survive until the next
+  reaper-on-boot sweep, not instantly. A genuine fix (a `substrate
+  --exec-guard <fd> -- <argv>` trampoline child that owns the real command and
+  forwards the kill) is deferred — not built in this pass.
+- **The PID-recycle guard primitive (`crates/substrate-launch/src/pid_probe.rs`)
+  is real on both platforms**: Linux reads `procfs::process::Process::stat()`
+  (raw ticks-since-boot, compared for equality, no boot-time conversion);
+  macOS issues a single `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid)` and
+  reads `p_starttime`/`e_ppid` from the fixed-size `kinfo_proc` buffer,
+  re-deriving the byte offsets already documented in
+  `substrate-process/src/scanner/macos.rs` rather than depending on that
+  sibling adapter crate (hexagonal layering forbids adapter-to-adapter
+  dependencies).
+
+**Known gap found during testing, not fixed here:** driving the genuine
+"supervisor SIGKILL'd, children orphaned, parent-death binding kills them"
+scenario end-to-end surfaced a pre-existing bug in
+`substrate-subprocess/src/watchdog.rs::install` (ADR-0053): the watchdog
+pipe's write end is never marked `FD_CLOEXEC`, so a spawned child inherits its
+own copy across `fork`+`exec` and the intended EOF-on-supervisor-death never
+arrives. This affects the existing in-process MVP watchdog mechanism, not
+just the detached supervisor; it is out of this task's scope and is tracked
+as a follow-up rather than silently worked around.
+
+**Windows**: no Job Object implementation exists; `--supervise` is Linux and
+macOS only in this pass, compile-checked nowhere on Windows. Tracked as
+future work, not started.
+
+**Test coverage**: 7 of the 11 Milestone-2 cucumber scenarios drive genuine
+production code (real forked `--supervise` processes, real `control.fifo`
+round-trips, real `reaper::reconcile_sweep`); 1 is partially real (the
+re-attach Then steps remain stubbed because `reconcile_sweep` does not yet
+repopulate a fresh server's in-memory `LaunchRegistry` — on-disk state is
+correct, in-memory visibility is a follow-up); 3 remain honest documented
+stubs (`subgraph`-degrade reload, zombie `waitpid` reaping, event-replay
+summary — none of these have any implementation to test yet, by design,
+unrelated to this pass). Full workspace gate (`cargo build|clippy -D
+warnings|test --workspace --all-features`) is clean on macOS; the
+`procfs`-gated Linux path in `pid_probe.rs` is compile-checked only on this
+macOS development machine, not executed — a Linux CI/Docker run is the
+remaining verification gap before calling Linux support fully proven, not
+just compiled.
