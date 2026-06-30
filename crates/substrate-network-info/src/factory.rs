@@ -58,17 +58,15 @@ impl NetworkInfoFactory {
                 NetworkInfoTier::Unsupported
             };
             let port: Arc<dyn NetworkInfoPort> = match tier {
-                NetworkInfoTier::MacosSysctl => {
-                    Arc::new(crate::macos::MacosSysctlAdapter::default())
-                },
-                _ => Arc::new(NoopNetworkInfoPort::default()),
+                NetworkInfoTier::MacosSysctl => Arc::new(crate::macos::MacosSysctlAdapter),
+                _ => Arc::new(NoopNetworkInfoPort),
             };
             info!(
                 target: "substrate_audit",
                 event = "SUBSTRATE_CAPABILITY_TIERS_SELECTED",
                 net_info_tier = ?tier,
             );
-            return (port, tier);
+            (port, tier)
         }
 
         #[cfg(target_os = "linux")]

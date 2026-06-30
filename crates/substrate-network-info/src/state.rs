@@ -20,7 +20,7 @@ use substrate_domain::network::TcpState;
 /// ```
 #[cfg(target_os = "macos")]
 #[must_use]
-pub fn macos_state_from_u8(raw: u8) -> TcpState {
+pub const fn macos_state_from_u8(raw: u8) -> TcpState {
     match raw {
         0 => TcpState::Closed,
         1 => TcpState::Listen,
