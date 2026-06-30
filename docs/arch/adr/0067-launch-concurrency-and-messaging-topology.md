@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -177,3 +177,20 @@ flowchart TD
   this topology
 - [ADR-0066](0066-launch-event-stream-and-notification-model.md) — event channels
   fed by the broadcast bus
+
+## Amendments
+
+### 2026-06-30 — Accepted; lock-free state landed via DashMap, actor reactor is Milestone 2
+
+Status moves from `proposed` to `accepted`. The in-session MVP achieves this
+ADR's no-locks decision driver via a `DashMap`-keyed Stack registry in
+`substrate-launch`'s `registry.rs` (the same lock-free concurrent-map
+pattern the subprocess BC already uses) plus direct `tokio::spawn` per
+Service, rather than the bespoke single-mailbox actor described above — the
+`std::sync::Mutex` usages in `registry.rs` are confined to `#[cfg(test)]`
+fixtures, not production state. The full actor topology this ADR specifies
+— a dedicated command mailbox, a broadcast event bus, and a `watch`-based
+readiness gate, all multiplexed by one reactor — is the design for the
+**detached supervisor**, which is **Milestone 2**
+([ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md));
+`substrate-launch/src/supervisor.rs` documents the deferral.

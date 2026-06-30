@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -261,6 +261,15 @@ flowchart TD
   `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` via the full-path symlink-safe open.
 
 ## Amendments
+
+### 2026-06-30 — Accepted; TOFU gate landed in the substrate-launch MVP
+
+Status moves from `proposed` to `accepted`. The TOFU gate (Option B) is
+implemented in `substrate-launch`'s `trust_store.rs` and `profile_loader.rs`
+and enforced on every `launch.up` and `launch.trust` call; the deviation
+documented below (full-path symlink guard deferred) is the only outstanding
+gap and is tracked with [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)
+under Milestone 2.
 
 ### 2026-06-30 — MVP trust gate: leaf-only O_NOFOLLOW (full-path guard deferred)
 

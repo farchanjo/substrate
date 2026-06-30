@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -211,3 +211,18 @@ flowchart TD
   Service aggregates
 - [ADR-0064](0064-launch-profile-trust-model.md) — running-Stack immutability;
   reload re-blesses the new Profile content
+
+## Amendments
+
+### 2026-06-30 — Accepted; DAG and diff-reload landed, subgraph-degrade deferred
+
+Status moves from `proposed` to `accepted`. `substrate-launch`'s `dag.rs`
+implements cycle detection, topological start order, reverse-topological
+`down`, and the restart-closure computation; `registry.rs` implements
+`reload` as a diff into added / removed / restarted-with-cascade / edge-only
+Service changes, matching this ADR's Option B reconciler. The **subgraph
+`down`/`up` degradation path** for a reload that cannot apply incrementally
+is deferred to **Milestone 2** alongside the detached supervisor
+([ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)); the
+MVP reload surfaces a per-Service partial outcome without the subgraph
+fallback.

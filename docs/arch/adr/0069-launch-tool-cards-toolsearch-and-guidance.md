@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -265,3 +265,18 @@ requiring it to invent a polling cadence.
   tools specified here
 - [ADR-0066](0066-launch-event-stream-and-notification-model.md) — the event
   resources linked from tool responses
+
+## Amendments
+
+### 2026-06-30 — Accepted; tool cards and hints landed in the substrate-launch MVP
+
+Status moves from `proposed` to `accepted`. All nine `launch.*` tools are
+registered in `substrate-mcp-server`'s `launch_tools.rs` with thin
+deferred-discovery descriptions, `confirm_destructive` set on every spawning
+or killing tool, and `Hints` carrying `stack_id` / `stack_state` /
+`job_state` / `polling_endpoint` per response, matching this ADR's contract.
+The `resource_link`-to-live-events guidance described above depends on
+[ADR-0066](0066-launch-event-stream-and-notification-model.md)'s push path,
+which is itself deferred to Milestone 2 — until then `next_action_suggested`
+points at `launch.status` / `launch.logs` polling rather than a resource
+subscription.

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -208,3 +208,21 @@ flowchart LR
   feeding the raw-log resource
 - [ADR-0063](0063-launch-orchestration-bounded-context.md) — launch BC; lifecycle
   events from the supervisor state machine
+
+## Amendments
+
+### 2026-06-30 — Accepted; redaction-at-source and tail logs landed, push deferred
+
+Status moves from `proposed` to `accepted`. `substrate-launch`'s
+`redaction.rs` implements line-level secret redaction at the source, and
+`registry.rs` exposes `launch.status` / `launch.logs` as an in-memory
+bounded event tail — both available in the MVP today. The **push half** of
+this ADR (the durable two-plane event-log, `resources/updated` + opaque
+`?since` cursor subscriptions, line coalescing, and `notify.rate_per_sec`
+capping) and the **event-replay summary-plus-tail on reconnect** are
+deferred to **Milestone 2** together with the detached supervisor
+([ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)) —
+replay-on-reconnect has no meaning until a Stack can survive a client
+disconnect to reconnect to. Until then, clients observe launch events by
+polling `launch.logs` / `launch.status`, exactly the degrade-to-pull path
+this ADR already specifies for clients without `resources.subscribe`.

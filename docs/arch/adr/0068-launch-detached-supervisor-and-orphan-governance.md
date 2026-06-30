@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-30
 deciders: [com.archanjo]
 consulted: []
@@ -325,3 +325,20 @@ The supervisor-hardening codes below occupy `-32054` through `-32056` (see the
   five-layer zero-orphan guarantee
 - [ADR-0067](0067-launch-concurrency-and-messaging-topology.md) — lock-free actor
   topology the reactor feeds
+
+## Amendments
+
+### 2026-06-30 — Accepted as the Milestone 2 design; not yet implemented
+
+Status moves from `proposed` to `accepted`: Option C (same-binary
+`--supervise` mode, filesystem/FIFO IPC, five-layer zero-orphan guarantee)
+is the team's locked decision for detached survival, recorded here so the
+remaining launch ADRs (0063, 0065, 0066, 0067) can cite a stable reference
+for the deviations they each defer to it. Nothing in this ADR is built yet:
+`substrate-launch/src/registry.rs` returns
+`SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` for any
+`on_client_disconnect = detach` request before any spawn, and
+`substrate-launch/src/supervisor.rs` is a stub documenting that the
+`--supervise` self-fork, control FIFO, `mio` reactor, `pidfd`/`kqueue`
+child-exit sources, and reaper-on-boot all remain **Milestone 2** work. The
+MVP enforces `shutdown` semantics unconditionally.
