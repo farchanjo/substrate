@@ -1,0 +1,47 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-launch-stack-bringup-latency
+  displayName: launch.up stack bring-up latency
+  labels:
+    bounded_context: launch
+spec:
+  description: |
+    launch.up SHOULD bring a Profile's full service graph to READY within
+    p95 < 10 s for stacks of up to 8 services whose binaries are already
+    present, measured from the CreateTaskResult emission to the final
+    per-service READY lifecycle event over notifications/tasks/status
+    (ADR-0069 / ADR-0049). SLI sourced from the audit log duration_ms
+    field per ADR-0039 (10-minute rolling window). Cancelled, timed-out,
+    and dependency-failed outcomes are excluded per ADR-0039.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: launch-up-bringup-latency
+    spec:
+      thresholdMetric:
+        metricSource:
+          metricSourceRef: substrate-audit-log
+          type: audit-log
+          spec:
+            # ADR-0039: source duration_ms from AuditEvent where
+            # tool_name = "launch.up" AND outcome = "success".
+            # Cancelled, timed_out, and dependency_failed excluded.
+            # p95 of duration_ms over a 10-minute rolling window.
+            filter: |
+              tool_name = "launch.up"
+              AND outcome = "success"
+            aggregation: p95
+            field: duration_ms
+            unit: milliseconds
+            window: 10m
+  timeWindow:
+    - duration: 7d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: p95 bring-up under 10s
+      target: 0.95
+      op: lte
+      value: 10.0

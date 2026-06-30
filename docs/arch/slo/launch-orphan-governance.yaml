@@ -1,0 +1,47 @@
+---
+apiVersion: openslo.com/v2alpha
+kind: SLO
+metadata:
+  name: substrate-launch-orphan-governance
+  displayName: launch orphan governance latency
+  labels:
+    bounded_context: launch
+spec:
+  description: |
+    After a client disconnect or supervisor death, the reconcile sweep
+    SHOULD govern every orphaned detached Stack — adopt, reap zombie
+    children, and clear stale registry entries — within p99 < 5 s of the
+    sweep start (ADR-0068). This bounds the window in which an orphaned
+    process tree can outlive its owning session. SLI sourced from the audit
+    log duration_ms field of the reconcile-sweep event per ADR-0039
+    (10-minute rolling window). Recycled-pid skips (no signal sent) count
+    as successful governance, not failures.
+  service: substrate-mcp-server
+  indicator:
+    metadata:
+      name: launch-orphan-reconcile-latency
+    spec:
+      thresholdMetric:
+        metricSource:
+          metricSourceRef: substrate-audit-log
+          type: audit-log
+          spec:
+            # ADR-0039: source duration_ms from AuditEvent where
+            # tool_name = "launch.reconcile_sweep" AND outcome = "success".
+            # p99 of duration_ms over a 10-minute rolling window.
+            filter: |
+              tool_name = "launch.reconcile_sweep"
+              AND outcome = "success"
+            aggregation: p99
+            field: duration_ms
+            unit: milliseconds
+            window: 10m
+  timeWindow:
+    - duration: 7d
+      isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+    - displayName: p99 orphan governance under 5s
+      target: 0.99
+      op: lte
+      value: 5.0
