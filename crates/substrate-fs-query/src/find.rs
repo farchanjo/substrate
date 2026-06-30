@@ -41,6 +41,7 @@ use libc;
 
 use crate::hint_helpers::build_hints;
 use crate::response::{FsQueryDeps, ToolResponse};
+use crate::symlink_chain::{SymlinkDisposition, symlink_chain_disposition};
 
 /// Domain-level page-size cap for `fs.find` (ADR-0008 / ADR-0060).
 ///
@@ -221,30 +222,21 @@ pub async fn handle_fs_find(
 
         match jail_result {
             Ok(j) => j,
-            // On macOS, ONoFollowAnyJail returns SymlinkEscape for paths that
-            // traverse a symlink component — including /tmp (which is a symlink
-            // to /private/tmp on macOS). When the canonical resolution of the
-            // requested path falls outside ALL allowlist roots the correct error
-            // is PathOutsideAllowlist, not SymlinkEscape. Detect this by checking
-            // whether the canonicalized path starts with the allowlist root.
+            // On macOS, ONoFollowAnyJail returns SymlinkEscape for ANY path that
+            // traverses a symlink component, regardless of where it resolves —
+            // including a totally benign internal symlink (e.g. /tmp ->
+            // /private/tmp, or an operator's own dotfile symlinks under an
+            // allowlisted root). A bare SymlinkEscape therefore is NOT proof the
+            // requested root is outside the allowlist; probe further to
+            // distinguish internal / dangling / genuinely-escaping (mirrors
+            // fs.stat's handle_symlink_escape).
             Err(SubstrateError::SymlinkEscape { .. }) => {
-                // Attempt to canonicalize the requested root.  If it resolves
-                // and is confirmed outside the allowlist, emit PathOutsideAllowlist.
-                let canonical =
-                    std::fs::canonicalize(&raw_root).unwrap_or_else(|_| raw_root.clone());
-                // The server's PathJail already canonicalized its roots at startup,
-                // so if jail returned SymlinkEscape for the root path itself,
-                // the canonical form is outside all configured roots.
-                return Err(SubstrateError::PathOutsideAllowlist {
-                    path: canonical.to_string_lossy().into_owned(),
-                    correlation_id: Some(uuid::Uuid::now_v7()),
-                });
+                resolve_root_after_symlink_escape(raw_root.clone(), &jail).await?
             },
             Err(e) => return Err(e),
         }
     };
 
-    // #[test] marker satisfied below in the tests module — see find_symlink_escape_maps_to_outside_allowlist
 
     // Compile glob pattern.
     let glob_pattern = req.pattern.clone();
@@ -465,6 +457,69 @@ pub async fn handle_fs_find(
     });
 
     Ok(ToolResponse::with_hints(content, structured_content, hints))
+}
+
+/// Resolves the `JailedPath` for `raw_root` after the jail reported
+/// `SymlinkEscape` for it, by probing the symlink chain's disposition
+/// (mirrors `fs.stat`'s `handle_symlink_escape`).
+///
+/// - `Broken` (dangling symlink) -> `NotFound`.
+/// - `Internal` (every hop resolves inside the allowlist) -> re-jails the
+///   fully-resolved, symlink-free canonical path. That second `jail()` call
+///   cannot itself traverse a symlink (the path is already canonical), so it
+///   succeeds without reopening the TOCTOU window `O_NOFOLLOW_ANY` closes for
+///   the resolution step itself. The walk that follows still has the same
+///   residual non-atomicity between this check and the actual directory read
+///   that ANY allowlisted path already has — this fix removes the symlink
+///   mislabeling, it does not add a new class of risk beyond what `fs.stat`
+///   already accepts for the same internal-symlink case.
+/// - `Escape` (a hop resolves outside the allowlist) -> `SymlinkEscape`.
+async fn resolve_root_after_symlink_escape(
+    raw_root: std::path::PathBuf,
+    jail: &Arc<dyn PathJailPort>,
+) -> SubstrateResult<JailedPath> {
+    let jail_clone = Arc::clone(jail);
+    let raw_clone = raw_root.clone();
+    let disposition = tokio::task::spawn_blocking(move || {
+        let Ok(lstat) = std::fs::symlink_metadata(&raw_clone) else {
+            return SymlinkDisposition::Escape;
+        };
+        if !lstat.file_type().is_symlink() {
+            return SymlinkDisposition::Internal {
+                lstat,
+                resolved: raw_clone,
+            };
+        }
+        symlink_chain_disposition(&raw_clone, jail_clone.as_ref(), &lstat, 0)
+    })
+    .await
+    .map_err(|e| SubstrateError::InternalError {
+        reason: format!("spawn_blocking join error: {e}"),
+        correlation_id: None,
+    })?;
+
+    match disposition {
+        SymlinkDisposition::Broken => Err(SubstrateError::NotFound {
+            resource: raw_root.to_string_lossy().into_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        }),
+        SymlinkDisposition::Internal { resolved, .. } => {
+            let jail_clone = Arc::clone(jail);
+            let resolved_clone = resolved.clone();
+            tokio::task::spawn_blocking(move || {
+                jail_clone.jail(&JailedPath::new_jailed(resolved_clone.clone()), &resolved_clone)
+            })
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })?
+        },
+        SymlinkDisposition::Escape => Err(SubstrateError::SymlinkEscape {
+            path: raw_root.to_string_lossy().into_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        }),
+    }
 }
 
 // ---- Walker error mapping ---------------------------------------------------
@@ -767,37 +822,104 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// A jail that always returns `SymlinkEscape` (simulates `ONoFollowAnyJail` on macOS
-    /// when the root path contains a symlink component, e.g. `/tmp` → `/private/tmp`).
-    struct SymlinkEscapeJail;
+    /// Test double mirroring `ONoFollowAnyJail`'s real contract on macOS: a
+    /// request whose final path component is a symlink returns
+    /// `SymlinkEscape` regardless of where that symlink resolves (matching
+    /// `O_NOFOLLOW_ANY`); any non-symlink path is checked against
+    /// `allowed_root` by plain containment. Used to drive
+    /// `resolve_root_after_symlink_escape`'s real Internal/Broken/Escape
+    /// classification with genuine filesystem symlinks, without needing the
+    /// real crate-private `substrate_policy::ONoFollowAnyJail` adapter.
+    struct SymlinkAwareJail {
+        allowed_root: std::path::PathBuf,
+    }
 
-    impl substrate_domain::PathJailPort for SymlinkEscapeJail {
+    impl substrate_domain::PathJailPort for SymlinkAwareJail {
         fn jail(
             &self,
             _allowlist_root: &JailedPath,
             raw_path: &std::path::Path,
         ) -> SubstrateResult<JailedPath> {
-            Err(SubstrateError::SymlinkEscape {
-                path: raw_path.to_string_lossy().into_owned(),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })
+            if std::fs::symlink_metadata(raw_path).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(SubstrateError::SymlinkEscape {
+                    path: raw_path.to_string_lossy().into_owned(),
+                    correlation_id: Some(uuid::Uuid::now_v7()),
+                });
+            }
+            if raw_path.starts_with(&self.allowed_root) {
+                Ok(JailedPath::new_jailed(raw_path.to_path_buf()))
+            } else {
+                Err(SubstrateError::PathOutsideAllowlist {
+                    path: raw_path.to_string_lossy().into_owned(),
+                    correlation_id: None,
+                })
+            }
         }
     }
 
-    /// When the jail returns `SymlinkEscape` for the root path itself (macOS `/tmp`
-    /// symlink situation), `fs.find` must return `PathOutsideAllowlist`, not `SymlinkEscape`.
+    /// A symlinked root whose target resolves INSIDE the allowlist (the
+    /// `~/.claude/skills` -> `~/cc/skills` bug case) must succeed and walk the
+    /// resolved target, not be mislabeled `PathOutsideAllowlist`.
     #[tokio::test]
-    async fn find_symlink_escape_maps_to_outside_allowlist() {
+    async fn find_root_symlink_resolving_inside_allowlist_succeeds() {
         let tmp = TempDir::new().expect("tempdir");
+        let real_target = tmp.path().join("real_target");
+        std::fs::create_dir(&real_target).expect("mkdir real_target");
+        std::fs::write(real_target.join("needle.txt"), b"found").expect("write");
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real_target, &link).expect("symlink");
+
         let deps = FsQueryDeps {
-            jail: Arc::new(SymlinkEscapeJail),
+            jail: Arc::new(SymlinkAwareJail {
+                allowed_root: tmp.path().to_path_buf(),
+            }),
             walker: Arc::new(NoopWalker),
             hasher: Arc::new(NoopHasher),
             statter: Arc::new(NoopStatter),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
         };
         let req = FsFindRequest {
-            root: tmp.path().to_string_lossy().into_owned(),
+            root: link.to_string_lossy().into_owned(),
+            pattern: "*needle*".to_owned(),
+            max_depth: 1,
+            modified_since: None,
+            page_size: Some(50),
+            page_cursor: None,
+        };
+        let resp = handle_fs_find(req, &deps, CancellationToken::new())
+            .await
+            .expect("internal symlink must succeed, not error");
+        let matches = resp.structured_content["matches"]
+            .as_array()
+            .expect("array");
+        assert!(
+            matches.iter().any(|e| e["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("needle.txt"))),
+            "expected to find needle.txt through the resolved symlink target; got {matches:?}"
+        );
+    }
+
+    /// A symlinked root whose target resolves OUTSIDE every allowlist root is
+    /// a genuine escape and must be rejected with `SymlinkEscape`.
+    #[tokio::test]
+    async fn find_root_symlink_resolving_outside_allowlist_is_rejected() {
+        let allowed = TempDir::new().expect("tempdir");
+        let outside = TempDir::new().expect("tempdir");
+        let link = allowed.path().join("link");
+        std::os::unix::fs::symlink(outside.path(), &link).expect("symlink");
+
+        let deps = FsQueryDeps {
+            jail: Arc::new(SymlinkAwareJail {
+                allowed_root: allowed.path().to_path_buf(),
+            }),
+            walker: Arc::new(NoopWalker),
+            hasher: Arc::new(NoopHasher),
+            statter: Arc::new(NoopStatter),
+            capabilities: Arc::new(substrate_domain::Capabilities::default()),
+        };
+        let req = FsFindRequest {
+            root: link.to_string_lossy().into_owned(),
             pattern: "*".to_owned(),
             max_depth: 1,
             modified_since: None,
@@ -808,8 +930,42 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, SubstrateError::PathOutsideAllowlist { .. }),
-            "expected PathOutsideAllowlist but got: {err:?}"
+            matches!(err, SubstrateError::SymlinkEscape { .. }),
+            "expected SymlinkEscape for a genuinely escaping symlink, got: {err:?}"
+        );
+    }
+
+    /// A dangling symlink root (target does not exist, but the chain stays
+    /// within the allowlist) must surface `NotFound`, not a security error.
+    #[tokio::test]
+    async fn find_root_dangling_symlink_returns_not_found() {
+        let tmp = TempDir::new().expect("tempdir");
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(tmp.path().join("does_not_exist"), &link).expect("symlink");
+
+        let deps = FsQueryDeps {
+            jail: Arc::new(SymlinkAwareJail {
+                allowed_root: tmp.path().to_path_buf(),
+            }),
+            walker: Arc::new(NoopWalker),
+            hasher: Arc::new(NoopHasher),
+            statter: Arc::new(NoopStatter),
+            capabilities: Arc::new(substrate_domain::Capabilities::default()),
+        };
+        let req = FsFindRequest {
+            root: link.to_string_lossy().into_owned(),
+            pattern: "*".to_owned(),
+            max_depth: 1,
+            modified_since: None,
+            page_size: Some(50),
+            page_cursor: None,
+        };
+        let err = handle_fs_find(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SubstrateError::NotFound { .. }),
+            "expected NotFound for a dangling symlink, got: {err:?}"
         );
     }
 

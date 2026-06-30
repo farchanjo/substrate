@@ -30,6 +30,7 @@ pub mod read_dir;
 pub mod response;
 pub mod stat;
 pub mod stat_factory;
+mod symlink_chain;
 pub mod walker;
 pub mod walker_factory;
 

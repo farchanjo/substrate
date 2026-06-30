@@ -126,86 +126,7 @@ pub async fn handle_fs_stat(
     Ok(ToolResponse::with_hints(content, structured_content, hints))
 }
 
-/// Maximum symlink hops before treating the chain as an escape (loop guard).
-const MAX_SYMLINK_HOPS: u8 = 40;
-
-/// Disposition for a path when the jail returns `SymlinkEscape`.
-enum SymlinkDisposition {
-    /// Symlink exists but target is missing (dangling symlink).
-    Broken,
-    /// Symlink exists and its canonical target is within the allowlist.
-    Internal(std::fs::Metadata),
-    /// Symlink resolves outside the allowlist (genuine escape).
-    Escape,
-}
-
-/// Recursively walks the symlink chain starting at `path` to determine its
-/// disposition relative to the allowlist enforced by `jail`.
-///
-/// - Returns `Internal(lstat)` when all hops are within the allowlist and the
-///   final target exists (or the path is not a symlink).
-/// - Returns `Broken` when all hops are within the allowlist but the final
-///   target does not exist (dangling symlink within the sandbox).
-/// - Returns `Escape` when any hop resolves to a path outside the allowlist.
-fn symlink_chain_disposition(
-    path: &std::path::Path,
-    jail: &dyn PathJailPort,
-    lstat_of_start: &std::fs::Metadata,
-    depth: u8,
-) -> SymlinkDisposition {
-    if depth >= MAX_SYMLINK_HOPS {
-        return SymlinkDisposition::Escape;
-    }
-
-    // Read the immediate link target.
-    let Ok(direct_target) = std::fs::read_link(path) else {
-        // Not a symlink or cannot read link — check if it exists.
-        return if std::fs::symlink_metadata(path).is_ok() {
-            SymlinkDisposition::Internal(lstat_of_start.clone())
-        } else {
-            SymlinkDisposition::Broken
-        };
-    };
-
-    // Resolve relative targets relative to the symlink's parent directory.
-    let resolved_target = if direct_target.is_absolute() {
-        direct_target
-    } else {
-        path.parent()
-            .map(|p| p.join(&direct_target))
-            .unwrap_or(direct_target)
-    };
-
-    // Use the jail to check if `resolved_target` is within an allowed root.
-    // `JailedPath::new_jailed` + `jail.jail` checks WITHOUT following symlinks.
-    // Return Escape only when the jail reports a security boundary violation
-    // (PathOutsideAllowlist, SymlinkEscape, etc.).  NotFound / IoError mean the
-    // path is absent but the prefix is within the allowlist — fall through to
-    // the symlink_metadata check below.
-    let jailed_target = JailedPath::new_jailed(resolved_target.clone());
-    if let Err(e) = jail.jail(&jailed_target, &resolved_target) {
-        // NotFound / IoError mean the path is absent but the prefix is within
-        // the allowlist — fall through.  All other errors (PathOutsideAllowlist,
-        // SymlinkEscape, …) mean the hop crosses a security boundary.
-        let absent_ok = matches!(
-            e,
-            SubstrateError::NotFound { .. } | SubstrateError::IoError { .. }
-        );
-        if !absent_ok {
-            return SymlinkDisposition::Escape;
-        }
-    }
-
-    // Target is within the allowlist. Check if it exists (lstat).
-    match std::fs::symlink_metadata(&resolved_target) {
-        Err(_) => SymlinkDisposition::Broken,
-        Ok(target_meta) if target_meta.file_type().is_symlink() => {
-            // Target is itself a symlink — recurse.
-            symlink_chain_disposition(&resolved_target, jail, lstat_of_start, depth + 1)
-        },
-        Ok(_) => SymlinkDisposition::Internal(lstat_of_start.clone()),
-    }
-}
+use crate::symlink_chain::{SymlinkDisposition, symlink_chain_disposition};
 
 /// Handles the `SymlinkEscape` case from the jail for `fs.stat`.
 ///
@@ -232,7 +153,10 @@ async fn handle_symlink_escape(
         };
         if !lstat.file_type().is_symlink() {
             // Not a symlink — unexpected; treat as internal.
-            return SymlinkDisposition::Internal(lstat);
+            return SymlinkDisposition::Internal {
+                lstat,
+                resolved: raw_clone,
+            };
         }
         // Walk the symlink chain step-by-step to determine if it escapes the
         // allowlist. We use `read_link` (not `canonicalize`) to inspect each hop
@@ -251,7 +175,7 @@ async fn handle_symlink_escape(
             resource: req.path,
             correlation_id: Some(uuid::Uuid::now_v7()),
         }),
-        SymlinkDisposition::Internal(lstat) => Ok(serve_lstat_response(&lstat, &req, deps)),
+        SymlinkDisposition::Internal { lstat, .. } => Ok(serve_lstat_response(&lstat, &req, deps)),
         SymlinkDisposition::Escape => Err(SubstrateError::SymlinkEscape {
             path: req.path,
             correlation_id: Some(uuid::Uuid::now_v7()),
