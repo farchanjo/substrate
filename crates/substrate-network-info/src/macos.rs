@@ -66,6 +66,12 @@ const XSO_TCPCB: u32 = 0x020;
 /// - `xig_gen`: u64 — generation count (for staleness detection).
 /// - `xig_sogen`: u64 — socket-object generation.
 #[repr(C)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names mirror the exact macOS kernel struct layout \
+              (<sys/socketvar.h> xinpgen) for FFI correctness; renaming would \
+              break the kernel-header cross-reference in the doc comment above"
+)]
 struct xinpgen {
     pub xig_len: u32,
     pub xig_count: u32,
@@ -289,6 +295,13 @@ const _: () = {
 /// Fields after `tcps_rcvbadsum` include `tcps_persistdrop` at byte 224.
 /// All are `u_int32_t` throughout the range we use.
 #[repr(C)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names mirror the exact macOS kernel struct layout \
+              (<netinet/tcp_var.h> tcpstat) for FFI correctness; renaming \
+              would break the offset table cross-referenced in the doc \
+              comment above"
+)]
 struct tcpstat_n {
     pub tcps_connattempt: u32,   // offset   0
     pub tcps_accepts: u32,       // offset   4
@@ -354,7 +367,7 @@ pub fn probe_sysctl() -> bool {
         libc::sysctlbyname(
             name.as_ptr(),
             std::ptr::null_mut(),
-            &mut size,
+            &raw mut size,
             std::ptr::null_mut(),
             0,
         )
@@ -432,6 +445,11 @@ impl NetworkInfoPort for MacosSysctlAdapter {
         for entry in &all {
             *by_state.entry(entry.state).or_insert(0) += 1;
         }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "TCP connection counts on a single host cannot realistically \
+                      approach u32::MAX"
+        )]
         let total = all.len() as u32;
         Ok(ConnectionCounts {
             by_state,
@@ -474,7 +492,7 @@ fn sysctl_read_blob(name: &std::ffi::CStr) -> Result<Vec<u8>, SubstrateError> {
         libc::sysctlbyname(
             name.as_ptr(),
             std::ptr::null_mut(),
-            &mut size,
+            &raw mut size,
             std::ptr::null_mut(),
             0,
         )
@@ -499,7 +517,7 @@ fn sysctl_read_blob(name: &std::ffi::CStr) -> Result<Vec<u8>, SubstrateError> {
         libc::sysctlbyname(
             name.as_ptr(),
             buf.as_mut_ptr().cast(),
-            &mut size,
+            &raw mut size,
             std::ptr::null_mut(),
             0,
         )
@@ -628,25 +646,26 @@ fn parse_pcblist_blob(blob: &[u8]) -> Result<Vec<SocketEntry>, SubstrateError> {
                     cur_inpcb = Some(InpcbInfo::from_xinpcb_n(inpcb));
                 }
             },
-            XSO_SOCKET => {
-                // XSO_SOCKET is the SECOND record per group. Capture the opaque
-                // socket pointer for future PID-resolution support (v1.1).
-                if rec_len >= XSOCKET_N_SIZE {
-                    // SAFETY: rec_len >= XSOCKET_N_SIZE (checked above). The bytes
-                    // [pos, pos+rec_len) are within the blob slice and are aligned
-                    // to 1 byte (valid for repr(C) structs accessed via raw ptr).
-                    let xso: &xsocket_n = unsafe { &*(blob[pos..].as_ptr().cast()) };
-                    cur_socket = Some(xso.xso_so);
-                }
+            // XSO_SOCKET is the SECOND record per group. Capture the opaque
+            // socket pointer for future PID-resolution support (v1.1).
+            XSO_SOCKET if rec_len >= XSOCKET_N_SIZE => {
+                // SAFETY: rec_len >= XSOCKET_N_SIZE (checked above). The bytes
+                // [pos, pos+rec_len) are within the blob slice and are aligned
+                // to 1 byte (valid for repr(C) structs accessed via raw ptr).
+                let xso: &xsocket_n = unsafe { &*(blob[pos..].as_ptr().cast()) };
+                cur_socket = Some(xso.xso_so);
             },
-            XSO_TCPCB => {
-                // XSO_TCPCB is the LAST record per group. Capture the TCP FSM state.
-                if rec_len >= XTCPCB_N_SIZE {
-                    // SAFETY: same bounds argument as XSO_INPCB branch.
-                    let tcpcb: &xtcpcb_n = unsafe { &*(blob[pos..].as_ptr().cast()) };
-                    let state_raw = tcpcb.t_state.clamp(0, 10) as u8;
-                    cur_tcpcb_state = Some(macos_state_from_u8(state_raw));
-                }
+            // XSO_TCPCB is the LAST record per group. Capture the TCP FSM state.
+            XSO_TCPCB if rec_len >= XTCPCB_N_SIZE => {
+                // SAFETY: same bounds argument as XSO_INPCB branch.
+                let tcpcb: &xtcpcb_n = unsafe { &*(blob[pos..].as_ptr().cast()) };
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "value is clamp(0, 10) immediately before the cast, \
+                              so it is provably non-negative and fits in u8"
+                )]
+                let state_raw = tcpcb.t_state.clamp(0, 10) as u8;
+                cur_tcpcb_state = Some(macos_state_from_u8(state_raw));
             },
             _ => { /* skip XSO_RCVBUF, XSO_SNDBUF, XSO_STATS, etc. */ },
         }
@@ -725,12 +744,8 @@ fn decode_addr(bytes: &[u8; 16], family: AddrFamily) -> String {
             Ipv4Addr::new(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]).to_string()
         },
         AddrFamily::Inet6 => {
-            // SAFETY: bytes is &[u8; 16], conversion to [u8; 16] is infallible.
-            #[expect(
-                clippy::expect_used,
-                reason = "bytes is &[u8; 16], conversion to [u8; 16] is infallible"
-            )]
-            let arr: [u8; 16] = (*bytes).try_into().expect("infallible: 16 == 16");
+            // bytes is already &[u8; 16]; no conversion needed.
+            let arr: [u8; 16] = *bytes;
             Ipv6Addr::from(arr).to_string()
         },
     }
@@ -776,7 +791,13 @@ fn flush_entry(
 /// Resolves PIDs using `proc_pidfdinfo` + `PROC_PIDFDSOCKETINFO`.
 ///
 /// Best-effort: entries that fail stay with `pid: None`.
-fn resolve_pids_macos(entries: &mut Vec<SocketEntry>) {
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "stub for v1.1 PID-resolution; signature intentionally takes &mut \
+              ahead of the real implementation, which will mutate entries \
+              in place to populate SocketEntry::pid"
+)]
+const fn resolve_pids_macos(entries: &mut Vec<SocketEntry>) {
     // Build so_pcb → entry index map. On macOS entries don't have inodes, but
     // the caller populates this after parse_pcblist_blob which stores so_pcb
     // in the entries. Since SocketEntry has no `so_pcb` field, we skip PID
@@ -800,17 +821,31 @@ fn resolve_pids_macos(entries: &mut Vec<SocketEntry>) {
 /// `tcps_persistdrop` (offset 224) is beyond `tcpstat_n` coverage and is read
 /// via a direct byte offset using the same `read_u32` helper.
 fn read_tcp_stats() -> Result<TcpStats, SubstrateError> {
+    // tcps_persistdrop is at offset 224 — beyond tcpstat_n but still a u32.
+    // Offset verified: 116 bytes of tcpstat_n + 27 more u32 fields before
+    // tcps_persistdrop = 116 + 27*4 = 116 + 108 = 224.
+    // Fields between tcps_rcvbadsum (offset 112) and tcps_persistdrop (224):
+    //   rcvbadoff(116) rcvmemdrop(120) rcvshort(124) rcvduppack(128)
+    //   rcvdupbyte(132) rcvpartduppack(136) rcvpartdupbyte(140)
+    //   rcvoopack(144) rcvoobyte(148) rcvpackafterwin(152) rcvbyteafterwin(156)
+    //   rcvafterclose(160) rcvwinprobe(164) rcvdupack(168) rcvacktoomuch(172)
+    //   rcvackpack(176) rcvackbyte(180) rcvwinupd(184) pawsdrop(188)
+    //   predack(192) preddat(196) cachedrtt(200) cachedrttvar(204)
+    //   cachedssthresh(208) usedrtt(212) usedrttvar(216) usedssthresh(220)
+    //   persistdrop(224)
+    const TCPS_PERSISTDROP_OFFSET: usize = 224;
+
     let blob = sysctl_read_blob(c"net.inet.tcp.stats")?;
 
     let read_u32 = |offset: usize| -> u64 {
         let end = offset + 4;
         if end <= blob.len() {
-            u32::from_ne_bytes([
+            u64::from(u32::from_ne_bytes([
                 blob[offset],
                 blob[offset + 1],
                 blob[offset + 2],
                 blob[offset + 3],
-            ]) as u64
+            ]))
         } else {
             0
         }
@@ -832,20 +867,6 @@ fn read_tcp_stats() -> Result<TcpStats, SubstrateError> {
             }
         };
     }
-
-    // tcps_persistdrop is at offset 224 — beyond tcpstat_n but still a u32.
-    // Offset verified: 116 bytes of tcpstat_n + 27 more u32 fields before
-    // tcps_persistdrop = 116 + 27*4 = 116 + 108 = 224.
-    // Fields between tcps_rcvbadsum (offset 112) and tcps_persistdrop (224):
-    //   rcvbadoff(116) rcvmemdrop(120) rcvshort(124) rcvduppack(128)
-    //   rcvdupbyte(132) rcvpartduppack(136) rcvpartdupbyte(140)
-    //   rcvoopack(144) rcvoobyte(148) rcvpackafterwin(152) rcvbyteafterwin(156)
-    //   rcvafterclose(160) rcvwinprobe(164) rcvdupack(168) rcvacktoomuch(172)
-    //   rcvackpack(176) rcvackbyte(180) rcvwinupd(184) pawsdrop(188)
-    //   predack(192) preddat(196) cachedrtt(200) cachedrttvar(204)
-    //   cachedssthresh(208) usedrtt(212) usedrttvar(216) usedssthresh(220)
-    //   persistdrop(224)
-    const TCPS_PERSISTDROP_OFFSET: usize = 224;
 
     Ok(TcpStats {
         segs_in: stat_field!(tcps_rcvtotal),
@@ -871,6 +892,12 @@ fn paginate(
     entries: Vec<SocketEntry>,
     pagination: Option<&Pagination>,
 ) -> (Vec<SocketEntry>, Option<u64>) {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "pagination offset is bounded by realistic connection counts \
+                  (well under u32::MAX); truncation is only theoretically \
+                  possible on 32-bit targets, which substrate does not support"
+    )]
     let offset = pagination.map_or(0, |p| p.offset as usize);
     // Default page size matches `PageSize::DEFAULT_PAGINATION` (100).
     let page_size = pagination.map_or(100, |p| p.page_size.get() as usize);
@@ -1057,7 +1084,7 @@ mod tests {
         use substrate_domain::network::{NetworkTcpListRequest, TcpState};
         use substrate_domain::ports::network_info::NetworkInfoPort;
 
-        let adapter = super::MacosSysctlAdapter::default();
+        let adapter = super::MacosSysctlAdapter;
         let result = adapter
             .list_tcp(NetworkTcpListRequest {
                 state_filter: Some(vec![TcpState::Listen]),
@@ -1094,7 +1121,7 @@ mod tests {
     /// `idx * 4` arithmetic against wrong field numbers (e.g., `f(53)` for
     /// `tcps_rcvtotal` read offset 212 instead of the correct offset 100).
     ///
-    /// NOTE: some macOS virtualisation environments (Parallels, VMware) reset
+    /// NOTE: some macOS virtualisation environments (Parallels, `VMware`) reset
     /// or suppress `net.inet.tcp.stats` counters entirely. In those environments
     /// `netstat -s -p tcp` also shows 0 for all fields — the struct offsets are
     /// correct but the kernel returns zeros. The test prints the observed values
@@ -1105,7 +1132,7 @@ mod tests {
     async fn live_tcp_stats_returns_nonzero_counters() {
         use substrate_domain::ports::network_info::NetworkInfoPort;
 
-        let adapter = super::MacosSysctlAdapter::default();
+        let adapter = super::MacosSysctlAdapter;
         let stats = adapter
             .tcp_stats()
             .await
@@ -1146,7 +1173,7 @@ mod tests {
         use substrate_domain::network::{NetworkTcpListRequest, TcpState};
         use substrate_domain::ports::network_info::NetworkInfoPort;
 
-        let adapter = super::MacosSysctlAdapter::default();
+        let adapter = super::MacosSysctlAdapter;
         let result = adapter
             .list_tcp(NetworkTcpListRequest {
                 state_filter: None,
