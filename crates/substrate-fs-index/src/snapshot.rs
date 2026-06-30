@@ -141,8 +141,7 @@ impl IndexSnapshot {
 
         let root_key = ancestors
             .iter()
-            .filter(|p| self.by_root.contains_key(p.as_str()))
-            .last()
+            .rfind(|p| self.by_root.contains_key(p.as_str()))
             .cloned()
             .or_else(|| {
                 // Fallback: immediate parent — original behaviour for the

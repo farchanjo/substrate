@@ -6,7 +6,7 @@
 //!
 //! Platform dispatch performed by `notify`:
 //! - Linux: inotify (always available on kernel 2.6.13+).
-//! - macOS: FSEvents (always available on macOS 10.6+).
+//! - macOS: `FSEvents` (always available on macOS 10.6+).
 //! - Fallback: `notify::PollWatcher` when neither is available.
 //!
 //! # Overflow handling
@@ -24,6 +24,16 @@
 //!   shutdown per ADR-0037.
 //! - Implement per-root watch registration to scope inotify watches tightly
 //!   rather than watching the entire allowlist tree from a single root.
+
+// FsIndexWatcher is pub(crate) inside a private module (`mod watcher;` in lib.rs);
+// clippy::redundant_pub_crate fires because the enclosing module is already private,
+// but unreachable_pub fires on bare `pub`. Suppress redundant_pub_crate at module
+// level and use pub(crate), matching the same pattern in `src/macos/mod.rs`.
+#![expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) in private module avoids unreachable_pub; FsIndexWatcher is \
+              scaffolding referenced only within this crate pending composition-root wiring"
+)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -49,7 +59,7 @@ use substrate_domain::ports::fs_index::FsIndexPort;
 /// call `Handle::spawn` rather than `tokio::spawn`, which would panic outside
 /// a runtime context.
 #[allow(dead_code)] // fields used via internal callback + Drop
-pub struct FsIndexWatcher {
+pub(crate) struct FsIndexWatcher {
     inner: RecommendedWatcher,
     index: Arc<dyn FsIndexPort>,
     /// Tokio runtime handle captured at construction time.
@@ -67,6 +77,11 @@ impl std::fmt::Debug for FsIndexWatcher {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "FS watch infra not yet wired into FsIndexPort; tracked for future integration \
+              (composition-root wiring is a follow-up adapter wave, see module TODO)"
+)]
 impl FsIndexWatcher {
     /// Constructs a `FsIndexWatcher` that routes events to `index`.
     ///
@@ -81,7 +96,7 @@ impl FsIndexWatcher {
     /// `Handle::current()` panics if there is no current runtime, which is a
     /// programming error at the call site (the composition root always runs
     /// inside the tokio main runtime).
-    pub fn new(index: Arc<dyn FsIndexPort>) -> Result<Self, notify::Error> {
+    pub(crate) fn new(index: Arc<dyn FsIndexPort>) -> Result<Self, notify::Error> {
         let handle = Handle::current();
         let index_clone = Arc::clone(&index);
         let handle_clone = handle.clone();
@@ -101,14 +116,14 @@ impl FsIndexWatcher {
     ///
     /// Returns a `notify::Error` if the watch cannot be added (e.g., too many
     /// watches, path does not exist).
-    pub fn watch_root(&mut self, root: &JailedPath) -> Result<(), notify::Error> {
+    pub(crate) fn watch_root(&mut self, root: &JailedPath) -> Result<(), notify::Error> {
         self.inner.watch(root.as_path(), RecursiveMode::Recursive)
     }
 
     /// Deregisters `root` from the watcher.
     ///
     /// Called when an allowlist root is removed at runtime (SIGHUP reload).
-    pub fn unwatch_root(&mut self, root: &JailedPath) -> Result<(), notify::Error> {
+    pub(crate) fn unwatch_root(&mut self, root: &JailedPath) -> Result<(), notify::Error> {
         self.inner.unwatch(root.as_path())
     }
 
@@ -123,7 +138,7 @@ impl FsIndexWatcher {
     ///   rebuild or via a subsequent `Create` event.
     /// - `Modify` → evict so the mandatory lazy lstat pass picks up fresh
     ///   metadata on the next lookup; avoids serving stale size/mtime.
-    /// - `Rescan` (IN_Q_OVERFLOW) → `FsIndexPort::rebuild_root` for all roots.
+    /// - `Rescan` (`IN_Q_OVERFLOW`) → `FsIndexPort::rebuild_root` for all roots.
     #[instrument(skip(index, handle, res))]
     fn handle_event(index: &Arc<dyn FsIndexPort>, handle: &Handle, res: notify::Result<Event>) {
         match res {

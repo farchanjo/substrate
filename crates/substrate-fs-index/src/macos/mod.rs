@@ -88,9 +88,14 @@ pub(crate) struct MacOsBulkIndex {
 impl MacOsBulkIndex {
     /// Constructs a new `MacOsBulkIndex`.
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "called only when macos-getattrlistbulk feature is active"
+    #[cfg_attr(
+        not(feature = "macos-getattrlistbulk"),
+        expect(
+            dead_code,
+            reason = "called only when macos-getattrlistbulk feature is active; the call site \
+                      in factory.rs is itself cfg-gated on that feature, so this constructor is \
+                      genuinely dead when the feature is off"
+        )
     )]
     pub(crate) fn new() -> Arc<Self> {
         let slot: SnapshotSlot = Arc::new(ArcSwap::from_pointee(IndexSnapshot::default()));
