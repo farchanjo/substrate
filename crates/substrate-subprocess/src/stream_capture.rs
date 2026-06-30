@@ -110,6 +110,28 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
     handle: Arc<ChildHandle>,
     sender: mpsc::Sender<StreamChunk>,
 ) {
+    /// Flushes `accumulated` via [`flush_chunk`] if non-empty, then clears it.
+    ///
+    /// The flushed chunk's `byte_offset` is the offset of its FIRST byte (the
+    /// running total minus the pending length) — passing the raw running
+    /// total would mis-report the offset by one chunk length. Shared by all
+    /// four `read_stream` flush sites (cancel, EOF, threshold, timer-tick).
+    fn flush_if_pending(
+        accumulated: &mut Vec<u8>,
+        stream: Stream,
+        handle: &ChildHandle,
+        sender: &mpsc::Sender<StreamChunk>,
+        byte_offset: u64,
+    ) {
+        if accumulated.is_empty() {
+            return;
+        }
+        let chunk_start =
+            byte_offset.saturating_sub(u64::try_from(accumulated.len()).unwrap_or(u64::MAX));
+        flush_chunk(accumulated, stream, handle, sender, chunk_start);
+        accumulated.clear();
+    }
+
     let mut buf = vec![0u8; CHUNK_CAPACITY];
     let mut interval = tokio::time::interval(FLUSH_INTERVAL);
     // The first tick fires immediately; skip it so we don't flush a zero-byte chunk.
@@ -129,21 +151,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
 
             // Cancellation arm (biased: checked first on each poll).
             () = handle.cancel.cancelled() => {
-                // Flush any accumulated bytes, then exit. The chunk's byte_offset
-                // is the offset of its FIRST byte (running total minus the pending
-                // length), matching the threshold/timer flush arms — passing the
-                // raw running total would mis-report the offset by one chunk length.
-                if !accumulated.is_empty() {
-                    flush_chunk(
-                        &accumulated,
-                        stream,
-                        &handle,
-                        &sender,
-                        byte_offset.saturating_sub(
-                            u64::try_from(accumulated.len()).unwrap_or(u64::MAX),
-                        ),
-                    );
-                }
+                flush_if_pending(&mut accumulated, stream, &handle, &sender, byte_offset);
                 break;
             },
 
@@ -152,21 +160,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                 match n {
                     Ok(0) => {
                         // EOF: flush accumulated bytes, then finalize the TmpFileWriter.
-                        // The final chunk's byte_offset is the offset of its FIRST
-                        // byte (running total minus the pending length), matching the
-                        // threshold/timer flush arms. Passing the raw running total
-                        // here mis-reported the last chunk's offset by one chunk length.
-                        if !accumulated.is_empty() {
-                            flush_chunk(
-                                &accumulated,
-                                stream,
-                                &handle,
-                                &sender,
-                                byte_offset.saturating_sub(
-                                    u64::try_from(accumulated.len()).unwrap_or(u64::MAX),
-                                ),
-                            );
-                        }
+                        flush_if_pending(&mut accumulated, stream, &handle, &sender, byte_offset);
                         finalize_on_eof(tmp_writer.as_ref(), stream, &handle).await;
                         break;
                     },
@@ -192,17 +186,17 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
                         }
                         // 2b. Rotate if the size threshold is crossed (ADR-0056).
                         //     Best-effort: error is logged but never aborts the reader.
-                        if let Some(writer) = &tmp_writer {
-                            if let Err(e) = writer.rotate_if_needed().await {
-                                warn!(
-                                    target: "substrate_audit",
-                                    event = "SUBSTRATE_SUBPROCESS_TMP_ROTATE_ERROR",
-                                    job_id = %handle.job_id,
-                                    stream = %stream,
-                                    error = %e,
-                                    "TmpFileWriter::rotate_if_needed failed; continuing without rotation"
-                                );
-                            }
+                        if let Some(writer) = &tmp_writer
+                            && let Err(e) = writer.rotate_if_needed().await
+                        {
+                            warn!(
+                                target: "substrate_audit",
+                                event = "SUBSTRATE_SUBPROCESS_TMP_ROTATE_ERROR",
+                                job_id = %handle.job_id,
+                                stream = %stream,
+                                error = %e,
+                                "TmpFileWriter::rotate_if_needed failed; continuing without rotation"
+                            );
                         }
                         // 3. Accumulate for mpsc flush.
                         accumulated.extend_from_slice(data);
@@ -210,16 +204,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
 
                         // Flush when 4 KiB threshold hit.
                         if accumulated.len() >= CHUNK_CAPACITY {
-                            flush_chunk(
-                                &accumulated,
-                                stream,
-                                &handle,
-                                &sender,
-                                byte_offset.saturating_sub(
-                                    u64::try_from(accumulated.len()).unwrap_or(u64::MAX),
-                                ),
-                            );
-                            accumulated.clear();
+                            flush_if_pending(&mut accumulated, stream, &handle, &sender, byte_offset);
                         }
                     },
                     Err(e) => {
@@ -236,18 +221,7 @@ async fn read_stream<R: tokio::io::AsyncRead + Unpin>(
 
             // Time-based flush arm: fires every 100 ms per ADR-0054.
             _ = interval.tick() => {
-                if !accumulated.is_empty() {
-                    flush_chunk(
-                        &accumulated,
-                        stream,
-                        &handle,
-                        &sender,
-                        byte_offset.saturating_sub(
-                            u64::try_from(accumulated.len()).unwrap_or(u64::MAX),
-                        ),
-                    );
-                    accumulated.clear();
-                }
+                flush_if_pending(&mut accumulated, stream, &handle, &sender, byte_offset);
             },
         }
     }

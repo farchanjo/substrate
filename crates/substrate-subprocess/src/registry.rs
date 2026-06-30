@@ -65,6 +65,26 @@ const BANNED_ENV_KEYS: &[&str] = &[
     "LD_DEBUG",
 ];
 
+/// Null Object [`CancelSignal`](substrate_domain::ports::fs_index::CancelSignal)
+/// that never cancels.
+///
+/// Used by the supervisor watcher's internal re-spawn path and by tests that
+/// call [`SubprocessRegistry::spawn`] without a caller-supplied cancellation
+/// source. A module-level item (rather than one declared per call site) so
+/// both use sites share a single definition.
+struct NoCancel;
+
+#[async_trait]
+impl substrate_domain::ports::fs_index::CancelSignal for NoCancel {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    async fn cancelled(&self) {
+        std::future::pending::<()>().await;
+    }
+}
+
 /// A simple binary allowlist: a set of absolute path strings.
 ///
 /// Empty = deny-all (default per ADR-0052 §"Binary allowlist").
@@ -174,7 +194,7 @@ pub struct SubprocessRegistry {
     /// Stream-chunk observers fanned-out by the per-job dispatcher task per ADR-0054.
     ///
     /// Empty Vec means no client push channel is active (equivalent to a Null Object
-    /// observer). Multiple observers receive each chunk via the GoF Mediator pattern
+    /// observer). Multiple observers receive each chunk via the `GoF` Mediator pattern
     /// implemented by the dispatcher task.
     observers: Arc<Vec<Arc<dyn StreamChunkObserver>>>,
 
@@ -184,7 +204,7 @@ pub struct SubprocessRegistry {
     /// Receives control-plane lifecycle events (`SubprocessState` transitions).
     state_observers: Arc<Vec<Arc<dyn StateTransitionObserver>>>,
 
-    /// Idempotent name → job_id mapping per ADR-0056.
+    /// Idempotent name → `job_id` mapping per ADR-0056.
     ///
     /// Scoped globally (not per client) because `SubprocessPort::spawn` currently
     /// lacks a `client_id` parameter.
@@ -437,15 +457,14 @@ impl SubprocessRegistry {
     /// supervisor watcher task compute the same terminal state from the same
     /// exit-status semantics.
     fn terminal_state_from_exit(
-        exit: std::io::Result<Option<std::process::ExitStatus>>,
+        exit: &std::io::Result<Option<std::process::ExitStatus>>,
     ) -> SubprocessState {
         match exit {
             Ok(Some(status)) if status.success() => SubprocessState::Succeeded,
-            Ok(Some(_)) => SubprocessState::Failed,
             // Already reaped by another path (e.g. cancellation).
             Ok(None) => SubprocessState::Killed,
-            // wait_exit I/O failure — conservative: Failed.
-            Err(_) => SubprocessState::Failed,
+            // Non-zero exit or wait_exit I/O failure — conservative: Failed.
+            Ok(Some(_)) | Err(_) => SubprocessState::Failed,
         }
     }
 
@@ -521,24 +540,24 @@ impl SubprocessPort for SubprocessRegistry {
         // `SubprocessPort::spawn` currently has no `client_id` parameter.
         // TODO ADR-0056-followup: scope by (ClientId, String) when SubprocessPort::spawn
         // carries client_id.
-        if let Some(ref name) = req.name {
-            if let Some(existing_entry) = self.named_handles.get(name) {
-                let existing_job_id = existing_entry.value().clone();
-                drop(existing_entry);
-                if let Some(handle_entry) = self.handles.get(&existing_job_id) {
-                    let snapshot = Self::snapshot_handle(handle_entry.value());
-                    drop(handle_entry);
-                    if !snapshot.state.is_terminal() {
-                        // Live named handle — return it idempotently.
-                        return Ok(snapshot);
-                    }
-                    // Terminal: release stale mapping and fall through to re-spawn.
-                    self.named_handles.remove(name);
-                    self.handles.remove(&existing_job_id);
-                } else {
-                    // Handle GC'd with stale named entry — release before re-spawn.
-                    self.named_handles.remove(name);
+        if let Some(ref name) = req.name
+            && let Some(existing_entry) = self.named_handles.get(name)
+        {
+            let existing_job_id = existing_entry.value().clone();
+            drop(existing_entry);
+            if let Some(handle_entry) = self.handles.get(&existing_job_id) {
+                let snapshot = Self::snapshot_handle(handle_entry.value());
+                drop(handle_entry);
+                if !snapshot.state.is_terminal() {
+                    // Live named handle — return it idempotently.
+                    return Ok(snapshot);
                 }
+                // Terminal: release stale mapping and fall through to re-spawn.
+                self.named_handles.remove(name);
+                self.handles.remove(&existing_job_id);
+            } else {
+                // Handle GC'd with stale named entry — release before re-spawn.
+                self.named_handles.remove(name);
             }
         }
 
@@ -665,9 +684,8 @@ impl SubprocessPort for SubprocessRegistry {
             // mpsc sender is dropped only once both reader tasks (stdout +
             // stderr) finish, and the recv() loop above drains the bounded
             // channel fully before exiting.
-            let terminal_state = SubprocessRegistry::terminal_state_from_exit(
-                handle_for_dispatcher.wait_exit().await,
-            );
+            let terminal_state =
+                Self::terminal_state_from_exit(&handle_for_dispatcher.wait_exit().await);
 
             // Persist the terminal state atomically so snapshot_handle / result()
             // observe the real state instead of the hardcoded Running fallback.
@@ -798,7 +816,7 @@ impl SubprocessPort for SubprocessRegistry {
                                 // Wait for child exit or supervisor cancel.
                                 tokio::select! {
                                     biased;
-                                    _ = supervisor_cancel.cancelled() => {
+                                    () = supervisor_cancel.cancelled() => {
                                         // Explicit cancel — stop the restart loop.
                                         tracing::debug!(
                                             job_id = %current_job_id,
@@ -806,7 +824,7 @@ impl SubprocessPort for SubprocessRegistry {
                                         );
                                         return;
                                     }
-                                    result = h.wait_exit() => SubprocessRegistry::terminal_state_from_exit(result),
+                                    result = h.wait_exit() => Self::terminal_state_from_exit(&result),
                                 }
                             },
                         }
@@ -827,6 +845,11 @@ impl SubprocessPort for SubprocessRegistry {
                                 // "Stable" = alive for > 2 * backoff_ms milliseconds.
                                 // TODO ADR-0056: reset retry counter on Ready transition once
                                 // health_probe is wired.
+                                #[expect(
+                                    clippy::cast_possible_truncation,
+                                    reason = "process uptime in milliseconds will never \
+                                              approach u64::MAX (~584 million years)"
+                                )]
                                 let elapsed_ms = last_spawn_at.elapsed().as_millis() as u64;
                                 if elapsed_ms > backoff_ms.saturating_mul(2) {
                                     attempt = 0;
@@ -857,8 +880,10 @@ impl SubprocessPort for SubprocessRegistry {
 
                     // Compute exponential backoff capped at `backoff_ms`.
                     let backoff_ms = match &policy {
-                        Some(RestartPolicy::OnFailure { backoff_ms, .. })
-                        | Some(RestartPolicy::Always { backoff_ms }) => *backoff_ms,
+                        Some(
+                            RestartPolicy::OnFailure { backoff_ms, .. }
+                            | RestartPolicy::Always { backoff_ms },
+                        ) => *backoff_ms,
                         _ => 1_000,
                     };
                     // Exponential backoff: 100ms * 2^attempt, capped at backoff_ms.
@@ -902,20 +927,20 @@ impl SubprocessPort for SubprocessRegistry {
                     // Sleep with cooperative cancel check.
                     tokio::select! {
                         biased;
-                        _ = supervisor_cancel.cancelled() => {
+                        () = supervisor_cancel.cancelled() => {
                             tracing::debug!(
                                 job_id = %current_job_id,
                                 "supervisor watcher cancelled during backoff — exiting"
                             );
                             return;
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)) => {}
+                        () = tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)) => {}
                     }
 
                     // Re-spawn via a thin registry view built from the shared interior Arcs.
                     // All fields are cloned/Arc-cloned so the new view shares the same
                     // live state as the parent registry (handles map, named_handles, etc.).
-                    let respawn_registry = Arc::new(SubprocessRegistry {
+                    let respawn_registry = Arc::new(Self {
                         handles: Arc::clone(&watcher_handles),
                         binary_allowlist: binary_allowlist.clone(),
                         env_allowlist: env_allowlist.clone(),
@@ -932,17 +957,6 @@ impl SubprocessPort for SubprocessRegistry {
                         named_handles: Arc::clone(&watcher_named_handles),
                         supervisor_cancels: Arc::clone(&watcher_supervisor_cancels),
                     });
-
-                    struct NoCancel;
-                    #[async_trait::async_trait]
-                    impl substrate_domain::ports::fs_index::CancelSignal for NoCancel {
-                        fn is_cancelled(&self) -> bool {
-                            false
-                        }
-                        async fn cancelled(&self) {
-                            std::future::pending::<()>().await
-                        }
-                    }
 
                     last_spawn_at = std::time::Instant::now();
                     attempt = attempt.saturating_add(1);
@@ -1372,7 +1386,17 @@ pub fn paginate_lines(
         Order::Tail => {
             // Reverse the slice so newest (last) is at index 0.
             lines.reverse();
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "offset/page_size paginate captured subprocess output, bounded \
+                          by aggregate_buffer_bytes (default 64 KiB); never approaches \
+                          the usize truncation point even on 32-bit targets"
+            )]
             let start = (offset as usize).min(lines.len());
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "see start above"
+            )]
             let end = (start + page_size as usize).min(lines.len());
             let page: Vec<String> = lines[start..end].iter().map(|s| (*s).to_owned()).collect();
             let next_offset = if end < lines.len() {
@@ -1383,7 +1407,17 @@ pub fn paginate_lines(
             (page, total, next_offset)
         },
         Order::Head => {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "offset/page_size paginate captured subprocess output, bounded \
+                          by aggregate_buffer_bytes (default 64 KiB); never approaches \
+                          the usize truncation point even on 32-bit targets"
+            )]
             let start = (offset as usize).min(lines.len());
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "see start above"
+            )]
             let end = (start + page_size as usize).min(lines.len());
             let page: Vec<String> = lines[start..end].iter().map(|s| (*s).to_owned()).collect();
             let next_offset = if end < lines.len() {
@@ -1415,6 +1449,12 @@ fn paginate_matches(
         return (Vec::new(), None);
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "offset paginates a captured subprocess search-match list, bounded by \
+                  aggregate_buffer_bytes; never approaches the usize truncation point \
+                  even on 32-bit targets"
+    )]
     let offset = p.offset as usize;
     let page_size = p.page_size.get() as usize;
 
@@ -1550,9 +1590,7 @@ async fn resolve_binary_allowed(
     // broken entry never widens the set. Verify the resolved binary is a regular file.
     let resolved_for_check = resolved.clone();
     let is_member = tokio::task::spawn_blocking(move || {
-        let regular_file = std::fs::metadata(&resolved_for_check)
-            .map(|m| m.is_file())
-            .unwrap_or(false);
+        let regular_file = std::fs::metadata(&resolved_for_check).is_ok_and(|m| m.is_file());
         if !regular_file {
             return false;
         }
@@ -1601,8 +1639,6 @@ pub fn deny_all_registry(
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::panic,
     reason = "test code: pagination/state assertions where panic on setup failure is the correct failure mode"
 )]
 mod tests {
@@ -1715,21 +1751,8 @@ mod tests {
             log_rotation: None,
         };
 
-        struct NullCancel;
-        #[async_trait::async_trait]
-        impl substrate_domain::ports::fs_index::CancelSignal for NullCancel {
-            fn is_cancelled(&self) -> bool {
-                false
-            }
-
-            async fn cancelled(&self) {
-                // Never cancels.
-                std::future::pending::<()>().await
-            }
-        }
-
         let handle_snapshot = registry
-            .spawn(req, &NullCancel)
+            .spawn(req, &NoCancel)
             .await
             .expect("spawn must succeed");
         let job_id = handle_snapshot.job_id.clone();

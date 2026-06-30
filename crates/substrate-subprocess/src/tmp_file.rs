@@ -364,7 +364,7 @@ impl TmpFileWriter {
     ///
     /// 1. Lock the file mutex and flush + close the current FD.
     /// 2. Shift numbered archives in reverse:
-    ///    for N = `keep_files−1` … 1: rename `<base>.log.N` → `<base>.log.N+1` (ok() — missing is fine).
+    ///    for N = `keep_files−1` … 1: rename `<base>.log.N` → `<base>.log.N+1` (`ok()` — missing is fine).
     /// 3. Unlink `<base>.log.<keep_files+1>` if present (overflow from the shift).
     /// 4. Rename current transit file → `<base>.log.1`.
     /// 5. Reopen a fresh transit file at the original `tmp_path`.

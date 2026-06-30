@@ -68,12 +68,9 @@ pub async fn run_once(tmp_root: &Path, max_age: Duration) -> std::io::Result<Rea
     let now = SystemTime::now();
 
     while let Some(entry) = read_dir.next_entry().await? {
-        let file_name = match entry.file_name().into_string() {
-            Ok(s) => s,
-            Err(_) => {
-                stats.skipped_unrelated += 1;
-                continue;
-            },
+        let Ok(file_name) = entry.file_name().into_string() else {
+            stats.skipped_unrelated += 1;
+            continue;
         };
 
         if !is_transit_filename(&file_name) {
@@ -183,8 +180,6 @@ fn is_transit_filename(name: &str) -> bool {
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::panic,
     reason = "test code: filesystem/timing assertions where panic on setup failure is the correct failure mode"
 )]
 mod tests {
@@ -232,10 +227,10 @@ mod tests {
         let stale = tmp.join(".substrate-subprocess-stream-job.stdout.tmp.deadbeef");
         fs::write(&stale, b"stale").expect("write stale");
         // Set mtime 1h in the past.
-        let one_hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        let one_hour_ago = SystemTime::now() - Duration::from_hours(1);
         filetime::set_file_mtime(&stale, one_hour_ago.into()).expect("set mtime");
 
-        let stats = run_once(&tmp, Duration::from_secs(600))
+        let stats = run_once(&tmp, Duration::from_mins(10))
             .await
             .expect("reaper run");
 
@@ -255,7 +250,7 @@ mod tests {
         let young = tmp.join(".substrate-subprocess-stream-job.stdout.tmp.feedface");
         fs::write(&young, b"recent").expect("write");
 
-        let stats = run_once(&tmp, Duration::from_secs(600))
+        let stats = run_once(&tmp, Duration::from_mins(10))
             .await
             .expect("reaper run");
 
@@ -275,10 +270,10 @@ mod tests {
         fs::create_dir_all(&tmp).expect("mkdir");
         let final_file = tmp.join(".substrate-subprocess-stream-job.stdout");
         fs::write(&final_file, b"persisted").expect("write");
-        let one_hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        let one_hour_ago = SystemTime::now() - Duration::from_hours(1);
         filetime::set_file_mtime(&final_file, one_hour_ago.into()).expect("set mtime");
 
-        let stats = run_once(&tmp, Duration::from_secs(600))
+        let stats = run_once(&tmp, Duration::from_mins(10))
             .await
             .expect("reaper run");
 
@@ -297,7 +292,7 @@ mod tests {
         ));
         // Do NOT create the directory.
 
-        let stats = run_once(&tmp, Duration::from_secs(600))
+        let stats = run_once(&tmp, Duration::from_mins(10))
             .await
             .expect("reaper run");
 

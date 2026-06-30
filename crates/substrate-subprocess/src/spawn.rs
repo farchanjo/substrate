@@ -58,7 +58,6 @@ pub(crate) const fn state_to_u8(s: SubprocessState) -> u8 {
 pub(crate) const fn u8_to_state(v: u8) -> SubprocessState {
     match v {
         0 => SubprocessState::Pending,
-        1 => SubprocessState::Running,
         2 => SubprocessState::Succeeded,
         3 => SubprocessState::Failed,
         4 => SubprocessState::Cancelled,
@@ -68,6 +67,9 @@ pub(crate) const fn u8_to_state(v: u8) -> SubprocessState {
         7 => SubprocessState::Starting,
         8 => SubprocessState::Ready,
         9 => SubprocessState::Restarting,
+        // 1 is the canonical encoding of Running (see state_to_u8 above); any
+        // other unrecognised byte also falls back here as the conservative
+        // safe choice — still-live rather than silently terminal.
         _ => SubprocessState::Running,
     }
 }

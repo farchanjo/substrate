@@ -1,4 +1,4 @@
-//! Health probe runtime per ADR-0056 §"HealthProbe".
+//! Health probe runtime per ADR-0056 §"`HealthProbe`".
 //!
 //! Polled by the supervisor watcher in [`crate::registry::SubprocessRegistry`]. Three
 //! consecutive `FailedTransient` results escalate to `FailedTerminal`, after which
@@ -60,7 +60,7 @@ pub enum ProbeOutcome {
 /// Runs a single probe pass per ADR-0056.
 ///
 /// For [`HealthProbe::None`] and [`HealthProbe::LogPattern`] returns [`ProbeOutcome::Skipped`]
-/// immediately (LogPattern is stream-observer-driven; see module docs).
+/// immediately (`LogPattern` is stream-observer-driven; see module docs).
 ///
 /// For [`HealthProbe::PortOpen`] and [`HealthProbe::HttpGet`] attempts **one** poll
 /// within `interval_ms` and returns [`ProbeOutcome::Ready`] or
@@ -336,6 +336,10 @@ fn parse_url(url: &str) -> Option<(String, u16, String)> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test code: TcpListener::bind/local_addr setup where panic on failure is the correct failure mode"
+)]
 mod tests {
     use super::*;
     use substrate_domain::subprocess::supervisor::HealthProbe;
