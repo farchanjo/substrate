@@ -361,8 +361,11 @@ pub async fn spawn_supervised(
     let mut watchdog = crate::watchdog::install(&mut cmd)
         .map_err(|e| SubprocessError::SpawnFailed { source: e })?;
 
-    // Step 5: pre-exec hook (setsid + prctl).
-    crate::pre_exec::configure_pre_exec(&mut cmd);
+    // Step 5: pre-exec hook (setsid + prctl). `parent_death_signal` is `None` for
+    // every ordinary subprocess.spawn (preserves the SIGTERM default); the launch
+    // BC's detached supervisor sets `Some(SIGKILL)` for the Services it spawns
+    // (ADR-0068 §"Cross-platform parent-death binding").
+    crate::pre_exec::configure_pre_exec(&mut cmd, req.parent_death_signal);
 
     // Step 6: spawn.
     let child = cmd
