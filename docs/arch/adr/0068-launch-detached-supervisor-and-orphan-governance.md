@@ -89,14 +89,32 @@ A detached Stack records a durable entry under
 `${XDG_STATE_HOME:-~/.local/state}/substrate/stacks/<stack>/` containing:
 
 - `supervisor.json` — `{ supervisor_pid, start_epoch, policy, config_hash,
-  children: [ { name, pid, pgid } ] }`, written atomically via temp-plus-rename
-  ([ADR-0033](0033-transactional-write-pattern.md)).
+  children: [ { name, pid, pgid, start_epoch } ] }`, written atomically via
+  temp-plus-rename ([ADR-0033](0033-transactional-write-pattern.md)). Each child's
+  `start_epoch` is its own process start-time, pinned against pid recycling.
 - `control.fifo` — inbound command channel (server to supervisor).
 - `events.ndjson` — the durable event-log
   ([ADR-0066](0066-launch-event-stream-and-notification-model.md)).
 
 The registry is the rendezvous a fresh MCP server uses to discover, re-attach to,
 adopt, or reap a detached Stack.
+
+### Registry and IPC permission boundary
+
+The control channel consumes destructive verbs (`launch.down`, `launch.reload`)
+from any same-UID session with no in-band sender authentication, so the registry
+must be a private, same-owner tree:
+
+- `stacks/<stack>/` is created mode `0700` owned by the invoking user,
+  `fstat`-checked on open and rejected if group/world-accessible or not owner-owned.
+- `control.fifo` is created with `mkfifo(0600)`; before opening the read end the
+  supervisor `fstat`s the fd and rejects it unless it is a FIFO, mode `0600`, and
+  `st_uid == euid` (so a hostile pre-created FIFO or a co-resident reader is refused).
+- Every ancestor of `${XDG_STATE_HOME:-~/.local/state}/substrate` is checked for
+  the world-write bit; a world-writable ancestor (for example a relocated
+  `XDG_STATE_HOME`) is rejected.
+- Any of these failing yields `SUBSTRATE_LAUNCH_REGISTRY_INSECURE` at startup,
+  before the read end is opened.
 
 ### Lock-free multiplexed IPC
 
@@ -112,7 +130,14 @@ multiplexes every source into one `mpsc` mailbox consumed by the supervisor acto
 
 Multiple sessions write command frames bounded to `PIPE_BUF` so the kernel
 guarantees atomic, interleave-free writes; the single mailbox consumer serialises
-them. There is no advisory lock and no controller election.
+them. There is no advisory lock and no controller election. POSIX guarantees
+atomicity only for writes `<= PIPE_BUF`, so the bound is a cooperative convention a
+hostile writer could violate: `MAX_COMMAND_FRAME_SIZE` is fixed at `PIPE_BUF - 1`,
+the writer rejects an oversize frame before `write()` with
+`SUBSTRATE_LAUNCH_FRAME_TOO_LARGE`, and the consumer discards any frame exceeding
+the bound (emitting the same code with a `correlation_id`) rather than attempting
+reassembly. The FIFO is already owner-only (mode `0600`), so no magic-byte or
+checksum framing is added.
 
 ### Disconnect policy
 
@@ -127,11 +152,18 @@ Per Stack (`on_client_disconnect`):
 
 ### Cross-platform parent-death binding
 
-Every child is bound to the supervisor so that if the supervisor dies, the kernel
-kills the children, reusing [ADR-0053](0053-process-lifecycle-cascade-contract.md):
-`PR_SET_PDEATHSIG(SIGKILL)` on Linux, the `WatchdogPipe` (child exits on EOF) on
-macOS, and a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on Windows.
-This guarantees no orphan arises from supervisor death alone.
+Every child substrate spawns is bound to the supervisor at spawn time so that if
+the supervisor dies the kernel kills the children, reusing
+[ADR-0053](0053-process-lifecycle-cascade-contract.md):
+`PR_SET_PDEATHSIG(SIGKILL)` on Linux (kernel-enforced, survives re-parenting), the
+`WatchdogPipe` (child exits on EOF) on macOS, and a Job Object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on Windows. The binding holds for processes
+substrate spawned itself. An **adopted** child (reaped from a prior supervisor)
+never inherited the macOS `WatchdogPipe` fd and has no rebindable parent-death
+primitive, so on macOS adopted/arbitrary children rely solely on `pgid` tracking
+and reaper-on-boot, not kernel parent-death; Linux re-binds `PR_SET_PDEATHSIG` on
+adopt where the platform allows. No orphan arises from supervisor death for
+spawned children, with reaper-on-boot as the backstop for adopted ones.
 
 ### Orphan TTL
 
@@ -142,8 +174,16 @@ Stack cannot run indefinitely.
 
 ### Reaper on boot: adopt or reap
 
-On every supervisor and MCP-server start, a reconcile pass walks the registry. For
-each recorded child:
+On every supervisor and MCP-server start, a reconcile pass walks the registry.
+Before applying any rule, the reaper re-reads each recorded child's live process
+start-time (`/proc/<pid>/stat` field 22 on Linux, `kinfo_proc.p_starttime` on
+macOS) and compares it to the recorded `start_epoch`. The kernel can recycle a
+dead child's `pid`/`pgid` onto an unrelated process, so a mismatch means the
+recorded child is gone and a stranger holds its pid: the reaper clears the entry,
+sends **no** signal, and records `SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED`. It likewise
+verifies the pgid leader's start-time before any `killpg`, so a recycled process
+group is never signalled. Only on a start-time match does it apply, for each
+recorded child:
 
 1. Alive and parented to a live supervisor for this Stack → re-attach.
 2. Orphaned (reparented to init or launchd) and the Stack policy is `detach` →
@@ -201,6 +241,19 @@ ubiquitous language names the component a Supervisor and rejects "sidecar".
   detached supervisor is not responding; run launch.status to trigger
   reaper-on-boot"`.
 
+The supervisor-hardening codes below occupy `-32054` through `-32056` (see the
+2026-06-30 supervisor amendment in [ADR-0010](0010-error-taxonomy.md)):
+
+- `SUBSTRATE_LAUNCH_REGISTRY_INSECURE` (-32054) — recovery hint: `"set the launch
+  stacks dir to 0700 and control.fifo to 0600 owned by you, with no world-writable
+  ancestor; then retry"`.
+- `SUBSTRATE_LAUNCH_FRAME_TOO_LARGE` (-32055) — recovery hint: `"the control-FIFO
+  command frame exceeds PIPE_BUF-1 and was rejected to preserve atomic framing;
+  send a smaller command"`.
+- `SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED` (-32056) — recovery hint: `"a recorded
+  child's pid was recycled to another process; the stale entry was cleared with no
+  signal sent; re-run launch.up"`.
+
 ## Consequences
 
 ### Positive
@@ -236,8 +289,17 @@ ubiquitous language names the component a Supervisor and rejects "sidecar".
   assert auto-down and `SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED`.
 - Integration test: simulate an orphaned child in the registry; assert reaper
   reaps under `shutdown` and adopts under `detach`.
-- Unit test: concurrent command frames from two sessions over the shared FIFO;
-  assert atomic framing and serialised application with no lock.
+- Unit test: concurrent in-bound command frames (each <= MAX_COMMAND_FRAME_SIZE)
+  from two sessions over the shared FIFO; assert atomic interleave-free framing and
+  serialised application with no lock.
+- Security test: `stacks/<stack>/` at mode 0755 or a `control.fifo` at 0666;
+  assert `SUBSTRATE_LAUNCH_REGISTRY_INSECURE` before the read end is opened.
+- Unit test: a writer emitting a frame `> PIPE_BUF`; assert rejection with
+  `SUBSTRATE_LAUNCH_FRAME_TOO_LARGE` before write, and a consumer-side oversize
+  frame discarded with the same code, never reassembled.
+- Security test: recycle a recorded child's pid/pgid onto an unrelated process;
+  assert the reaper sends no signal, clears the entry, and records
+  `SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED`.
 - Integration test: a zombie child; assert the reconcile sweep `waitpid`-reaps it.
 
 ## Links

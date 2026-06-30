@@ -63,7 +63,11 @@ package schemas
 	"SUBSTRATE_LAUNCH_ORPHAN_REAPED" |
 	"SUBSTRATE_LAUNCH_ORPHAN_ADOPTED" |
 	"SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED" |
-	"SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE"
+	"SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE" |
+	// Launch supervisor-hardening errors per ADR-0068 (-32054 through -32056)
+	"SUBSTRATE_LAUNCH_REGISTRY_INSECURE" |
+	"SUBSTRATE_LAUNCH_FRAME_TOO_LARGE" |
+	"SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED"
 
 // #ErrorCategory classifies codes by operational concern.
 // "job" added per ADR-0010 amendment for async-job BC per ADR-0040.
@@ -417,6 +421,25 @@ package schemas
 		code:              "SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE"
 		http_jsonrpc_code: -32053
 		recovery_hint:     "The detached supervisor is not responding; run launch.status to trigger reaper-on-boot."
+		category:          "lifecycle"
+	}
+	// Launch supervisor-hardening errors per ADR-0068 (registry/IPC + reaper).
+	SUBSTRATE_LAUNCH_REGISTRY_INSECURE: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_REGISTRY_INSECURE"
+		http_jsonrpc_code: -32054
+		recovery_hint:     "Set the launch stacks dir to 0700 and control.fifo to 0600 owned by you, with no world-writable ancestor; then retry."
+		category:          "security"
+	}
+	SUBSTRATE_LAUNCH_FRAME_TOO_LARGE: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_FRAME_TOO_LARGE"
+		http_jsonrpc_code: -32055
+		recovery_hint:     "The control-FIFO command frame exceeds PIPE_BUF-1 and was rejected to preserve atomic framing; send a smaller command."
+		category:          "input"
+	}
+	SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED"
+		http_jsonrpc_code: -32056
+		recovery_hint:     "A recorded child's pid was recycled to another process; the stale entry was cleared with no signal sent. Re-run launch.up."
 		category:          "lifecycle"
 	}
 }

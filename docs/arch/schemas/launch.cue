@@ -142,6 +142,13 @@ package schemas
 	name: #ServiceName
 	pid:  int & >=2
 	pgid: int & >=2
+
+	// start_epoch is the child's process start-time (seconds since the Unix epoch:
+	// /proc/<pid>/stat field 22 on Linux, kinfo_proc.p_starttime on macOS). The
+	// reaper re-reads the live start-time and compares before any adopt/re-attach/
+	// killpg; a mismatch means the pid was recycled (ADR-0068), so the entry is
+	// cleared and no signal is sent.
+	start_epoch: int & >=0
 }
 
 // DDD role: Entity
