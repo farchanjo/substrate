@@ -79,19 +79,24 @@ source for notifications and for replay.
   `launch.logs?since=<cursor>`. This path is always available and survives a
   stateless protocol.
 - **Push accelerator (when the client supports it):**
-  - Events: a subscribable resource `launch://stack/<id>/events?since=<cursor>`.
-    The server sends `notifications/resources/updated` (a coalesced poke); the
-    client reads the delta from the cursor. The cursor is an opaque
-    [ADR-0008](0008-mcp-features-map.md) value encoded in the URI because
-    `resources/read` has no native range.
+  - Events: the subscribable resource is the cursor-less base URI
+    `launch://stack/<id>/events`. `resources/subscribe` is on that stable URI and
+    the server pokes the same URI with `notifications/resources/updated` (a
+    coalesced poke); the client then reads the delta with `resources/read` passing
+    `?since=<cursor>`. The `?since` cursor — an opaque
+    [ADR-0008](0008-mcp-features-map.md) value — belongs only on the read call,
+    never on the subscription identity: MCP matches `resources/updated` back to a
+    subscription by exact URI, so a per-client advancing cursor in the subscription
+    URI would make it unmatchable.
   - Continuous telemetry: while a `launch.up` Task is in flight, a combined
     task-augmented request may also carry a `progressToken`, whose
     `notifications/progress` stream is reserved for cpu/memory/line counters.
     Structural lifecycle transitions (`STARTED` / `READY` / `CRASHED`) travel over
     `notifications/tasks/status` keyed by the `taskId`, not the progress channel
     ([ADR-0049](0049-mcp-tasks-primitive-adoption.md) dual-stack model).
-  - Raw output: a subscribable resource
-    `launch://stack/<id>/service/<svc>/log?since=<cursor>` for drill-down.
+  - Raw output: the subscribable resource is the cursor-less base URI
+    `launch://stack/<id>/service/<svc>/log`; `?since=<cursor>` is passed on
+    `resources/read` for drill-down, never on the subscription identity.
 
 The `notifications/message` (logging) path is explicitly NOT used; it is removed
 by SEP-2577.

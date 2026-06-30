@@ -48,6 +48,18 @@ channels:
     messages:
       logEvent:
         $ref: '#/components/messages/LogEvent'
+  notificationsResourcesUpdated:
+    address: notifications/resources/updated
+    description: |
+      Server pokes a subscribed resource whose contents changed, per
+      ADR-0066 (launch distilled event stream) and ADR-0013
+      resources{subscribe,listChanged}. The poke carries ONLY the stable,
+      cursor-less resource URI; the client reads the delta via
+      resources/read with ?since=<cursor>. Pokes are coalesced to at most
+      one per interval per resource (ADR-0066 notify.rate_per_sec).
+    messages:
+      resourceUpdatedEvent:
+        $ref: '#/components/messages/ResourceUpdatedEvent'
 operations:
   emitProgress:
     action: send
@@ -68,6 +80,13 @@ operations:
     channel:
       $ref: '#/channels/notificationsLog'
     summary: Server emits diagnostic structured log entry per ADR-0036.
+  emitResourceUpdated:
+    action: send
+    channel:
+      $ref: '#/channels/notificationsResourcesUpdated'
+    summary: >-
+      Server emits a coalesced resource-updated poke for a launch stack
+      event or log resource (ADR-0066).
 components:
   messages:
     ProgressEvent:
@@ -213,6 +232,24 @@ components:
               Equals job_id when scoped to an async job per ADR-0040.
             type: string
             pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+    ResourceUpdatedEvent:
+      name: ResourceUpdatedEvent
+      summary: >-
+        Cursor-less poke that a subscribed resource changed; the client
+        reads the delta via resources/read?since=<cursor> (ADR-0066).
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - uri
+        properties:
+          uri:
+            description: |
+              The stable, cursor-less resource URI that was subscribed and
+              has new content, e.g. launch://stack/<id>/events or
+              launch://stack/<id>/service/<svc>/log. The ?since cursor is
+              NOT part of this URI; it belongs only on resources/read.
+            type: string
   schemas:
     StreamProgressEventPayload:
       description: |
