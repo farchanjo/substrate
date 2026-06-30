@@ -55,6 +55,15 @@ mindmap
       RestartPolicy
       HealthProbe
       supervisor
+    Launch
+      Profile
+      Launch Service
+      Stack
+      Disconnect Policy
+      detached supervisor
+      reconciler
+      zero-orphan guarantee
+      event-log
     Network
       SocketEntry
       TcpState
@@ -142,6 +151,14 @@ field; they are not domain events and carry no behavior. See
 [ADR-0025](adr/0025-bounded-context-interactions.md) and
 [ADR-0009](adr/0009-observability.md).
 
+## bless
+
+The act of recording a Profile's content-and-inode identity tuple in the
+user-scope trust store, suppressing the per-run elicitation prompt on subsequent
+`launch.up`. Blessing never relaxes the subprocess binary allowlist; it changes
+only whether a human is asked to confirm already-blessed commands. See
+[ADR-0064](adr/0064-launch-profile-trust-model.md).
+
 ## bounded context
 
 A named semantic region of the domain with its own ubiquitous language,
@@ -223,6 +240,21 @@ setting `refuse_degraded_jail = false`. Per
 [ADR-0035](adr/0035-path-safety-hardening.md) and
 [ADR-0042](adr/0042-capability-adapter-factory.md).
 
+## detached supervisor
+
+The same `substrate` binary invoked as `--supervise <stack>`, detached via
+`setsid`, that owns and supervises a detached Stack's children after the MCP
+server exits, communicating over the filesystem and FIFOs only (no socket). It is
+the durable owner that prevents a detached Stack from becoming orphaned. See
+[ADR-0068](adr/0068-launch-detached-supervisor-and-orphan-governance.md).
+
+## Disconnect Policy
+
+The per-Stack rule for what happens when the MCP client disconnects: `shutdown`
+(default) drains and kills the Stack, leaving zero surviving processes; `detach`
+keeps it alive under a detached supervisor, re-attachable by a later session. See
+[ADR-0068](adr/0068-launch-detached-supervisor-and-orphan-governance.md).
+
 ## dry-run
 
 An execution mode in which a tool simulates a mutation and returns a structured
@@ -249,6 +281,13 @@ from the list are stripped before `exec`. The library-injection variables
 `env_allowlist` contains. Values may additionally be overridden via
 `env_override`. See [ADR-0052](adr/0052-subprocess-execution-architecture.md) and
 [schemas/subprocess.cue](schemas/subprocess.cue).
+
+## event-log
+
+The durable per-Stack `events.ndjson` ring that records both lifecycle-plane and
+semantic-plane launch events; it is the single source for resource-updated
+notifications and for summary-plus-tail replay on reconnect. See
+[ADR-0066](adr/0066-launch-event-stream-and-notification-model.md).
 
 ## FsIndexPort
 
@@ -367,11 +406,26 @@ component of `sys.info`). On Linux it is the `release` field of `uname(2)`
 object owned by the system-info bounded context. See
 [ADR-0002](adr/0002-bounded-contexts.md).
 
+## Launch Service
+
+One entry in a Profile catalog that materializes to exactly one supervised child
+process via `subprocess.spawn`. Carries command (array-only), args, env, cwd,
+`depends_on`, an optional readiness probe, and an optional restart policy reused
+from the subprocess context. See
+[ADR-0063](adr/0063-launch-orchestration-bounded-context.md).
+
 ## LLM agent
 
 An autonomous software agent driven by a large language model that invokes
 substrate tools via the MCP protocol to accomplish OS management tasks. LLM
 agent inputs are considered untrusted; all security enforcement is server-side.
+
+## lifecycle event
+
+A typed, authoritative launch event marking a structural transition (`STARTED`,
+`READY`, `EXITED`, `CRASHED`, `RESTARTING`, `ORPHAN_REAPED`, `ORPHAN_ADOPTED`),
+distinct from the advisory semantic event. See
+[ADR-0066](adr/0066-launch-event-stream-and-notification-model.md).
 
 ## LoadAverage
 
@@ -492,6 +546,13 @@ the `*.tmp.<uuid7>` naming pattern, checks that the file `mtime` predates
 [ADR-0055](adr/0055-orphan-reaper-on-startup.md) and
 [ADR-0033](adr/0033-transactional-writes.md).
 
+## orphan TTL
+
+The dead-man bound (`orphan_ttl_secs`, default 3600) after which a detached Stack
+with no client attached is automatically brought down, preventing a forgotten
+stack from running indefinitely and dirtying the host. See
+[ADR-0068](adr/0068-launch-detached-supervisor-and-orphan-governance.md).
+
 ## page cursor
 
 An opaque pagination token returned in list responses when the result set
@@ -566,6 +627,13 @@ resource fields. It is a point-in-time snapshot and carries no behavior; on
 Linux it is read from `/proc/<pid>`, on macOS via `sysctl`/`libproc`. Owned by
 the process bounded context. See [ADR-0002](adr/0002-bounded-contexts.md).
 
+## Profile
+
+The immutable catalog parsed from a project-local `.substrate.toml`: named Launch
+Services plus Stack-level defaults (disconnect policy, orphan TTL, auto-bless).
+Constructed only after the TOFU trust gate passes; never built from untrusted
+bytes. See [ADR-0063](adr/0063-launch-orchestration-bounded-context.md).
+
 ## ProgressToken
 
 UUIDv7 value object that is an alias for `JobId`; used as the MCP
@@ -579,6 +647,14 @@ An MCP protocol message sent by the server to the client during a long-running
 tool call to report incremental progress. Substrate uses `ProgressToken` (shared
 kernel value object) to associate notifications with the originating request.
 See [ADR-0025](adr/0025-bounded-context-interactions.md).
+
+## reconciler
+
+The launch component that diffs a desired Profile against a running Stack and
+applies a minimal ordered op-plan on `launch.reload`, restarting only Services
+whose spawn-time inputs changed and degrading to a subgraph down/up only when it
+cannot safely sequence a topology change. See
+[ADR-0065](adr/0065-launch-dependency-graph-and-reconciler-reload.md).
 
 ## recovery_hint
 
@@ -601,6 +677,12 @@ Backoff is a fixed wait (the implementation may add up to 2x jitter but never
 exceeds `backoff_ms`) and resets after the child stays `Ready` long enough to
 indicate stable operation. See
 [ADR-0056](adr/0056-subprocess-supervisor-semantics.md).
+
+## semantic event
+
+An advisory launch event distilled from a child's stdout/stderr by declared regex
+(coalesced and rate-capped), sitting on top of the authoritative lifecycle plane.
+See [ADR-0066](adr/0066-launch-event-stream-and-notification-model.md).
 
 ## SequenceNumber
 
@@ -645,6 +727,14 @@ single socket. It carries the local and remote address/port, the `TcpState`
 (for TCP), the owning inode, and an optional `pid` resolved best-effort by the
 `PidResolver`. `SocketEntry` is a query read-model, not a mutation aggregate.
 See [ADR-0058](adr/0058-network-socket-introspection.md).
+
+## Stack
+
+The aggregate root of the launch context: a running instance of a Profile owning
+the dependency DAG, the per-Service handles, the pinned config hash, and the
+lifecycle state. A running Stack is immutable; on-disk edits apply only via
+`launch.up` or `launch.reload`, each of which re-blesses the new content. See
+[ADR-0063](adr/0063-launch-orchestration-bounded-context.md).
 
 ## STDIO transport
 
@@ -779,6 +869,14 @@ name. The wire names are frozen and authoritative for the MCP protocol; the
 logical names are authoritative for domain semantics and ubiquitous language.
 See [ADR-0062](adr/0062-tool-naming-convention.md).
 
+## Trust on First Use (TOFU)
+
+The bless-once trust gate for a Profile: the trust decision (open `O_NOFOLLOW`,
+fstat the inode tuple, hash the content, compare against the user-scope bless
+record) is made before any field is read, so a hostile cloned repository cannot
+execute anything until a human blesses it. Mirrors the mise/git repository-trust
+CVE class. See [ADR-0064](adr/0064-launch-profile-trust-model.md).
+
 ## value object
 
 A domain object defined entirely by its attributes, with no mutable identity.
@@ -805,3 +903,11 @@ synchronously in-process at mutation commit time, within the same transactional
 write scope as the mutation itself. Ensures the index is never stale relative
 to the on-disk state for operations performed by substrate. Per
 [ADR-0041](adr/0041-filesystem-index-native-tiers.md).
+
+## zero-orphan guarantee
+
+The launch contract that no supervised process is ever left running unmanaged,
+enforced by five independent layers: default-shutdown disconnect policy,
+parent-death binding (`PR_SET_PDEATHSIG` / watchdog pipe / Job Object), orphan
+TTL, reaper-on-boot adopt-or-reap, and process-group reap. See
+[ADR-0068](adr/0068-launch-detached-supervisor-and-orphan-governance.md).
