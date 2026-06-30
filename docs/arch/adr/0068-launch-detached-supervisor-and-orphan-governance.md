@@ -90,7 +90,7 @@ A detached Stack records a durable entry under
 
 - `supervisor.json` — `{ supervisor_pid, start_epoch, policy, config_hash,
   children: [ { name, pid, pgid } ] }`, written atomically via temp-plus-rename
-  ([ADR-0033](0033-transactional-writes.md)).
+  ([ADR-0033](0033-transactional-write-pattern.md)).
 - `control.fifo` — inbound command channel (server to supervisor).
 - `events.ndjson` — the durable event-log
   ([ADR-0066](0066-launch-event-stream-and-notification-model.md)).
@@ -243,7 +243,7 @@ Extending [ADR-0010](0010-error-taxonomy.md):
 - [ADR-0010](0010-error-taxonomy.md) — error taxonomy extended with orphan codes
 - [ADR-0015](0015-distribution.md) — single binary; `--supervise` is the same
   binary (scoped exception)
-- [ADR-0033](0033-transactional-writes.md) — atomic temp-plus-rename for the
+- [ADR-0033](0033-transactional-write-pattern.md) — atomic temp-plus-rename for the
   registry
 - [ADR-0052](0052-subprocess-execution-architecture.md) — Option C (sidecar)
   scoped exception

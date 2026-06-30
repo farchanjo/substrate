@@ -46,7 +46,7 @@ is ever left polluting the host?
 - The async-zone classification ([ADR-0003](0003-crate-stack-and-async-zones.md)),
   cancellation patterns ([ADR-0037](0037-async-cancellation-patterns.md)), and
   signal safety ([ADR-0032](0032-signal-safety.md)) apply unchanged.
-- Hexagonal layering ([ADR-0022](0022-cargo-workspace-layout.md)): the new
+- Hexagonal layering ([ADR-0022](0022-project-layout.md)): the new
   adapter crate depends on `substrate-domain` and the subprocess adapter port,
   never the reverse.
 - Tool naming ([ADR-0062](0062-tool-naming-convention.md)): tools are namespaced
@@ -107,7 +107,7 @@ Tools exposed, all namespaced `launch.*`:
 - `launch.trust` — bless a Profile (see the trust ADR, forthcoming ADR-0064).
 
 `launch` is realised by a new crate `substrate-launch`
-([ADR-0022](0022-cargo-workspace-layout.md)) that depends on `substrate-domain`,
+([ADR-0022](0022-project-layout.md)) that depends on `substrate-domain`,
 `substrate-policy`, and the subprocess adapter port. No adapter depends on it.
 
 ### Composition over the subprocess BC
@@ -282,7 +282,7 @@ sequenceDiagram
   uses filesystem and FIFO IPC only, no socket
 - [ADR-0015](0015-distribution.md) — single-binary distribution; detached mode is
   the same binary, not a second artifact (scoped exception)
-- [ADR-0022](0022-cargo-workspace-layout.md) — workspace layout; new crate
+- [ADR-0022](0022-project-layout.md) — workspace layout; new crate
   `substrate-launch`
 - [ADR-0049](0049-mcp-tasks-primitive-adoption.md) — MCP Tasks; `launch.up` rides
   the Tasks control-plane

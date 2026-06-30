@@ -33,7 +33,7 @@ events to a client within those constraints.
   over resource subscriptions and, during a Task, over progress notifications.
 - A durable pull path must always exist and must survive the stateless direction
   of the MCP roadmap; push is a best-effort accelerator, never a requirement.
-- Cursor semantics reuse [ADR-0008](0008-pagination-cursor.md); capability
+- Cursor semantics reuse [ADR-0008](0008-mcp-features-map.md); capability
   negotiation reuses [ADR-0013](0013-mcp-protocol-version.md).
 - Secrets that a child prints must not reach the model context unredacted.
 
@@ -82,7 +82,7 @@ source for notifications and for replay.
   - Events: a subscribable resource `launch://stack/<id>/events?since=<cursor>`.
     The server sends `notifications/resources/updated` (a coalesced poke); the
     client reads the delta from the cursor. The cursor is an opaque
-    [ADR-0008](0008-pagination-cursor.md) value encoded in the URI because
+    [ADR-0008](0008-mcp-features-map.md) value encoded in the URI because
     `resources/read` has no native range.
   - Continuous telemetry: while a `launch.up` Task is in flight, the Task's
     `progressToken` carries `notifications/progress` for the Task's lifetime
@@ -192,7 +192,7 @@ flowchart LR
 
 - [ADR-0007](0007-tool-card-narrative-arc.md) — narrative-arc bifurcation applied
   to live event streams
-- [ADR-0008](0008-pagination-cursor.md) — opaque cursor reused for `?since`
+- [ADR-0008](0008-mcp-features-map.md) — opaque cursor reused for `?since`
 - [ADR-0013](0013-mcp-protocol-version.md) — capability negotiation; degrade to
   pull
 - [ADR-0049](0049-mcp-tasks-primitive-adoption.md) — Tasks; progress token over

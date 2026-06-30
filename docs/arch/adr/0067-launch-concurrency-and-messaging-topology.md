@@ -17,7 +17,7 @@ event classifier, readiness probes, a restart/crash-loop supervisor, a status
 surface, and the channels that carry events to MCP subscribers. These components
 share state — restart counters, current Service state, the subscriber set — that,
 if guarded by locks, invites races and contention and conflicts with the
-`panic = "abort"` constraint ([ADR-0014](0014-panic-abort.md)) under which
+`panic = "abort"` constraint ([ADR-0014](0014-build-system-and-toolchain.md)) under which
 unwind-based RAII cleanup inside blocking closures is unavailable.
 
 This ADR defines the in-process concurrency and messaging topology so that the
@@ -99,7 +99,7 @@ cancellation arm. Concurrent spawns and readiness probes are bounded by an
 supervisor reactor is async-native (Zone A); the actual spawn is the subprocess
 BC's blocking path (Zone B). Because state is single-owner and cleanup is explicit
 on the actor's shutdown path, `panic = "abort"`
-([ADR-0014](0014-panic-abort.md)) does not require unwind-based RAII.
+([ADR-0014](0014-build-system-and-toolchain.md)) does not require unwind-based RAII.
 
 ### Default channel bounds
 
@@ -167,7 +167,7 @@ flowchart TD
 
 - [ADR-0003](0003-crate-stack-and-async-zones.md) — async zones; supervisor is
   Zone A, spawn is Zone B
-- [ADR-0014](0014-panic-abort.md) — `panic = "abort"`; message passing avoids
+- [ADR-0014](0014-build-system-and-toolchain.md) — `panic = "abort"`; message passing avoids
   unwind-based RAII
 - [ADR-0037](0037-async-cancellation-patterns.md) — cancellation subtree and
   semaphore permits

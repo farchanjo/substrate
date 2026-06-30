@@ -199,4 +199,4 @@ timers over a single `mio` reactor
 The launch bounded context is realised by `substrate-launch` (opt-in Cargo
 feature `launch`), which depends on `substrate-domain`, `substrate-policy`, and
 the subprocess adapter port, and on no other adapter
-([ADR-0022](../../adr/0022-cargo-workspace-layout.md)).
+([ADR-0022](../../adr/0022-project-layout.md)).
