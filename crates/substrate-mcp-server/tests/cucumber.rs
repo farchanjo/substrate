@@ -280,6 +280,40 @@ impl SubstrateWorld {
         self.perform_initialize();
     }
 
+    /// Spawns the substrate binary with a fully custom `substrate.toml` body and
+    /// a user-supplied allowlist root.
+    ///
+    /// Unlike [`spawn_and_initialize_with_root`](Self::spawn_and_initialize_with_root),
+    /// which always writes the minimal default config, this lets a caller add
+    /// extra sections (e.g. `[subprocess] binary_allowlist`) that the other
+    /// `spawn_and_initialize_*` helpers don't expose. Needed by the launch BC's
+    /// Milestone-2 scenarios (`tests/steps/launch/milestone2.rs`), which spawn a
+    /// real detached supervisor that must be allowed to exec a real fixture
+    /// binary -- not covered by the default empty allowlist.
+    pub fn spawn_and_initialize_with_config(&mut self, config_toml: &str, root: &Path) {
+        let tmp = TempDir::new().expect("TempDir");
+        std::fs::write(tmp.path().join("substrate.toml"), config_toml).expect("write substrate.toml");
+        let mut child = Self::spawn_server(tmp.path());
+        let stdin = child.stdin.take().expect("child stdin");
+        let stdout = child.stdout.take().expect("child stdout");
+        let stderr = child.stderr.take().expect("child stderr");
+        self.sandbox = Some(tmp);
+        self.allowlist_root = Some(root.to_path_buf());
+        self.stdin_writer = Some(stdin);
+        self.stdout_reader = Some(BufReader::new(stdout));
+        self.child = Some(child);
+        let stderr_buf = Arc::clone(&self.stderr_lines);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for l in reader.lines().map_while(Result::ok) {
+                if let Ok(mut guard) = stderr_buf.lock() {
+                    guard.push(l);
+                }
+            }
+        });
+        self.perform_initialize();
+    }
+
     /// Sends the MCP initialize + notifications/initialized handshake.
     pub fn perform_initialize(&mut self) {
         let id = self.send_rpc(
@@ -784,6 +818,6 @@ fn features_dir() -> PathBuf {
 async fn main() {
     SubstrateWorld::cucumber()
         .max_concurrent_scenarios(1)
-        .run(features_dir())
+        .run_and_exit(features_dir())
         .await;
 }

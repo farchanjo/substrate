@@ -23,11 +23,15 @@
 //! - [`events`] — redaction-at-source, pull-floor degrade (ADR-0066).
 //! - [`server`] — full-server scenarios needing the MCP wire (tool cards,
 //!   Task progress) rather than a bare `LaunchRegistry` (ADR-0069).
-//! - [`milestone2`] — the eleven scenarios whose feature (detached supervisor,
-//!   durable registry, control FIFO, reaper-on-boot) is accepted as the
-//!   Milestone 2 design (ADR-0068) but not yet implemented. These register
-//!   real Given/When/Then steps and structurally pass, with the intended
-//!   assertion commented out and a `// Production gap:` marker, matching the
+//! - [`milestone2`] — the eleven scenarios specifying the Milestone 2 design
+//!   (ADR-0068: detached supervisor, durable registry, control FIFO,
+//!   reaper-on-boot, orphan governance). Now that Milestone 2 is implemented,
+//!   eight of the eleven drive the real production code paths (a genuine
+//!   forked `substrate --supervise` process, a real control FIFO, the real
+//!   `reaper::reconcile_sweep` decision tree) end-to-end; three remain honest
+//!   `mark_milestone2_gap`/`assert_milestone2_gap` structural-pass stubs for
+//!   mechanisms confirmed still unimplemented (subgraph reload degradation,
+//!   zombie waitpid-reaping, event-replay-on-reconnect), matching the
 //!   established convention in `subprocess/reaper.rs`.
 //!
 //! Twenty-two of the twenty-five MVP-testable scenarios mirror an existing

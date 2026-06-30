@@ -60,11 +60,21 @@ async fn given_running_stack_default_shutdown(world: &mut SubstrateWorld) {
 
 #[when(regex = r#"^the MCP client disconnects and the MCP server exits$"#)]
 async fn when_client_disconnects_server_exits(world: &mut SubstrateWorld) {
-    // This exact step text is shared by two scenarios: the real in-session
-    // `shutdown` Stack (asserted for real below) and the Milestone-2-only
-    // `detach` Stack (`milestone2.rs`'s Given step marks the M2 gap and never
-    // reaches a running Stack — `up(..., Detach, ...)` is rejected before any
-    // spawn — so there is no Stack here to disconnect from).
+    // This exact step text is shared by three scenarios: the real in-session
+    // `shutdown` Stack (asserted for real below), the now-real `detach` Stack
+    // (`milestone2.rs`'s `launch-disconnect-detach-survives-and-reattaches`,
+    // which spawns a genuine detached supervisor over the full MCP wire), and
+    // the handful of still-stubbed Milestone-2 scenarios whose Given step
+    // never reaches a running Stack at all.
+    if world.context.contains_key("launch_detach_real") {
+        // Real Milestone-2 path: kill only the spawned MCP server process.
+        // The detached supervisor is a separate, already-forked OS process
+        // with no parent-death binding to the MCP server itself (only ITS OWN
+        // children bind SIGKILL parent-death, per ADR-0068) — it must keep
+        // running on its own, which the following Then steps assert for real.
+        world.kill_child();
+        return;
+    }
     if world.context.contains_key("launch_m2_gap") {
         return;
     }
