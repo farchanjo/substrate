@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 substrate-domain = { path = "../substrate-domain" }
 substrate-policy  = { path = "../substrate-policy" }
-tokio = { workspace = true, features = ["rt", "macros", "fs", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "fs", "sync", "time", "signal"] }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
@@ -27,6 +27,15 @@ time = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }
+
+# Linux-only: single-pid start-time + ppid reads via /proc for the reaper's
+# PID-recycle guard (ADR-0068). Version pinned to match sibling crate
+# substrate-process for consistency. macOS reads kinfo_proc via the already-present
+# workspace `libc` (sysctl), so no macOS-target-specific entry is needed here.
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.18"
 
 [dev-dependencies]
 tempfile = { workspace = true }
