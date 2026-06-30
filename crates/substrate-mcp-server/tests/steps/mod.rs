@@ -9,6 +9,8 @@ pub mod cross_cutting;
 pub mod filesystem_mutation;
 pub mod filesystem_query;
 pub mod job;
+#[cfg(feature = "launch")]
+pub mod launch;
 pub mod network;
 pub mod process;
 pub mod subprocess;

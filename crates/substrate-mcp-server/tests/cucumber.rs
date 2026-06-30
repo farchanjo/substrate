@@ -131,6 +131,22 @@ pub struct SubstrateWorld {
     /// scenarios.  All entries are killed and waited on in `Drop` /
     /// `cleanup_test_processes`.
     pub spawned_children: Vec<std::process::Child>,
+
+    // -----------------------------------------------------------------------
+    // Launch BC registry handle (feature: launch.* scenarios, ADR-0063..0069)
+    // -----------------------------------------------------------------------
+    /// The `LaunchRegistry` constructed by a launch Given step, held across
+    /// When/Then so in-memory Stack state (the `DashMap` of running Stacks)
+    /// survives within one scenario. Typed (not the raw-pointer-in-`context`
+    /// trick used by some subprocess steps) because `Arc` round-trips safely
+    /// through a real field with no unsafe code.
+    #[cfg(feature = "launch")]
+    pub launch_registry: Option<Arc<substrate_launch::LaunchRegistry>>,
+
+    /// The `FakeSubprocessPort` test double backing `launch_registry`, kept
+    /// alongside it so Then steps can assert on `spawns()` / `cancels()`.
+    #[cfg(feature = "launch")]
+    pub launch_fake: Option<Arc<crate::steps::launch::FakeSubprocessPort>>,
 }
 
 // The `#[derive(World)]` macro from cucumber generates the WorldInventory
