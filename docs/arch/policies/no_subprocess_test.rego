@@ -140,3 +140,44 @@ test_tokio_command_in_other_crate_still_denied if {
         "cargo_toml_deps": [],
     }
 }
+
+# ---------------------------------------------------------------------------
+# Tests for ADR-0063/0068 amendment: substrate-launch supervisor self-fork (Rule 3b)
+# ---------------------------------------------------------------------------
+
+# PASS — tokio::process::Command in substrate-launch WITH the supervise-fork
+# justification comment is the single permitted launch exception.
+test_substrate_launch_supervise_fork_allowed if {
+    count(deny) == 0 with input as {
+        "files": {
+            "crates/substrate-launch/src/supervise.rs": {
+                "content": "// supervise-fork-justification: re-execs the same binary as a detached --supervise supervisor per ADR-0068\ntokio::process::Command::new(\"substrate\")",
+            },
+        },
+        "cargo_toml_deps": [],
+    }
+}
+
+# FAIL — tokio::process::Command in substrate-launch WITHOUT the justification is denied.
+test_substrate_launch_tokio_without_justification_denied if {
+    deny["forbidden tokio::process::Command in crates/substrate-launch/src/run.rs — per ADR-0044"] with input as {
+        "files": {
+            "crates/substrate-launch/src/run.rs": {
+                "content": "tokio::process::Command::new(\"node\")",
+            },
+        },
+        "cargo_toml_deps": [],
+    }
+}
+
+# FAIL — std::process::Command in substrate-launch stays globally forbidden even with the comment.
+test_substrate_launch_std_command_still_denied if {
+    deny["forbidden std::process::Command in crates/substrate-launch/src/supervise.rs — per ADR-0044"] with input as {
+        "files": {
+            "crates/substrate-launch/src/supervise.rs": {
+                "content": "// supervise-fork-justification: x\nstd::process::Command::new(\"substrate\")",
+            },
+        },
+        "cargo_toml_deps": [],
+    }
+}

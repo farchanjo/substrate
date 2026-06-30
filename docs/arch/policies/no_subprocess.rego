@@ -26,6 +26,12 @@
 #     ]
 #   }
 #
+# ADR-0063/ADR-0068 amendment: crates/substrate-launch/ may use
+# tokio::process::Command ONLY to self-fork the `substrate --supervise` detached
+# supervisor, and ONLY in a file carrying a `// supervise-fork-justification:`
+# comment (Rule 3b). All Service orchestration goes through SubprocessPort, not
+# Command. std::process::Command remains globally forbidden in substrate-launch.
+#
 # Where:
 #   files       — map of relative paths to their textual content; populated for
 #                 all *.rs and build.rs files under crates/ (excluding target/).
@@ -64,6 +70,17 @@
 #
 #   PASS — tokio::process::Command inside substrate-subprocess crate is whitelisted (ADR-0052)
 #   input = {"files":{"crates/substrate-subprocess/src/spawn.rs":{"content":"tokio::process::Command::new(\"echo\")"}},"cargo_toml_deps":[]}
+#
+#   PASS — supervisor self-fork in substrate-launch with justification comment (ADR-0063/0068)
+#   input = {"files":{"crates/substrate-launch/src/supervise.rs":{"content":"// supervise-fork-justification: re-execs the same binary as a detached --supervise supervisor per ADR-0068\ntokio::process::Command::new(\"substrate\")"}},"cargo_toml_deps":[]}
+#
+#   FAIL — tokio::process::Command in substrate-launch WITHOUT the supervise-fork justification
+#   input = {"files":{"crates/substrate-launch/src/run.rs":{"content":"tokio::process::Command::new(\"node\")"}},"cargo_toml_deps":[]}
+#   expected deny: "forbidden tokio::process::Command in crates/substrate-launch/src/run.rs — per ADR-0044"
+#
+#   FAIL — std::process::Command in substrate-launch is still forbidden (only tokio self-fork is exempt)
+#   input = {"files":{"crates/substrate-launch/src/supervise.rs":{"content":"// supervise-fork-justification: x\nstd::process::Command::new(\"substrate\")"}},"cargo_toml_deps":[]}
+#   expected deny: "forbidden std::process::Command in crates/substrate-launch/src/supervise.rs — per ADR-0044"
 
 package substrate.no_subprocess
 
@@ -94,6 +111,21 @@ _is_build_script(path) if path == "build.rs"
 # this crate may use tokio::process::Command in shipped source; std::process::Command
 # and the forbidden high-level crate list still apply globally.
 _is_subprocess_crate(path) if startswith(path, "crates/substrate-subprocess/")
+
+# True when the file belongs to the substrate-launch crate. The launch supervisor
+# self-fork (`substrate --supervise <stack>`, ADR-0063/ADR-0068) requires
+# tokio::process::Command to re-exec the same binary detached. It is permitted
+# ONLY in a file carrying a `// supervise-fork-justification:` comment (Rule 3b);
+# every other Command use in substrate-launch (orchestration goes through
+# SubprocessPort) stays forbidden, and std::process::Command stays globally banned.
+_is_launch_crate(path) if startswith(path, "crates/substrate-launch/")
+
+_has_supervise_justification(content) if contains(content, "// supervise-fork-justification:")
+
+_is_launch_fork_exception(path, content) if {
+	_is_launch_crate(path)
+	_has_supervise_justification(content)
+}
 
 # True when the file is a shipped source file (not test, not build script).
 _is_shipped_source(path) if {
@@ -151,6 +183,7 @@ deny contains msg if {
     input.files[path].content
     _is_shipped_source(path)
     not _is_subprocess_crate(path)
+    not _is_launch_fork_exception(path, input.files[path].content)
     contains(input.files[path].content, "tokio::process::Command")
     msg := sprintf(
         "forbidden tokio::process::Command in %s — per ADR-0044",

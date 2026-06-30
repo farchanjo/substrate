@@ -269,6 +269,49 @@ Three layering clarifications are recorded here and reflected in
   build a real index. This removes the adapter→adapter dependency that Rule 3
   prohibits while preserving the production write-through behavior.
 
+## Amendment — 2026-06-30 — New crate substrate-launch (ADR-0063)
+
+[ADR-0063](0063-launch-orchestration-bounded-context.md) introduces
+`crates/substrate-launch/` as the adapter for the launch bounded context
+(declarative process orchestration), behind the opt-in `launch` Cargo feature.
+
+**Layering.** `substrate-launch` is an adapter on the same footing as the other
+bounded-context crates: it depends on `substrate-domain` (the `LaunchPort` it
+implements and the `SubprocessPort` it consumes) and `substrate-policy` (Profile
+trust gate and per-Service spawn validation), and MUST NOT depend on any other
+adapter. In particular it does NOT depend on `substrate-subprocess`: it
+orchestrates Services through the domain `SubprocessPort` trait, and the concrete
+`substrate-subprocess` adapter is injected by the `substrate-mcp-server`
+composition root. `substrate-launch` is now a member of `_adapter_crates` in
+`policies/hexagonal_layering.rego`, with no Rule-3 exception — mirroring the
+2026-06-10 `substrate-fs-mutation`/`substrate-fs-index` port-injection precedent.
+
+**Cargo feature gating.** `substrate-mcp-server` declares it optional:
+
+```toml
+# crates/substrate-mcp-server/Cargo.toml
+[dependencies]
+substrate-launch = { path = "../substrate-launch", optional = true }
+
+[features]
+launch = ["substrate-launch"]
+default = []
+```
+
+When the `launch` feature is off, the launch BC tools are absent from the MCP
+tool list and no orchestration paths are compiled into the server binary.
+
+**Supervisor self-fork exception.** The detached supervisor
+([ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)) re-execs
+the same binary as `substrate --supervise <stack>`, which needs
+`tokio::process::Command`. `policies/no_subprocess.rego` grants a narrow Rule-3b
+exception: `crates/substrate-launch/` may use `tokio::process::Command` ONLY in a
+file carrying a `// supervise-fork-justification:` comment.
+`std::process::Command` remains globally forbidden.
+
+Cross-reference: [ADR-0063](0063-launch-orchestration-bounded-context.md),
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md).
+
 ## Links
 
 - Related: [ADR-0002](0002-bounded-contexts.md)
@@ -277,3 +320,4 @@ Three layering clarifications are recorded here and reflected in
 - Related: [ADR-0041](0041-filesystem-index-native-tiers.md) — introduced `substrate-fs-index`
 - Related: [ADR-0032](0032-signal-safety.md) — introduced `substrate-signal-sys`
 - Related: [ADR-0056](0056-subprocess-supervisor-semantics.md) — `substrate-subprocess` `outbound-net` Rule-5 exception
+- Related: [ADR-0063](0063-launch-orchestration-bounded-context.md) — introduced `substrate-launch`

@@ -46,9 +46,10 @@ is ever left polluting the host?
 - The async-zone classification ([ADR-0003](0003-crate-stack-and-async-zones.md)),
   cancellation patterns ([ADR-0037](0037-async-cancellation-patterns.md)), and
   signal safety ([ADR-0032](0032-signal-safety.md)) apply unchanged.
-- Hexagonal layering ([ADR-0022](0022-project-layout.md)): the new
-  adapter crate depends on `substrate-domain` and the subprocess adapter port,
-  never the reverse.
+- Hexagonal layering ([ADR-0022](0022-project-layout.md)): the new adapter crate
+  depends on `substrate-domain` (whose `SubprocessPort` trait it consumes) and
+  `substrate-policy`, never another adapter; the concrete `substrate-subprocess`
+  adapter is injected by the `substrate-mcp-server` composition root.
 - Tool naming ([ADR-0062](0062-tool-naming-convention.md)): tools are namespaced
   `launch.<verb>`.
 
@@ -107,8 +108,11 @@ Tools exposed, all namespaced `launch.*`:
 - `launch.trust` — bless a Profile (see the trust ADR, forthcoming ADR-0064).
 
 `launch` is realised by a new crate `substrate-launch`
-([ADR-0022](0022-project-layout.md)) that depends on `substrate-domain`,
-`substrate-policy`, and the subprocess adapter port. No adapter depends on it.
+([ADR-0022](0022-project-layout.md)) that depends on `substrate-domain` (whose
+`SubprocessPort` trait it consumes) and `substrate-policy`; the concrete
+`substrate-subprocess` adapter is injected by the `substrate-mcp-server`
+composition root, never depended on directly. No adapter depends on
+`substrate-launch`.
 
 ### Composition over the subprocess BC
 

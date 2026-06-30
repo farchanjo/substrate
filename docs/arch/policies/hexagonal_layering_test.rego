@@ -93,3 +93,24 @@ test_adapter_activating_tokio_net_denied if {
         "allowed_external": ["tokio/net"],
     }
 }
+
+# ---------------------------------------------------------------------------
+# Tests for substrate-launch (ADR-0063): an adapter that consumes SubprocessPort
+# from the domain; it MUST NOT depend on the concrete substrate-subprocess adapter
+# ---------------------------------------------------------------------------
+
+test_launch_depending_on_domain_and_policy_allowed if {
+    count(deny) == 0 with input as {
+        "crate_name": "substrate-launch",
+        "dependencies": ["substrate-domain", "substrate-policy", "tokio"],
+        "allowed_external": ["tokio"],
+    }
+}
+
+test_launch_depending_on_subprocess_adapter_denied if {
+    deny["substrate-launch (adapter) MUST NOT depend on another adapter crate substrate-subprocess"] with input as {
+        "crate_name": "substrate-launch",
+        "dependencies": ["substrate-domain", "substrate-subprocess"],
+        "allowed_external": [],
+    }
+}

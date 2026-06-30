@@ -160,8 +160,7 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
 
         # Launch adapter relationships (ADR-0063..0068, optional feature 'launch')
         mcpServer -> launch "Routes launch.* tool calls to (when launch feature enabled)"
-        launch -> subprocessAdapter "Orchestrates: each Service materializes to one subprocess.spawn"
-        launch -> domain "Implements LaunchPort from"
+        launch -> domain "Implements LaunchPort; consumes SubprocessPort (concrete substrate-subprocess adapter injected by the mcp-server root); each Service materializes to one subprocess.spawn"
         launch -> policy "Validates Profile trust and per-Service spawn via"
         launch -> jobs "Registers Stack bring-up as a Task/JobEntry (ADR-0049)"
         launch -> localOs "Spawns the detached --supervise supervisor; owns control FIFO and durable state-file"

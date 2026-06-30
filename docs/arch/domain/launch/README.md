@@ -197,6 +197,8 @@ timers over a single `mio` reactor
 ## Crate
 
 The launch bounded context is realised by `substrate-launch` (opt-in Cargo
-feature `launch`), which depends on `substrate-domain`, `substrate-policy`, and
-the subprocess adapter port, and on no other adapter
+feature `launch`), which depends on `substrate-domain` (consuming the
+`SubprocessPort` trait it exports) and `substrate-policy`, and on no other
+adapter; the concrete `substrate-subprocess` adapter is injected by the
+`substrate-mcp-server` composition root
 ([ADR-0022](../../adr/0022-project-layout.md)).

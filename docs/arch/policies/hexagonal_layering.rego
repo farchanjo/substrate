@@ -12,8 +12,11 @@
 #   adapter       : substrate-fs-query, substrate-fs-mutation, substrate-fs-index,
 #                   substrate-process, substrate-system-info, substrate-network-info,
 #                   substrate-text, substrate-archive, substrate-jobs,
-#                   substrate-subprocess
-#                   (MUST NOT depend on each other; allowed: domain + policy)
+#                   substrate-subprocess, substrate-launch
+#                   (MUST NOT depend on each other; allowed: domain + policy.
+#                    substrate-launch consumes SubprocessPort from substrate-domain
+#                    and is composed with the concrete subprocess adapter in the
+#                    mcp-server root — it never depends on substrate-subprocess.)
 #   server        : substrate-mcp-server       (only crate allowed to depend on all)
 #
 # Rule-5 exception (ADR-0056, documented in ADR-0022):
@@ -75,6 +78,13 @@
 #   FAIL — substrate-subprocess pulls tokio net WITHOUT the outbound-net gate (bare net not exempt)
 #   input = {"crate_name":"substrate-subprocess","dependencies":["substrate-domain","tokio/net"],"allowed_external":["tokio/net"]}
 #   expected deny: "substrate-subprocess: only substrate-mcp-server may activate tokio net feature"
+#
+#   PASS — substrate-launch classified as adapter, depends on domain + policy only (ADR-0063)
+#   input = {"crate_name":"substrate-launch","dependencies":["substrate-domain","substrate-policy","tokio"],"allowed_external":["tokio"]}
+#
+#   FAIL — substrate-launch depends on the concrete subprocess adapter (it must consume SubprocessPort from domain)
+#   input = {"crate_name":"substrate-launch","dependencies":["substrate-domain","substrate-subprocess"],"allowed_external":[]}
+#   expected deny: "substrate-launch (adapter) MUST NOT depend on another adapter crate substrate-subprocess"
 
 package substrate.hexagonal
 
@@ -112,6 +122,7 @@ _adapter_crates := {
     "substrate-archive",
     "substrate-jobs",
     "substrate-subprocess",
+    "substrate-launch",
 }
 
 _is_adapter(name) if _adapter_crates[name]
