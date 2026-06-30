@@ -87,6 +87,29 @@ fn emit_startup_error(code: &str, message: &str, recovery_hint: &str, details: &
 }
 
 fn main() -> ExitCode {
+    // Step 0: detached-supervisor dispatch (ADR-0068). When invoked as
+    // `substrate --supervise <stack_id> --profile <path>`, this process is NOT an
+    // MCP STDIO server — it is the detached supervisor for an already-trusted
+    // Stack. The branch returns before any MCP transport is opened. A later stage
+    // wires the live server's call site that spawns this process.
+    #[cfg(feature = "launch")]
+    {
+        let raw_args: Vec<String> = std::env::args().collect();
+        match substrate_launch::detached::parse_supervise_args(&raw_args) {
+            Ok(Some(supervise)) => return run_supervisor_process(supervise),
+            Ok(None) => {},
+            Err(error) => {
+                emit_startup_error(
+                    error.code(),
+                    &format!("invalid --supervise invocation: {error}"),
+                    error.recovery_hint(),
+                    &serde_json::json!({ "error_code": error.code() }),
+                );
+                return ExitCode::from(78);
+            },
+        }
+    }
+
     // Step 1: Initialize tracing to stderr ONLY (ADR-0005, ADR-0009).
     // This happens before the runtime so that startup failures are logged.
     if let Err(e) = logging::init() {
@@ -273,6 +296,80 @@ async fn async_main() -> ExitCode {
         },
         Err(e) => {
             tracing::error!(code = e.code(), recovery_hint = e.recovery_hint(), "{e}");
+            ExitCode::from(74)
+        },
+    }
+}
+
+/// Drives the detached supervisor process (`substrate --supervise`) per ADR-0068.
+///
+/// `setsid(2)` runs synchronously here, before the multi-threaded runtime is
+/// built — it is only well-defined while the process is single-threaded. The
+/// reactor itself lives in `substrate-launch`; this composition-root shim only
+/// wires the subprocess port and drives the async entry point.
+#[cfg(feature = "launch")]
+fn run_supervisor_process(args: substrate_launch::detached::SuperviseArgs) -> ExitCode {
+    if let Err(e) = logging::init() {
+        emit_startup_error(
+            "SUBSTRATE_RUNTIME_INIT_FAILED",
+            &format!("logging subsystem initialization failed: {e}"),
+            "check stderr for OS-level errors; ensure stderr is writable",
+            &serde_json::json!({ "component": "logging", "cause": e.to_string() }),
+        );
+        return ExitCode::from(70);
+    }
+    if let Err(e) = signal_handlers::ignore_sigpipe() {
+        tracing::warn!(?e, "supervise: SIGPIPE SIG_IGN installation failed; continuing");
+    }
+    // setsid MUST precede the runtime (ADR-0068); failure is non-fatal.
+    if let Err(e) = substrate_launch::detached::detach_session() {
+        tracing::warn!(error = %e, "supervise: setsid failed; supervisor shares the parent session");
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("substrate-supervisor")
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            emit_startup_error(
+                "SUBSTRATE_RUNTIME_INIT_FAILED",
+                &format!("supervisor runtime build failed: {e}"),
+                "check system resource limits (fd, threads); try ulimit -n 65536",
+                &serde_json::json!({ "component": "tokio_runtime", "cause": e.to_string() }),
+            );
+            return ExitCode::from(71);
+        },
+    };
+    runtime.block_on(supervisor_main(args))
+}
+
+/// Async body of the detached supervisor: load config, wire the subprocess port,
+/// and run the reactor to completion (ADR-0068).
+#[cfg(feature = "launch")]
+async fn supervisor_main(args: substrate_launch::detached::SuperviseArgs) -> ExitCode {
+    let config = match config_loader::load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "supervise: configuration load failed");
+            return ExitCode::from(78);
+        },
+    };
+    let root_cancel = tokio_util::sync::CancellationToken::new();
+    let subprocess = match composition::build_supervisor_subprocess_port(&config, &root_cancel) {
+        Ok(port) => port,
+        Err(e) => {
+            tracing::error!(code = e.code(), "supervise: subprocess port wiring failed: {e}");
+            return ExitCode::from(73);
+        },
+    };
+    match substrate_launch::detached::run_supervisor(args, subprocess).await {
+        Ok(()) => {
+            tracing::info!("supervise: detached supervisor exiting cleanly");
+            ExitCode::SUCCESS
+        },
+        Err(e) => {
+            tracing::error!(code = e.code(), recovery_hint = e.recovery_hint(), "supervise: {e}");
             ExitCode::from(74)
         },
     }

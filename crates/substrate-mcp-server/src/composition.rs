@@ -383,6 +383,37 @@ pub(crate) async fn wire(
         substrate_launch::LaunchRegistry::new(Arc::clone(&subprocess_port), state_root)
     };
 
+    // ---- Reaper-on-boot reconcile sweep (ADR-0068) --------------------------
+    //
+    // A prior server session may have spawned detached supervisors (`launch.up`
+    // with `on_client_disconnect = detach`) that outlived it. Sweep the durable
+    // stacks root once, before the MCP transport opens: a still-live supervisor is
+    // re-attached (left untouched), while a dead supervisor's orphaned children are
+    // adopted or reaped per ADR-0068. Reaper findings restore a clean host; they
+    // are never a startup error, so an unresolved root or sweep failure is logged,
+    // not propagated.
+    #[cfg(feature = "launch")]
+    {
+        match substrate_launch::supervisor_registry::launch_stacks_root() {
+            Ok(stacks_root) => match substrate_launch::reaper::reconcile_sweep(&stacks_root).await {
+                Ok(report) if !report.is_empty() => tracing::info!(
+                    reattached = report.reattached.len(),
+                    adopted = report.adopted.len(),
+                    reaped = report.reaped.len(),
+                    recycled = report.recycled.len(),
+                    "launch reaper-on-boot reconcile sweep applied"
+                ),
+                Ok(_) => {},
+                Err(e) => {
+                    tracing::warn!(error = %e, "launch reaper-on-boot sweep failed (non-fatal)");
+                },
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "launch stacks root unresolved; skipping reaper sweep");
+            },
+        }
+    }
+
     // ---- ToolDispatcher (ADR-0022) ------------------------------------------
     let dispatcher = ToolDispatcher {
         fs_query: fs_query_deps,
@@ -414,6 +445,49 @@ pub(crate) async fn wire(
         #[cfg(feature = "subprocess")]
         subprocess_for_shutdown: subprocess_port_for_shutdown,
     })
+}
+
+/// Builds the minimal `SubprocessPort` the detached supervisor drives (ADR-0068).
+///
+/// The `substrate --supervise` process is not the MCP server: it manages only the
+/// Stack's Services, so it needs the subprocess registry but none of the MCP
+/// stream observers or the startup orphan reaper that [`wire`] sets up. Every
+/// managed Service is still spawned through this single injected port (hexagonal
+/// layering, ADR-0022), with `tmp_root` resolved per the ADR-0033 amendment
+/// contract (explicit `subprocess.tmp_root`, else the first policy root).
+///
+/// # Errors
+///
+/// Returns `SUBSTRATE_CONFIG_INVALID` when the policy allowlist cannot be built
+/// (for example an empty or non-canonicalizable roots list).
+#[cfg(feature = "launch")]
+pub(crate) fn build_supervisor_subprocess_port(
+    config: &RuntimeConfig,
+    root_cancel: &CancellationToken,
+) -> SubstrateResult<Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>> {
+    let subprocess_cfg = config.subprocess.clone().unwrap_or_default();
+    let tmp_root = subprocess_cfg
+        .tmp_root
+        .clone()
+        .or_else(|| config.policy.roots.first().cloned());
+    let path_allowlist = Allowlist::new(config.policy.roots.clone())?;
+    let registry = substrate_subprocess::registry::SubprocessRegistry::new(
+        substrate_subprocess::registry::BinaryAllowlist::new(subprocess_cfg.binary_allowlist.clone()),
+        Vec::new(),
+        subprocess_cfg.max_per_client,
+        subprocess_cfg.max_concurrent,
+        subprocess_cfg.aggregate_buffer_bytes,
+        subprocess_cfg.shutdown_drain_secs,
+        path_allowlist,
+        root_cancel.child_token(),
+    );
+    let registry = if let Some(root) = tmp_root {
+        registry.with_tmp_root(root)
+    } else {
+        registry
+    };
+    let port: Arc<dyn substrate_domain::ports::subprocess::SubprocessPort> = registry;
+    Ok(port)
 }
 
 #[cfg(test)]

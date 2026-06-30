@@ -28,7 +28,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -41,7 +43,7 @@ use substrate_domain::launch::event::{LaunchEvent, LaunchEventKind};
 use substrate_domain::launch::profile::{
     LaunchOperatorConfig, LaunchProfile, LaunchService, ServiceName,
 };
-use substrate_domain::launch::stack::StackHandle;
+use substrate_domain::launch::stack::{StackHandle, SupervisorRegistry};
 use substrate_domain::launch::state::{DisconnectPolicy, StackState};
 use substrate_domain::launch::trust::TrustRecord;
 use substrate_domain::ports::fs_index::CancelSignal;
@@ -61,6 +63,7 @@ use crate::supervisor::{
     ServiceOutcome, build_request, edges_only_differ, launch_client_id, outcome_state,
     spawn_fields_differ, spawn_service, stop_service, wait_ready,
 };
+use crate::supervisor_registry::{open_stack_registry, read_supervisor_registry, run_blocking};
 use crate::trust_store::append_bless;
 
 /// File name of the user-scope TOFU trust store under the state root.
@@ -186,6 +189,10 @@ pub struct LaunchRegistry {
     trust_store: PathBuf,
     /// Operator auto-bless policy (empty by default; never repo-controlled).
     op_config: LaunchOperatorConfig,
+    /// Spawns the detached `substrate --supervise` process and awaits its durable
+    /// registry on the `on_client_disconnect = detach` path (ADR-0068). The
+    /// production launcher forks the current executable; tests inject a double.
+    detach_launcher: Arc<dyn DetachLauncher>,
 }
 
 impl LaunchRegistry {
@@ -203,6 +210,18 @@ impl LaunchRegistry {
     ///   default Service working directory. Must exist and be owned by the user.
     #[must_use]
     pub fn new(subprocess: Arc<dyn SubprocessPort>, state_root: PathBuf) -> Arc<Self> {
+        Self::with_launcher(subprocess, state_root, Arc::new(ProcessDetachLauncher))
+    }
+
+    /// Constructs a `LaunchRegistry` with an explicit [`DetachLauncher`].
+    ///
+    /// [`new`](Self::new) wires the production [`ProcessDetachLauncher`]; this seam
+    /// lets the unit tests inject a double that never forks an OS process.
+    fn with_launcher(
+        subprocess: Arc<dyn SubprocessPort>,
+        state_root: PathBuf,
+        detach_launcher: Arc<dyn DetachLauncher>,
+    ) -> Arc<Self> {
         let trust_store = state_root.join(TRUST_STORE_FILE);
         Arc::new(Self {
             stacks: Arc::default(),
@@ -210,6 +229,7 @@ impl LaunchRegistry {
             state_root,
             trust_store,
             op_config: LaunchOperatorConfig::default(),
+            detach_launcher,
         })
     }
 
@@ -286,6 +306,164 @@ impl LaunchRegistry {
         }
         Ok(spawned)
     }
+
+    /// Brings up a Stack under a detached supervisor (ADR-0068, Milestone 2).
+    ///
+    /// Delegates the spawn to the injected [`DetachLauncher`], which forks
+    /// `substrate --supervise` and blocks until that process publishes a
+    /// `supervisor.json` with a matching `config_hash`. The managed children then
+    /// live in the detached supervisor — not this registry — so the recorded entry
+    /// tracks no in-process job ids; it exists for `status`/`logs` reporting and is
+    /// marked [`StackState::Detached`] with the supervisor snapshot attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::SupervisorUnreachable`] when the supervisor process
+    /// does not publish a matching registry within the readiness budget.
+    async fn up_detached(
+        &self,
+        profile_path: &str,
+        profile: LaunchProfile,
+        config_hash: String,
+        policy: DisconnectPolicy,
+    ) -> Result<StackHandle, LaunchError> {
+        let stack_id = StackId::now_v7();
+        let canonical = canonical_path_string(profile_path);
+        let registry = self
+            .detach_launcher
+            .launch_detached(&stack_id, Path::new(&canonical), &config_hash)
+            .await?;
+        let mut entry =
+            StackEntry::new(stack_id.clone(), canonical, config_hash, policy, profile);
+        entry.handle.state = StackState::Detached;
+        for child in &registry.children {
+            entry.set_service(&child.name, SubprocessState::Running);
+        }
+        entry.emit(
+            LaunchEventKind::Started,
+            None,
+            format!("detached supervisor pid {} owns the stack", registry.supervisor_pid),
+        );
+        entry.handle.supervisor = Some(registry);
+        let handle = entry.handle.clone();
+        self.stacks.insert(stack_id, entry);
+        Ok(handle)
+    }
+}
+
+// ---- Detached-supervisor launcher (ADR-0068) --------------------------------
+
+/// Seam for spawning the detached `substrate --supervise` process and awaiting its
+/// durable registry, so [`LaunchRegistry::up`]'s detach path is unit-testable
+/// without forking a real OS process.
+#[async_trait]
+trait DetachLauncher: Send + Sync {
+    /// Spawns the detached supervisor for `stack_id` running `profile_path`, then
+    /// blocks until its `supervisor.json` is published carrying `expected_hash`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::SupervisorUnreachable`] when the supervisor does not
+    /// publish a matching registry within the readiness budget, or
+    /// [`LaunchError::SpawnFailed`] / [`LaunchError::RegistryInsecure`] when the
+    /// process or its registry directory cannot be created.
+    async fn launch_detached(
+        &self,
+        stack_id: &StackId,
+        profile_path: &Path,
+        expected_hash: &str,
+    ) -> Result<SupervisorRegistry, LaunchError>;
+}
+
+/// Upper bound on the wait for the detached supervisor to publish its registry.
+const SUPERVISOR_READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Cadence of the readiness poll for `supervisor.json`.
+const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Production [`DetachLauncher`]: forks `std::env::current_exe() --supervise …`
+/// detached from this server's STDIO, then polls the durable registry directory
+/// until the supervisor publishes a matching `supervisor.json`.
+struct ProcessDetachLauncher;
+
+#[async_trait]
+impl DetachLauncher for ProcessDetachLauncher {
+    async fn launch_detached(
+        &self,
+        stack_id: &StackId,
+        profile_path: &Path,
+        expected_hash: &str,
+    ) -> Result<SupervisorRegistry, LaunchError> {
+        let stack_dir = open_stack_registry(stack_id).await?;
+        spawn_supervisor_process(stack_id, profile_path).await?;
+        await_supervisor_ready(&stack_dir, stack_id, expected_hash).await
+    }
+}
+
+/// Forks the detached supervisor process on the blocking pool (zone B, ADR-0003).
+///
+/// The child inherits none of this server's STDIO — the JSON-RPC channel on
+/// `stdout` is sacred (ADR-0005) — and re-establishes its own session via `setsid`
+/// (ADR-0068), so the spawning side detaches the descriptors and never waits on
+/// the child (a dropped handle is reparented to init on this server's exit).
+///
+/// This forks the substrate binary itself in `--supervise` mode (ADR-0068 "same
+/// binary"), NOT a managed Service — every managed Service still routes through
+/// the injected `SubprocessPort`, so the no-subprocess policy (ADR-0044) is not
+/// violated for the Stack's processes.
+#[expect(
+    clippy::disallowed_types,
+    reason = "forks the substrate binary itself as its own detached supervisor \
+              sidecar (ADR-0068 \"same binary\"), not a managed Service."
+)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "forks the substrate binary itself as its own detached supervisor \
+              sidecar (ADR-0068 \"same binary\"), not a managed Service."
+)]
+async fn spawn_supervisor_process(
+    stack_id: &StackId,
+    profile_path: &Path,
+) -> Result<(), LaunchError> {
+    let exe = std::env::current_exe().map_err(|e| LaunchError::SpawnFailed { source: e })?;
+    let stack_arg = stack_id.to_crockford();
+    let profile_arg = profile_path.to_path_buf();
+    run_blocking(move || {
+        std::process::Command::new(exe)
+            .arg("--supervise")
+            .arg(&stack_arg)
+            .arg("--profile")
+            .arg(&profile_arg)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(|e| LaunchError::SpawnFailed { source: e })
+    })
+    .await
+}
+
+/// Polls `<stack_dir>/supervisor.json` until it is published with `expected_hash`
+/// or [`SUPERVISOR_READY_TIMEOUT`] elapses (then [`LaunchError::SupervisorUnreachable`]).
+async fn await_supervisor_ready(
+    stack_dir: &Path,
+    stack_id: &StackId,
+    expected_hash: &str,
+) -> Result<SupervisorRegistry, LaunchError> {
+    let deadline = Instant::now() + SUPERVISOR_READY_TIMEOUT;
+    loop {
+        if let Ok(registry) = read_supervisor_registry(stack_dir).await
+            && registry.config_hash == expected_hash
+        {
+            return Ok(registry);
+        }
+        if Instant::now() >= deadline {
+            return Err(LaunchError::SupervisorUnreachable {
+                stack_id: stack_id.to_crockford(),
+            });
+        }
+        tokio::time::sleep(SUPERVISOR_POLL_INTERVAL).await;
+    }
 }
 
 impl std::fmt::Debug for LaunchRegistry {
@@ -358,10 +536,11 @@ impl LaunchPort for LaunchRegistry {
         loaded.profile.validate()?;
         let policy = on_client_disconnect.unwrap_or(loaded.profile.on_client_disconnect);
         if policy == DisconnectPolicy::Detach {
-            // Detached supervisor is Milestone 2; the MVP supports shutdown only.
-            return Err(LaunchError::SupervisorUnreachable {
-                stack_id: "detached-supervisor-milestone-2".to_owned(),
-            });
+            // Hand the Stack to a detached supervisor process (ADR-0068, Milestone
+            // 2) instead of bringing it up in-session; it survives this server.
+            return self
+                .up_detached(profile_path, loaded.profile, loaded.config_hash, policy)
+                .await;
         }
         // Cycle is rejected BEFORE any process is spawned (launch-depends-on-cycle-rejected).
         let topo = loaded.profile.topological_order()?;
@@ -643,7 +822,7 @@ fn blocked_dependency(
 /// topological order. `edge_only` contains Services whose only change was a
 /// dependency edge (no re-spawn).
 #[must_use]
-fn compute_reload_report(old: &LaunchProfile, new: &LaunchProfile) -> ReloadReport {
+pub(crate) fn compute_reload_report(old: &LaunchProfile, new: &LaunchProfile) -> ReloadReport {
     let old_keys: BTreeSet<&String> = old.services.keys().collect();
     let new_keys: BTreeSet<&String> = new.services.keys().collect();
 
@@ -746,6 +925,7 @@ mod tests {
     use tempfile::TempDir;
     use time::OffsetDateTime;
 
+    use substrate_domain::launch::stack::StackChild;
     use substrate_domain::subprocess::errors::SubprocessError;
     use substrate_domain::subprocess::handle::SubprocessHandle;
     use substrate_domain::subprocess::pagination::{
@@ -924,6 +1104,85 @@ mod tests {
         LaunchRegistry::new(fake as Arc<dyn SubprocessPort>, dir.to_path_buf())
     }
 
+    /// A scripted [`DetachLauncher`] double: it returns a synthetic supervisor
+    /// registry (success) or fails, without ever forking an OS process. The
+    /// success registry echoes the caller's `expected_hash` so the readiness match
+    /// the production launcher enforces is preserved.
+    struct FakeDetachLauncher {
+        /// `Some(child_names)` succeeds; `None` fails with `SupervisorUnreachable`.
+        children: Option<Vec<ServiceName>>,
+        /// `(stack_id, expected_hash)` recorded per call for assertions.
+        calls: Mutex<Vec<(String, String)>>,
+    }
+
+    impl FakeDetachLauncher {
+        fn succeeding(children: &[&str]) -> Arc<Self> {
+            Arc::new(Self {
+                children: Some(children.iter().map(|s| (*s).to_owned()).collect()),
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn failing() -> Arc<Self> {
+            Arc::new(Self {
+                children: None,
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl DetachLauncher for FakeDetachLauncher {
+        async fn launch_detached(
+            &self,
+            stack_id: &StackId,
+            _profile_path: &Path,
+            expected_hash: &str,
+        ) -> Result<SupervisorRegistry, LaunchError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((stack_id.to_crockford(), expected_hash.to_owned()));
+            let Some(names) = &self.children else {
+                return Err(LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                });
+            };
+            let children = names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    let n = i32::try_from(i).unwrap();
+                    StackChild {
+                        name: name.clone(),
+                        pid: 5000 + n,
+                        pgid: 5000 + n,
+                        start_epoch: 1_770_000_001,
+                    }
+                })
+                .collect();
+            Ok(SupervisorRegistry {
+                supervisor_pid: 4242,
+                start_epoch: 1_770_000_000,
+                policy: DisconnectPolicy::Detach,
+                config_hash: expected_hash.to_owned(),
+                children,
+            })
+        }
+    }
+
+    fn registry_with_launcher(
+        fake: Arc<FakeSubprocessPort>,
+        dir: &Path,
+        launcher: Arc<dyn DetachLauncher>,
+    ) -> Arc<LaunchRegistry> {
+        LaunchRegistry::with_launcher(fake as Arc<dyn SubprocessPort>, dir.to_path_buf(), launcher)
+    }
+
     const THREE_TIER: &str = "version = 1\n\n[services.db]\ncommand = [\"db\"]\n\n[services.api]\ncommand = [\"api\"]\ndepends_on = [\"db\"]\n\n[services.web]\ncommand = [\"web\"]\ndepends_on = [\"api\"]\n";
 
     #[tokio::test]
@@ -1011,18 +1270,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detach_policy_returns_supervisor_unreachable() {
-        // Detached supervisor is Milestone 2; an explicit detach request is stubbed.
+    async fn detach_policy_spawns_supervisor_and_returns_detached() {
+        // Milestone 2: an explicit detach request hands the Stack to a detached
+        // supervisor process and reports it as `Detached`, NOT an error.
         let dir = TempDir::new().expect("tempdir");
         let fake = FakeSubprocessPort::new();
-        let reg = registry(fake.clone(), dir.path());
+        let launcher = FakeDetachLauncher::succeeding(&["db", "api", "web"]);
+        let reg = registry_with_launcher(fake.clone(), dir.path(), launcher.clone());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        assert_eq!(handle.state, StackState::Detached);
+        assert_eq!(handle.policy, DisconnectPolicy::Detach);
+        assert!(handle.supervisor.is_some(), "detached handle carries the supervisor registry");
+        assert_eq!(handle.services.get("web"), Some(&SubprocessState::Running));
+        // The detached supervisor process owns the children; the in-process
+        // subprocess port spawns nothing for a detach bring-up.
+        assert!(
+            fake.spawns().is_empty(),
+            "detach delegates spawning to the supervisor process, not the in-session port"
+        );
+        assert_eq!(launcher.call_count(), 1, "the supervisor is launched exactly once");
+    }
+
+    #[tokio::test]
+    async fn detach_supervisor_failure_returns_supervisor_unreachable() {
+        // A supervisor that never publishes a matching registry within the budget
+        // is a legitimate `SupervisorUnreachable` — no longer an unconditional one.
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let launcher = FakeDetachLauncher::failing();
+        let reg = registry_with_launcher(fake.clone(), dir.path(), launcher);
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
         let err = reg
             .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
             .await
-            .expect_err("detach is unsupported in MVP");
+            .expect_err("a supervisor that never comes up is unreachable");
         assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
         assert!(fake.spawns().is_empty());
     }
