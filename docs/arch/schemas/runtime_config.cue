@@ -168,6 +168,12 @@ package schemas
 	// Disabled by default; enable via index.enabled = true plus feature flag fs-index.
 	index?: #IndexConfig
 
+	// launch configures the lock-free messaging fabric bounds for the launch BC per
+	// ADR-0067. Maps to the [launch] TOML table; omitting it activates the
+	// #LaunchChannelBounds defaults (stdout_mpsc_capacity, event_broadcast_capacity,
+	// notify_rate_per_sec, orchestrated_restart_per_min).
+	launch?: #LaunchChannelBounds
+
 	// capabilities configures operator overrides for the capability-based adapter
 	// factory per ADR-0042. Useful for integration testing specific tier paths.
 	capabilities?: {

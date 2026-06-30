@@ -30,7 +30,8 @@ package schemas
 #JobState: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out"
 
 // #PollingEndpoint names the control-plane tools used to poll a job per ADR-0040.
-#PollingEndpoint: "job.status" | "job.result"
+// "launch.status" added per ADR-0069 for launch-stack bring-up Task polling.
+#PollingEndpoint: "job.status" | "job.result" | "launch.status"
 
 // #JobBucket classifies every MCP tool into a dispatch bucket per ADR-0040.
 // A: sync inline (snapshot-instant). B: auto-mode (inline if small, job if large).
@@ -105,9 +106,10 @@ package schemas
 	client_id: #ClientId
 
 	// tool is the fully-qualified MCP tool name including the job_ namespace for
-	// control-plane tools, the subprocess_ namespace per ADR-0052, and the net_
-	// namespace per ADR-0058. Wire form uses underscores per ADR-0062.
-	tool: string & =~"^(fs|proc|sys|text|archive|job|subprocess|net)_[a-z][a-z0-9_]*$"
+	// control-plane tools, the subprocess_ namespace per ADR-0052, the net_
+	// namespace per ADR-0058, and the launch_ namespace per ADR-0069. Wire form
+	// uses underscores per ADR-0062.
+	tool: string & =~"^(fs|proc|sys|text|archive|job|subprocess|net|launch)_[a-z][a-z0-9_]*$"
 
 	// bucket is the static dispatch bucket assigned to this tool per ADR-0040.
 	bucket: #JobBucket

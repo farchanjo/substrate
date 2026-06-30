@@ -83,9 +83,9 @@ Aggregates and domain services owned by this context:
 - `JobBucket` — compile-time constant classifying each tool as A (sync inline),
   B (auto-mode), C (always async), or D (sync side-effect). Bucket B dispatch
   path is resolved at runtime against configured thresholds.
-- `PollingEndpoint` — string hint (`"job.status"` or `"job.result"`) surfaced in
-  the `structuredContent.hints` map to guide agents toward the correct pull-channel
-  tool after receiving a job receipt.
+- `PollingEndpoint` — string hint (`"job.status"`, `"job.result"`, or
+  `"launch.status"` per ADR-0069) surfaced in the `structuredContent.hints` map to
+  guide agents toward the correct pull-channel tool after receiving a job receipt.
 
 ## Tools Exposed
 

@@ -80,7 +80,7 @@ package schemas
 	streams: "multiplexed" | "separate" | *"multiplexed"
 }
 
-// DDD role: AggregateRoot
+// DDD role: ValueObject
 // #LaunchProfile is the value object parsed from .substrate.toml: the catalog of
 // Services plus Stack-level defaults. Immutable once loaded and trusted. Per ADR-0063.
 #LaunchProfile: {

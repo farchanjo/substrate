@@ -52,8 +52,8 @@ import "strings"
 	job_progress_pct?: int & >=0 & <=100
 
 	// polling_endpoint names the control-plane tool to call for status or result retrieval
-	// (per ADR-0040). "launch.status" added per ADR-0069 for launch-stack bring-up tasks.
-	polling_endpoint?: "job.status" | "job.result" | "launch.status"
+	// (per ADR-0040). Canonical enum #PollingEndpoint includes "launch.status" per ADR-0069.
+	polling_endpoint?: #PollingEndpoint
 
 	// estimated_completion_ms is a best-effort completion estimate in milliseconds; absent when unknown (per ADR-0040).
 	estimated_completion_ms?: int & >=0
@@ -71,7 +71,7 @@ import "strings"
 	stack_id?: =~"^[0-9A-HJKMNP-TV-Z]{26}$"
 
 	// stack_state is the current launch StackState for the associated stack (per ADR-0069). Launch BC only.
-	stack_state?: "Pending" | "Starting" | "Running" | "Degraded" | "Draining" | "Detached" | "Down"
+	stack_state?: #StackState
 }
 
 // #ToolArg describes a single named argument accepted by a tool.
