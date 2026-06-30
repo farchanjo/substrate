@@ -283,3 +283,23 @@ description string is updated to note optional line pagination while staying
 within the ≤100-char cap.
 
 Cross-reference: [ADR-0057](0057-subprocess-output-pagination-and-search.md).
+
+### 2026-06-30 — launch.* tools added (ADR-0069)
+
+[ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md) adds the `launch`
+namespace with nine declarative-orchestration tools (`launch.init`,
+`launch.list`, `launch.trust`, `launch.up`, `launch.status`, `launch.logs`,
+`launch.restart`, `launch.reload`, `launch.down`). All nine follow the ≤100-char
+description budget of the 2026-05-22 amendment and close with `See substrate
+skill.`
+
+ADR-0069 refines the discovery rule for deferred (ToolSearch-resolved) tools: the
+description front-loads a discriminating verb (no two `launch.*` descriptions
+share a leading verb) and carries a launch-domain noun (`stack`, `service`, or
+`profile`) so a ToolSearch query ranks the right tool. The spawning and killing
+tools (`launch.up`, `launch.down`, `launch.restart`, `launch.reload`) and the
+authority-granting `launch.trust` MUST set `hints.confirm_destructive: true`.
+The `hints` schema gains two optional launch keys (`stack_id`, `stack_state`) and
+`polling_endpoint` is extended with `launch.status`.
+
+Cross-reference: [ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md).
