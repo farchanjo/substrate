@@ -87,6 +87,12 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             networkInfo = container "substrate-network-info" "Adapter for network socket introspection: lists TCP/UDP sockets, aggregates per-connection stats, and resolves owner PIDs from kernel PCB tables (procfs on Linux, pcblist_n sysctl on macOS)." "Rust" {
                 tags "Adapter"
             }
+
+            // ADR-0063..0068: launch bounded context — declarative process orchestration OVER subprocess.
+            // Optional Cargo feature 'launch'. Detached --supervise mode (ADR-0068) is the same binary.
+            launch = container "substrate-launch" "Orchestration adapter for declarative multi-process stacks from .substrate.toml: TOFU trust gate (ADR-0064), depends_on DAG + reconciler reload (ADR-0065), distilled event stream (ADR-0066), lock-free mpsc/broadcast/watch fabric (ADR-0067), and the detached supervisor with zero-orphan governance (ADR-0068)." "Rust crate, opt-in (feature launch)" {
+                tags "Adapter" "OptionalFeature"
+            }
         }
 
         # External relationships
@@ -151,6 +157,15 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
         mcpServer -> networkInfo "Routes network-info tool calls to"
         networkInfo -> domain "Implements NetworkInfoPort from"
         networkInfo -> localOs "Reads TCP/UDP socket tables from"
+
+        # Launch adapter relationships (ADR-0063..0068, optional feature 'launch')
+        mcpServer -> launch "Routes launch.* tool calls to (when launch feature enabled)"
+        launch -> subprocessAdapter "Orchestrates: each Service materializes to one subprocess.spawn"
+        launch -> domain "Implements LaunchPort from"
+        launch -> policy "Validates Profile trust and per-Service spawn via"
+        launch -> jobs "Registers Stack bring-up as a Task/JobEntry (ADR-0049)"
+        launch -> localOs "Spawns the detached --supervise supervisor; owns control FIFO and durable state-file"
+        launch -> mcpServer "Forwards distilled lifecycle/semantic events as resource-updated notifications (ADR-0066)"
     }
 
     views {
