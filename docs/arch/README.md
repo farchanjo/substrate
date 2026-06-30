@@ -48,7 +48,7 @@ docs/arch/
 
 ## Diagram
 
-The mindmap below shows the nine bounded contexts and the cross-cutting
+The mindmap below shows the ten bounded contexts and the cross-cutting
 artifact types that govern the specification.
 
 ```mermaid
@@ -64,10 +64,11 @@ mindmap
       job
       subprocess
       network-info
+      launch
     ADRs
       MADR 4.0
       numbered immutable
-      0001 through 0062
+      0001 through 0069
     CUE Schemas
       tool specs
       error responses
@@ -93,10 +94,10 @@ If you are new to this specification, read the following documents in order:
 
 - [ADR-0001](adr/0001-record-architecture-decisions.md) — explains why MADR
   files are used and how decisions are recorded and amended
-- [ADR-0002](adr/0002-bounded-contexts.md) — the nine bounded contexts that
+- [ADR-0002](adr/0002-bounded-contexts.md) — the ten bounded contexts that
   partition substrate's tool surface (filesystem-query, filesystem-mutation,
   process, system-info, text-processing, archive, job, subprocess,
-  network-info), their mutation risk classifications, and the context map
+  network-info, launch), their mutation risk classifications, and the context map
   showing how they share the kernel
 - [Glossary](glossary.md) — definitions for every term used across ADRs,
   schemas, and bounded-context READMEs; consult this when a term is ambiguous
@@ -124,10 +125,10 @@ structurizr-cli export -workspace docs/arch/architecture/workspace.dsl -format p
 
 ## Bounded Contexts
 
-Substrate defines nine bounded contexts (added in ADR-0002 amended by
-ADR-0040, ADR-0052, and ADR-0058): filesystem-query, filesystem-mutation,
-process, system-info, text-processing, archive, job, subprocess, and
-network-info. Each context has a README under `domain/`:
+Substrate defines ten bounded contexts (added in ADR-0002 amended by
+ADR-0040, ADR-0052, ADR-0058, and ADR-0063): filesystem-query, filesystem-mutation,
+process, system-info, text-processing, archive, job, subprocess,
+network-info, and launch. Each context has a README under `domain/`:
 
 - [filesystem-query](domain/filesystem-query/README.md) — read-side
   filesystem tools (ls, find, stat, du, file, hash).
@@ -151,8 +152,12 @@ network-info. Each context has a README under `domain/`:
 - [network-info](domain/network-info/README.md) — read-only socket
   introspection (net.tcp_list, net.udp_list, net.tcp_stats,
   net.connection_count) added by ADR-0058.
+- [launch](domain/launch/README.md) — declarative process orchestration over the
+  subprocess BC (launch.init, launch.list, launch.trust, launch.up, launch.status,
+  launch.logs, launch.restart, launch.reload, launch.down) added by ADR-0063
+  (proposed), gated behind Cargo feature `launch`.
 
-## Recent Architecture Decisions (ADR-0040 through ADR-0062)
+## Recent Architecture Decisions (ADR-0040 through ADR-0069)
 
 Several waves of decisions were recorded after the initial specification:
 
@@ -188,6 +193,13 @@ Several waves of decisions were recorded after the initial specification:
   request default validation policy for tool inputs at the port boundary.
 - [ADR-0062](adr/0062-tool-naming-convention.md) — tool-naming convention
   (logical dot form for spec artifacts, underscore form on the MCP wire).
+- [ADR-0063](adr/0063-launch-orchestration-bounded-context.md) through
+  [ADR-0069](adr/0069-launch-tool-cards-toolsearch-and-guidance.md) — the launch
+  family (proposed): the orchestration bounded context (0063), Profile trust model
+  / TOFU (0064), dependency graph and reconciler reload (0065), event-stream and
+  notification model (0066), lock-free concurrency topology (0067), detached
+  supervisor and orphan governance (0068), and the launch tool cards / ToolSearch
+  guidance (0069).
 
 ## License
 

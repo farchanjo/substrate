@@ -306,7 +306,87 @@ mindmap
 
 Cross-reference: [ADR-0058](0058-network-socket-introspection.md).
 
+### 2026-06-30 — Tenth bounded context: launch (ADR-0063, proposed)
+
+[ADR-0063](0063-launch-orchestration-bounded-context.md) introduces a tenth
+bounded context: `launch` (status: proposed). It orchestrates *over* the
+subprocess BC rather than spawning processes itself.
+
+**launch**
+
+Purpose: declarative process orchestration — a project-local `.substrate.toml` of
+named Services brought up, supervised, and torn down as a Stack, with a
+zero-orphan guarantee.
+
+Ubiquitous language: `Profile`, `Service`, `Stack`, `StackState`, `Supervisor`,
+`DisconnectPolicy`, `TrustRecord` (TOFU), `LaunchOperatorConfig`, `OrphanTTL`,
+`Reconciler`.
+
+Aggregates: `Stack` (aggregate root; owns the dependency graph, per-Service
+handles, pinned config, and lifecycle state). `Profile` is a value object parsed
+from the trusted `.substrate.toml`.
+
+Tools exposed: `launch.init`, `launch.list`, `launch.trust`, `launch.up`,
+`launch.status`, `launch.logs`, `launch.restart`, `launch.reload`, `launch.down`.
+
+Mutation risk: HIGH — `launch.up`/`restart`/`down` spawn and kill processes. A
+Profile is never an authority grant: every Service spawn still passes the
+subprocess BC Layer 5 controls, and a Profile is untrusted until blessed (TOFU,
+[ADR-0064](0064-launch-profile-trust-model.md)). The BC is behind Cargo feature
+`launch` (default-OFF).
+
+The context map gains a `launch` branch layered above the `subprocess` branch:
+
+```mermaid
+mindmap
+  root((substrate-domain))
+    filesystem-query
+      ls
+      find
+      stat
+    filesystem-mutation
+      mkdir
+      cp
+      rm
+    process
+      ps
+      kill
+      pgrep
+    system-info
+      uname
+      df
+    text-processing
+      grep
+      wc
+    archive
+      tar
+      zip
+    job
+      job.status
+      job.result
+    subprocess
+      subprocess.spawn
+      subprocess.signal
+    network-info
+      net.tcp_list
+      net.connection_count
+    launch
+      launch.init
+      launch.list
+      launch.trust
+      launch.up
+      launch.status
+      launch.logs
+      launch.restart
+      launch.reload
+      launch.down
+```
+
+Cross-reference: [ADR-0063](0063-launch-orchestration-bounded-context.md) through
+[ADR-0069](0069-launch-tool-cards-toolsearch-and-guidance.md).
+
 ## Links
 
 - Related: [ADR-0025](0025-bounded-context-interactions.md)
 - Related: [ADR-0022](0022-project-layout.md)
+- Related: [ADR-0063](0063-launch-orchestration-bounded-context.md) — tenth BC (launch)

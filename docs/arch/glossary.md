@@ -162,10 +162,12 @@ only whether a human is asked to confirm already-blessed commands. See
 ## bounded context
 
 A named semantic region of the domain with its own ubiquitous language,
-aggregates, port traits, and adapter implementations. Substrate defines nine
+aggregates, port traits, and adapter implementations. Substrate defines ten
 bounded contexts: filesystem-query, filesystem-mutation, process, system-info,
-text-processing, archive, job, subprocess, and network-info. No aggregate
-crosses a context boundary. See [ADR-0002](adr/0002-bounded-contexts.md).
+text-processing, archive, job, subprocess, network-info, and launch (proposed).
+No aggregate crosses a context boundary. See
+[ADR-0002](adr/0002-bounded-contexts.md) and
+[ADR-0063](adr/0063-launch-orchestration-bounded-context.md).
 
 ## BinaryAllowlist
 

@@ -31,10 +31,10 @@ When changing any file under `docs/arch/`, run `spec validate --lane fast` befor
 
 ```text
 docs/arch/
-  adr/                       MADR 4.0 decision records (0001–0062)
+  adr/                       MADR 4.0 decision records (0001–0069)
   architecture/workspace.dsl Structurizr DSL (C4 context + container views)
   cue.mod/module.cue         CUE module: com.archanjo/substrate
-  domain/<bc>/README.md      Bounded-context narratives (9 BCs)
+  domain/<bc>/README.md      Bounded-context narratives (10 BCs; launch proposed)
   policies/*.rego            Open Policy Agent rules (16 policies)
   schemas/*.cue              CUE schemas (13 files, all with DDD role headers)
   specs/features/<area>/     Gherkin feature specs (98 features)
@@ -45,7 +45,7 @@ docs/arch/
 
 ## Bounded contexts (DDD strategic)
 
-Nine contexts, split by semantic family (not by binary name):
+Ten contexts, split by semantic family (not by binary name):
 
 1. **filesystem-query** — read-side: ls, find, stat, du, file, hash
 2. **filesystem-mutation** — write-side: mkdir, write, copy, rename, remove, chmod, symlink, touch
@@ -56,8 +56,9 @@ Nine contexts, split by semantic family (not by binary name):
 7. **job** — job.list, job.result, job.cancel, job.status (async control-plane)
 8. **subprocess** — subprocess.spawn, subprocess.list, subprocess.result, subprocess.cancel, subprocess.signal, subprocess.search (ADR-0052)
 9. **network-info** — net.tcp_list, net.udp_list, net.tcp_stats, net.connection_count (ADR-0058)
+10. **launch** *(proposed, ADR-0063..0069)* — declarative process orchestration over subprocess: launch.init/list/trust/up/status/logs/restart/reload/down, gated behind Cargo feature `launch`
 
-Tools are namespaced `<bc>.<verb>` (e.g., `fs.find`, `proc.signal`). Each BC maps to a Cargo crate under `crates/substrate-<bc>` (see ADR-0022). The pure-domain shared kernel lives in `crates/substrate-domain` and MUST NOT import any infra crate (hexagonal layering enforced via `policies/hexagonal_layering.rego`).
+Tools are namespaced `<bc>.<verb>` (e.g., `fs.find`, `proc.signal`). Each BC maps to a Cargo crate under `crates/substrate-<bc>` (see ADR-0022). The `substrate-launch` crate is proposed (ADR-0063) and not yet a workspace member. The pure-domain shared kernel lives in `crates/substrate-domain` and MUST NOT import any infra crate (hexagonal layering enforced via `policies/hexagonal_layering.rego`).
 
 ## Locked architectural decisions
 
@@ -73,7 +74,7 @@ When implementation begins, the following decisions are anchors — do not re-de
 - **Tool descriptions ("narrative arc")**: each tool description ≤180 tokens, fixed template USE/DOES/ARGS/RETURNS/NEXT/AVOID. Response bifurcates into `content` (model-oriented text ≤80 tokens) and `structuredContent` (JSON + hints map: `next_action_suggested`, `alternative_tool`, `confirm_destructive`, `quota_status`, `error_recovery`). Targets 10B-param models. See ADR-0007.
 - **MCP protocol**: min version 2025-06-18 (structuredContent + outputSchema), preferred 2025-11-25 (form-mode + URL-mode elicitation). Capability intersection computed at handshake. See ADR-0013.
 - **Pagination**: cursor-based base64-opaque, page_size 50 default, max 10000 (domain `PageSize::MAX`). See ADR-0008, ADR-0060.
-- **Error taxonomy**: 43 codes total (original 13 base + 6 kernel-induced + 7 startup + additions from job control-plane, capability/elicitation, and subprocess BCs). Stable `SUBSTRATE_<UPPER_SNAKE>` form. Every error includes `code`, `message_en_us`, `recovery_hint` (≤150 chars), `correlation_id`. See ADR-0010, ADR-0034, ADR-0036, ADR-0040, ADR-0042, ADR-0052.
+- **Error taxonomy**: 56 codes total (original 13 base + 6 kernel-induced + 7 startup + additions from job control-plane, capability/elicitation, subprocess, and launch BCs). Stable `SUBSTRATE_<UPPER_SNAKE>` form. Every error includes `code`, `message_en_us`, `recovery_hint` (≤150 chars), `correlation_id`. See ADR-0010, ADR-0034, ADR-0036, ADR-0040, ADR-0042, ADR-0052, ADR-0063, ADR-0068.
 
 ## Cargo workspace layout
 
