@@ -67,7 +67,9 @@ package schemas
 	// Launch supervisor-hardening errors per ADR-0068 (-32054 through -32056)
 	"SUBSTRATE_LAUNCH_REGISTRY_INSECURE" |
 	"SUBSTRATE_LAUNCH_FRAME_TOO_LARGE" |
-	"SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED"
+	"SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED" |
+	// Launch spawn failure surfaced from the injected SubprocessPort (-32057, ADR-0063 MVP)
+	"SUBSTRATE_LAUNCH_SPAWN_FAILED"
 
 // #ErrorCategory classifies codes by operational concern.
 // "job" added per ADR-0010 amendment for async-job BC per ADR-0040.
@@ -441,5 +443,11 @@ package schemas
 		http_jsonrpc_code: -32056
 		recovery_hint:     "A recorded child's pid was recycled to another process; the stale entry was cleared with no signal sent. Re-run launch.up."
 		category:          "lifecycle"
+	}
+	SUBSTRATE_LAUNCH_SPAWN_FAILED: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_SPAWN_FAILED"
+		http_jsonrpc_code: -32057
+		recovery_hint:     "A Service failed to spawn via the subprocess port during launch.up. Verify the binary path, args, and allowlist, then re-run."
+		category:          "io_error"
 	}
 }

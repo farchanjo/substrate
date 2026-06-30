@@ -148,7 +148,7 @@ When substrate fails before the MCP `initialize` handshake, it cannot use the JS
 
 ### Recovery Hint Length Cap
 
-Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 56 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
+Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 57 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
 
 ### JSON-RPC Standard Code Pass-Through
 
@@ -210,7 +210,7 @@ The top-level `recovery_hint` in the JSON-RPC `data` object retains its generic 
 - Unit tests assert that every `thiserror` variant maps to a known stable code.
 - Integration tests assert the `data` shape conforms to the CUE schema in `docs/arch/schemas/error_catalog.cue`.
 - `cargo-deny` ensures no dependency introduces a conflicting JSON-RPC error range.
-- `spec validate --lane full` validates CUE schema coverage for all 56 codes in the catalog (13 original + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
+- `spec validate --lane full` validates CUE schema coverage for all 57 codes in the catalog (13 original + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
 - CUE schema asserts `len(recovery_hint) <= 150` for every code.
 - Integration tests for `SUBSTRATE_INVALID_ARGUMENT` assert `offending_field` is present in `data`.
 - Integration tests for proc-namespace errors assert `structuredContent.hints.error_recovery` carries the proc-specific hint.
@@ -297,3 +297,11 @@ Three additional runtime error codes harden the detached-supervisor IPC and reap
 - `SUBSTRATE_LAUNCH_REGISTRY_INSECURE` (-32054) — Category: security. Cross-ref: ADR-0068 registry/IPC permission boundary.
 - `SUBSTRATE_LAUNCH_FRAME_TOO_LARGE` (-32055) — Category: input. Cross-ref: ADR-0068 cooperative PIPE_BUF framing.
 - `SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED` (-32056) — Category: lifecycle. Cross-ref: ADR-0068 reaper start-time pin.
+
+### 2026-06-30 — Launch spawn-failure code (ADR-0063 MVP)
+
+The `substrate-launch` MVP composes each Service through the injected `SubprocessPort`. A spawn failure raised by that port during `launch.up` surfaces as one launch-scoped code, bringing the catalog to **57 codes**.
+
+**Addition:**
+
+- `SUBSTRATE_LAUNCH_SPAWN_FAILED` (-32057) — Category: io_error. Cross-ref: ADR-0063 launch orchestration; mirrors `SUBSTRATE_SUBPROCESS_SPAWN_FAILED` at the launch layer.
