@@ -58,11 +58,13 @@ on-disk edits take effect only through `launch.up` or `launch.reload`, each of
 which re-blesses the new content. `StackState` terminal positions (`Draining`,
 `Down`) never regress.
 
-### LaunchProfile (aggregate root)
+### LaunchProfile (value object)
 
 `LaunchProfile` is the immutable catalog: a `services` map plus the Stack-level
-defaults `on_client_disconnect`, `orphan_ttl_secs`, and `auto_bless`. It is
-constructed only after the trust gate passes, never from untrusted bytes.
+defaults `on_client_disconnect` and `orphan_ttl_secs`. It has no identity of its
+own (the running `Stack` is the aggregate root) and is constructed only after the
+trust gate passes, never from untrusted bytes; inline auto-blessing is governed by
+user-scope operator config (`auto_bless_paths`), not a Profile field.
 
 ## Entities and Value Objects
 

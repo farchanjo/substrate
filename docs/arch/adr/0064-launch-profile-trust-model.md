@@ -69,8 +69,12 @@ declarative stack unusable for its purpose.
 
 Loading a Profile is a strict two-phase pipeline; no step may be reordered:
 
-1. `open(".substrate.toml", O_RDONLY | O_NOFOLLOW)`. If the open fails with
-   `ELOOP`, the file is a symlink and is rejected with
+1. Open the config symlink-safe along the **entire** path, mirroring
+   [ADR-0035](0035-path-safety-hardening.md):
+   `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` on Linux >= 5.6,
+   `O_NOFOLLOW_ANY` on macOS >= 12, and `O_RDONLY | O_NOFOLLOW` plus an `lstat`
+   walk of each parent component on older kernels. A symlink anywhere in the
+   resolved path (not only the final component) is rejected with
    `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED`.
 2. `fstat` the opened descriptor; capture `(st_dev, st_ino, st_uid, st_mode,
    st_size)`. If the containing directory has the world-write bit set, reject
@@ -80,11 +84,16 @@ Loading a Profile is a strict two-phase pipeline; no step may be reordered:
    store. Compare the full tuple `(st_dev, st_ino, st_uid, st_mode & 0o7777,
    sha256_or_blake3)`. A mismatch on any field, or an absent record, means
    untrusted.
-5. **Only if trusted**, deserialize the file content into a Profile. No TOML
-   parse, no field access, no interpolation occurs before this point.
+5. **Only if trusted**, deserialize the Profile from the exact in-memory byte
+   buffer accumulated while hashing in step 3. The descriptor MUST NOT be re-read
+   and the path MUST NOT be re-opened after the trust verdict; parsing the same
+   bytes that were hashed closes the hash-then-reopen TOCTOU. No TOML parse, no
+   field access, no interpolation occurs before this point.
 
 If untrusted, `launch.up` returns `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED` and the
-client must call `launch.trust` (or the operator must set `auto_bless`).
+client must call `launch.trust` (or the operator must have listed the path in the
+user-scope `auto_bless_paths`; see below). A field inside the still-untrusted
+`.substrate.toml` can never grant its own trust.
 
 ### Bless record and trust store
 
@@ -107,20 +116,29 @@ All five identity fields are re-verified on every load. Storing only the content
 hash would allow an attacker to change permissions, have a third party rewrite
 the file, then restore the original content; binding `dev`/`ino`/`uid`/`mode`
 closes that path. The store file itself MUST be `0600` and owned by the invoking
-user; a store with looser permissions is rejected at startup.
+user. The trust store and the user-scope operator config are opened symlink-safe
+(the same platform-tiered `openat2` / `O_NOFOLLOW_ANY` / `O_NOFOLLOW`+`lstat`
+tiers as the config file), and `${XDG_CONFIG_HOME:-~/.config}/substrate` is
+rejected if it is world-writable or not owned by the invoking user; a store or
+config that is not `0600`+owner, or whose parent is world-writable, is rejected at
+startup with `SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE`.
 
 ### Shared versus local Profiles
 
 Following the IDEA "store as project file" distinction:
 
 - `.substrate.toml` — committed/shared; untrusted until blessed (TOFU).
-- `.substrate.local.toml` — git-ignored; authored locally by the operator;
-  trusted on the basis of the same identity tuple but never prompts on first use,
-  because the operator who runs substrate is also its author. It still must pass
-  the `O_NOFOLLOW`, ownership, and world-writable-directory checks.
+- `.substrate.local.toml` — conventionally git-ignored and authored locally, but
+  `.gitignore` cannot stop a hostile repository from committing one, so it is NOT
+  trusted on presence. It passes through the identical TOFU gate (absent bless
+  record means `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED`, no implicit auto-bless) and
+  the same full-path symlink-safe, ownership, and world-writable-directory checks.
+  Reduced-ceremony inline blessing is available only when its canonical path is in
+  the user-scope `auto_bless_paths`, never in the repository.
 
-When both exist, the local file overrides matching Service keys in the shared
-file; the merged Profile is what the Stack pins.
+Both filenames share one trust pipeline. When both exist and both are trusted, the
+local file overrides matching Service keys in the shared file; the merged Profile
+is what the Stack pins.
 
 ### Trust suppresses the prompt, not the gate
 
@@ -143,9 +161,12 @@ the existing allowlist entry and are not granted any implicit exception by trust
 
 - `launch.trust <profile>` blesses a Profile without running it; this is the
   default path and the recommended ceremony.
-- Per-Profile `auto_bless = true` (opt-in) lets `launch.up` bless inline when the
-  content/identity tuple is new, trading the deliberate ceremony for convenience
-  at the operator's explicit choice.
+- Inline blessing is opt-in **only** through the user-scope operator config
+  (`${XDG_CONFIG_HOME:-~/.config}/substrate/launch.toml`, mode 0600, owner-checked):
+  when the canonical Profile path is listed in `auto_bless_paths`, `launch.up`
+  blesses a new content/identity tuple inline instead of prompting. The flag lives
+  in user scope, never in `.substrate.toml`, so a cloned repository cannot enable
+  its own inline blessing (the trust-order confusion the `mise` CVE demonstrates).
 
 ### Running Stack immutability
 
@@ -174,16 +195,16 @@ Extending [ADR-0010](0010-error-taxonomy.md); these four occupy `-32044` through
 
 ```mermaid
 flowchart TD
-    UP[launch.up] --> OPEN{open O_NOFOLLOW}
-    OPEN -->|ELOOP symlink| Rej1[Reject CONFIG_SYMLINK_REJECTED]
-    OPEN -->|ok| DIR{parent dir world-writable?}
+    UP[launch.up] --> OPEN{open symlink-safe full path}
+    OPEN -->|symlink in path| Rej1[Reject CONFIG_SYMLINK_REJECTED]
+    OPEN -->|ok| DIR{parent dir world-writable or not owner?}
     DIR -->|yes| Rej2[Reject CONFIG_UNTRUSTED_DIR]
-    DIR -->|no| HASH[fstat tuple + stream hash]
+    DIR -->|no| HASH[fstat tuple + stream hash to in-memory buffer]
     HASH --> LOOK{tuple matches user-scope bless record?}
-    LOOK -->|no record / mismatch| NT{auto_bless?}
+    LOOK -->|no record / mismatch| NT{path in user-scope auto_bless_paths?}
     NT -->|no| Rej3[Reject PROFILE_NOT_TRUSTED]
     NT -->|yes| BLESS[bless inline: store tuple]
-    LOOK -->|match| PARSE[deserialize Profile]
+    LOOK -->|match| PARSE[deserialize Profile from the hashed buffer]
     BLESS --> PARSE
     PARSE --> SPAWN[per-Service subprocess.spawn through Layer 5]
 ```
@@ -205,7 +226,7 @@ flowchart TD
 - The user-scope trust store is new persistent state with its own permission and
   ownership invariants to enforce.
 - Operators must perform an explicit bless ceremony the first time and after each
-  intentional edit, unless they opt into `auto_bless`.
+  intentional edit, unless they list the path in the user-scope `auto_bless_paths`.
 
 ### Risks
 
@@ -229,6 +250,15 @@ flowchart TD
   `SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR`.
 - Unit test: trust store at mode 0644; assert `SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE`
   at startup.
+- Security test: a Profile carrying `auto_bless = true` with no user-scope
+  `auto_bless_paths` entry for its path; assert `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED`
+  and no inline bless (a repo field cannot self-authorize).
+- Security test: a freshly cloned repo containing a committed `.substrate.local.toml`;
+  assert `launch.up` returns `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED` and spawns nothing.
+- Security test: rename a different file over the path between hash (step 3) and
+  parse (step 5); assert the Profile parsed is the hashed bytes, never the swapped file.
+- Security test: an intermediate parent component is a symlink; assert
+  `SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED` via the full-path symlink-safe open.
 
 ## Links
 

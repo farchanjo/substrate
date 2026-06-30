@@ -95,11 +95,10 @@ package schemas
 	// detached survival entirely (treated as shutdown). Range 0..86400.
 	orphan_ttl_secs: int & >=0 & <=86400 | *3600
 
-	// auto_bless, when true, lets launch.up bless a new content/identity tuple inline
-	// instead of requiring an explicit launch.trust ceremony (ADR-0064). Default false.
-	auto_bless: bool | *false
-
 	// services is the catalog keyed by Service name. Each entry is one supervised child.
+	// NOTE: inline auto-blessing is NOT a Profile field — it lives in user-scope
+	// #LaunchOperatorConfig (~/.config/substrate/launch.toml) so a cloned repo cannot
+	// authorize its own blessing (ADR-0064 trust-order-confusion defense).
 	services: [#ServiceName]: #LaunchService
 }
 
@@ -187,6 +186,19 @@ package schemas
 
 	// blessed_at is the RFC 3339 timestamp the record was created.
 	blessed_at: string
+}
+
+// DDD role: ValueObject
+// #LaunchOperatorConfig is the user-scope launch operator policy, loaded at startup
+// from ${XDG_CONFIG_HOME:-~/.config}/substrate/launch.toml (mode 0600, owner-checked).
+// It lives OUTSIDE any repository so a cloned Profile cannot authorize its own
+// blessing (trust-order confusion). Per ADR-0064.
+#LaunchOperatorConfig: {
+	// auto_bless_paths lists absolute canonical path prefixes for which launch.up may
+	// bless a new content/identity tuple inline instead of requiring launch.trust.
+	// Empty (default) means every new Profile needs an explicit launch.trust ceremony.
+	// A repository cannot add itself here; only the operator edits user-scope config.
+	auto_bless_paths: [...string] | *[]
 }
 
 // DDD role: ValueObject
