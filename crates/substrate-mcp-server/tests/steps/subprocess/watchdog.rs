@@ -76,7 +76,7 @@ const KEY_WD_TERMINAL_STATE: &str = "watchdog_terminal_state";
 
 /// `Given target OS is macOS`
 #[given(regex = r#"^target OS is macOS$"#)]
-async fn given_target_os_macos(_world: &mut SubstrateWorld) {
+async fn given_target_os_macos(world: &mut SubstrateWorld) {
     #[cfg(not(target_os = "macos"))]
     {
         tracing::info!(
@@ -88,6 +88,7 @@ async fn given_target_os_macos(_world: &mut SubstrateWorld) {
     }
     #[cfg(target_os = "macos")]
     {
+        let _ = world.skip_scenario; // suppress unused-variable lint in vacuous path
         assert_eq!(
             std::env::consts::OS,
             "macos",
