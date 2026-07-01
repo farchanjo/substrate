@@ -174,8 +174,15 @@ fn ensure_control_fifo_at(stack_dir: &Path) -> Result<PathBuf, LaunchError> {
     if !path.exists() {
         // `mode_t` is `u16` on Darwin and `u32` on Linux; `SECURE_FIFO_MODE`
         // is declared `u32` (it is also compared against `Metadata::mode()`,
-        // which is always `u32`), so the narrowing cast is needed here only.
-        #[expect(clippy::cast_possible_truncation, reason = "0o600 fits both u16 and u32 mode_t")]
+        // which is always `u32`), so the narrowing cast is needed on macOS/BSD
+        // only — on Linux this is a same-width no-op cast.
+        #[cfg_attr(
+            not(target_os = "linux"),
+            expect(
+                clippy::cast_possible_truncation,
+                reason = "0o600 fits both u16 and u32 mode_t"
+            )
+        )]
         let fifo_mode = SECURE_FIFO_MODE as nix::sys::stat::mode_t;
         match mkfifo(&path, Mode::from_bits_truncate(fifo_mode)) {
             Ok(()) | Err(nix::Error::EEXIST) => {},

@@ -145,12 +145,17 @@ mod inner {
 
     /// No-op install on non-macOS platforms. Always returns `Ok(NoopWatchdog)`.
     ///
+    /// # Errors
+    ///
+    /// Never returns `Err`; the `Result` return type exists only to match the
+    /// macOS `install` signature so callers stay platform-agnostic.
+    ///
     /// References: ADR-0053 §"macOS Watchdog Pipe Pattern".
     #[expect(
         clippy::disallowed_types,
         reason = "substrate-subprocess is the authorized host of tokio::process::Command per ADR-0052"
     )]
-    pub fn install(_cmd: &mut tokio::process::Command) -> std::io::Result<WatchdogPipe> {
+    pub const fn install(_cmd: &mut tokio::process::Command) -> std::io::Result<WatchdogPipe> {
         Ok(WatchdogPipe {
             _phantom: std::marker::PhantomData,
         })
