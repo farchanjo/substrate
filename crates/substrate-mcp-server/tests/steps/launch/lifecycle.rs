@@ -14,7 +14,8 @@
 //! Step definitions for launch Stack lifecycle and read-side tools
 //! (ADR-0063, ADR-0064).
 //!
-//! Covers: launch-disconnect-shutdown-kills-stack, launch-list-no-trust-required.
+//! Covers: launch-disconnect-shutdown-kills-stack, launch-list-no-trust-required,
+//! launch-forget-terminal-stack.
 
 #![cfg(feature = "launch")]
 #![expect(
@@ -216,4 +217,87 @@ async fn then_response_hint_suggests_launch_up(_world: &mut SubstrateWorld) {
     // depends on (list() succeeding read-only) is proven by the previous Then
     // steps; the wire-level hint value itself is exercised by `server.rs`'s
     // full-server scenarios for the sibling launch_up response.
+}
+
+// ---- launch-forget-terminal-stack -------------------------------------------
+
+#[given(regex = r#"^the Stack has been brought down via launch\.down$"#)]
+async fn given_stack_brought_down(world: &mut SubstrateWorld) {
+    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let stack_id_str = world
+        .context
+        .get("launch_stack_id")
+        .cloned()
+        .expect("Given must set launch_stack_id");
+    let stack_id: substrate_domain::value_objects::stack_id::StackId =
+        stack_id_str.parse().expect("valid StackId");
+    reg.down(&stack_id, &NeverCancel).await.expect("down succeeds");
+}
+
+#[when(regex = r#"^launch\.forget is invoked for that stack_id$"#)]
+async fn when_launch_forget_invoked(world: &mut SubstrateWorld) {
+    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let stack_id_str = world
+        .context
+        .get("launch_stack_id")
+        .cloned()
+        .expect("Given must set launch_stack_id");
+    let stack_id: substrate_domain::value_objects::stack_id::StackId =
+        stack_id_str.parse().expect("valid StackId");
+    let result = reg.forget(&stack_id).await.map_err(|e| e.code().to_owned());
+    world.context.insert(
+        "launch_forget_result".to_owned(),
+        result.map_or_else(|code| format!("Err:{code}"), |()| "Ok".to_owned()),
+    );
+}
+
+#[then(regex = r#"^the forget call succeeds$"#)]
+async fn then_forget_call_succeeds(world: &mut SubstrateWorld) {
+    let result = world
+        .context
+        .get("launch_forget_result")
+        .cloned()
+        .expect("When must set launch_forget_result");
+    assert_eq!(result, "Ok", "expected launch.forget to succeed; got {result}");
+}
+
+#[then(regex = r#"^the forget call fails with SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL$"#)]
+async fn then_forget_call_fails_not_terminal(world: &mut SubstrateWorld) {
+    let result = world
+        .context
+        .get("launch_forget_result")
+        .cloned()
+        .expect("When must set launch_forget_result");
+    assert_eq!(
+        result, "Err:SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL",
+        "expected launch.forget to reject a non-terminal stack; got {result}"
+    );
+}
+
+#[then(regex = r#"^launch\.status no longer lists that stack_id$"#)]
+async fn then_status_no_longer_lists_stack(world: &mut SubstrateWorld) {
+    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let stack_id_str = world
+        .context
+        .get("launch_stack_id")
+        .cloned()
+        .expect("Given must set launch_stack_id");
+    let stack_id: substrate_domain::value_objects::stack_id::StackId =
+        stack_id_str.parse().expect("valid StackId");
+    let handles = reg.status(Some(&stack_id)).await.expect("status");
+    assert!(handles.is_empty(), "forgotten stack must not appear in status");
+}
+
+#[then(regex = r#"^launch\.status still lists that stack_id$"#)]
+async fn then_status_still_lists_stack(world: &mut SubstrateWorld) {
+    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let stack_id_str = world
+        .context
+        .get("launch_stack_id")
+        .cloned()
+        .expect("Given must set launch_stack_id");
+    let stack_id: substrate_domain::value_objects::stack_id::StackId =
+        stack_id_str.parse().expect("valid StackId");
+    let handles = reg.status(Some(&stack_id)).await.expect("status");
+    assert!(!handles.is_empty(), "stack must still be listed in status");
 }

@@ -6,7 +6,7 @@ Feature: launch tool descriptions are ToolSearch-discoverable and within budget
   So that a query resolves to exactly one launch tool
 
   Scenario: each launch description is budget-compliant and uniquely discriminable
-    Given the nine launch.* tool descriptions
+    Given the ten launch.* tool descriptions
     When the descriptions are validated
     Then each description is at most 100 characters and ends with See substrate skill.
     And each description contains a launch-domain noun among stack, service, or profile

@@ -38,8 +38,8 @@ use crate::SubstrateWorld;
 
 // ---- launch-tool-descriptions-toolsearch-discoverable -----------------------
 
-#[given(regex = r#"^the nine launch\.\* tool descriptions$"#)]
-async fn given_nine_launch_tool_descriptions(world: &mut SubstrateWorld) {
+#[given(regex = r#"^the ten launch\.\* tool descriptions$"#)]
+async fn given_ten_launch_tool_descriptions(world: &mut SubstrateWorld) {
     world.spawn_and_initialize();
     let id = world.send_rpc("tools/list", serde_json::json!({}));
     let resp = world.drain_until_response(id);
@@ -58,7 +58,7 @@ async fn when_descriptions_validated(_world: &mut SubstrateWorld) {
 )]
 async fn then_descriptions_within_budget(world: &mut SubstrateWorld) {
     let tools = launch_tool_descriptions(world);
-    assert_eq!(tools.len(), 9, "expected nine launch_* tools; got {tools:?}");
+    assert_eq!(tools.len(), 10, "expected ten launch_* tools; got {tools:?}");
     for (name, desc) in &tools {
         assert!(
             desc.len() <= 100,

@@ -164,9 +164,10 @@ fn initialize_returns_protocol_2025_11_25_and_capabilities() {
 /// `proc_top`, `sys_mem`, and `sys_cpu` were added to the registry in addition to
 /// the original 41; the `subprocess` feature contributes six more
 /// (spawn/list/cancel/result/signal/search).
-// `launch` implies `subprocess`, so the launch build carries 45 + 6 + 9 = 60.
+// `launch` implies `subprocess`, so the launch build carries 45 + 6 + 10 = 61
+// (launch.forget added alongside init/list/trust/up/status/logs/restart/reload/down).
 #[cfg(feature = "launch")]
-const EXPECTED_TOOLS: usize = 60;
+const EXPECTED_TOOLS: usize = 61;
 #[cfg(all(feature = "subprocess", not(feature = "launch")))]
 const EXPECTED_TOOLS: usize = 51;
 #[cfg(all(not(feature = "subprocess"), not(feature = "launch")))]
