@@ -69,7 +69,9 @@ package schemas
 	"SUBSTRATE_LAUNCH_FRAME_TOO_LARGE" |
 	"SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED" |
 	// Launch spawn failure surfaced from the injected SubprocessPort (-32057, ADR-0063 MVP)
-	"SUBSTRATE_LAUNCH_SPAWN_FAILED"
+	"SUBSTRATE_LAUNCH_SPAWN_FAILED" |
+	// launch.forget rejects a non-terminal stack_id (-32058, ADR-0063 amendment)
+	"SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL"
 
 // #ErrorCategory classifies codes by operational concern.
 // "job" added per ADR-0010 amendment for async-job BC per ADR-0040.
@@ -449,5 +451,11 @@ package schemas
 		http_jsonrpc_code: -32057
 		recovery_hint:     "A Service failed to spawn via the subprocess port during launch.up. Verify the binary path, args, and allowlist, then re-run."
 		category:          "io_error"
+	}
+	SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL: #ErrorEntry & {
+		code:              "SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL"
+		http_jsonrpc_code: -32058
+		recovery_hint:     "Run launch.down on this stack_id first; launch.forget only removes stacks whose state is already Down."
+		category:          "lifecycle"
 	}
 }

@@ -328,3 +328,27 @@ Until then an `on_client_disconnect = detach` request returns
 `SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` before any spawn, and the MVP enforces
 `shutdown` semantics. Reload subgraph-degrade and event-replay summary are
 likewise deferred (tail-only logs in the MVP).
+
+### 2026-07-01 — `launch.forget` added (tenth tool)
+
+`LaunchRegistry.stacks` (a `DashMap<StackId, StackEntry>`) is process-lifetime
+scoped for `on_client_disconnect = shutdown` Stacks — only `detach` Stacks get a
+durable `supervisor.json` (ADR-0068). `launch.down` transitions a Stack to
+`Down` in place but never evicts its entry, so `launch.status`/`launch.logs`
+kept listing every Stack an operator had ever brought up for as long as the MCP
+server process lived; the only way to clear the listing was to reconnect the
+client (restarting the server process, and its in-memory registry with it).
+
+Found via a live end-to-end exercise of all nine MVP tools through a real MCP
+connection (not the cucumber harness): bringing up and tearing down two
+short-lived smoke-test Stacks left both permanently visible in `launch.status`
+for the remainder of the session.
+
+Added `launch.forget(stack_id)`: removes a Stack's entry from the registry,
+rejecting with the new `SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL` (-32058) error
+(ADR-0010 amendment) when the Stack's state is not `Down`. No process is
+signalled — the Stack is already fully torn down by `launch.down` before
+`launch.forget` is ever meaningful to call. The launch BC now registers ten
+`launch.*` tools; ADR-0069's tool-card budget and ToolSearch-discoverability
+checks (`launch-tool-descriptions-toolsearch-discoverable.feature`) cover the
+new card identically to the original nine.
