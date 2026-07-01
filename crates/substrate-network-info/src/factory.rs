@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use substrate_domain::ports::network_info::{NetworkInfoPort, NoopNetworkInfoPort};
+use substrate_domain::ports::network_info::NetworkInfoPort;
+#[cfg(not(target_os = "linux"))]
+use substrate_domain::ports::network_info::NoopNetworkInfoPort;
 use tracing::info;
 
 // ---- Tier -------------------------------------------------------------------
@@ -72,14 +74,13 @@ impl NetworkInfoFactory {
         #[cfg(target_os = "linux")]
         {
             let tier = NetworkInfoTier::LinuxProcNet;
-            let port: Arc<dyn NetworkInfoPort> =
-                Arc::new(crate::linux::LinuxProcNetAdapter::default());
+            let port: Arc<dyn NetworkInfoPort> = Arc::new(crate::linux::LinuxProcNetAdapter);
             info!(
                 target: "substrate_audit",
                 event = "SUBSTRATE_CAPABILITY_TIERS_SELECTED",
                 net_info_tier = ?tier,
             );
-            return (port, tier);
+            (port, tier)
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]

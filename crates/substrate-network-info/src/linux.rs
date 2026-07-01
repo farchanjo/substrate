@@ -140,7 +140,7 @@ impl NetworkInfoPort for LinuxProcNetAdapter {
         for entry in &all {
             *by_state.entry(entry.state).or_insert(0) += 1;
         }
-        let total = all.len() as u32;
+        let total = u32::try_from(all.len()).unwrap_or(u32::MAX);
         Ok(ConnectionCounts {
             by_state,
             total,
@@ -322,7 +322,7 @@ fn parse_addr_port(raw: &str, family: AddrFamily) -> Result<(String, u16), Strin
 ///
 /// Best-effort: entries that cannot be resolved retain `pid: None`.
 /// Errors from unprivileged access (`EACCES`, `EPERM`) are silently skipped.
-async fn resolve_pids(entries: &mut Vec<SocketEntry>) {
+async fn resolve_pids(entries: &mut [SocketEntry]) {
     // Build inode → index map for O(1) lookup.
     let mut inode_map: BTreeMap<u64, usize> = BTreeMap::new();
     for (idx, entry) in entries.iter().enumerate() {
@@ -361,12 +361,10 @@ async fn resolve_pids(entries: &mut Vec<SocketEntry>) {
             if let Some(inode_str) = target_str
                 .strip_prefix("socket:[")
                 .and_then(|s| s.strip_suffix(']'))
+                && let Ok(inode) = inode_str.parse::<u64>()
+                && let Some(&idx) = inode_map.get(&inode)
             {
-                if let Ok(inode) = inode_str.parse::<u64>() {
-                    if let Some(&idx) = inode_map.get(&inode) {
-                        entries[idx].pid = Some(pid);
-                    }
-                }
+                entries[idx].pid = Some(pid);
             }
         }
     }
@@ -417,10 +415,10 @@ async fn parse_snmp_stats() -> Result<TcpStats, SubstrateError> {
     let map: BTreeMap<&str, u64> = headers
         .iter()
         .zip(values.iter())
-        .filter_map(|(k, v)| {
+        .map(|(k, v)| {
             // Some counter fields are "-1" for "not applicable"; treat as 0.
-            let val: u64 = v.parse::<i64>().unwrap_or(0).max(0) as u64;
-            Some((*k, val))
+            let val: u64 = u64::try_from(v.parse::<i64>().unwrap_or(0)).unwrap_or(0);
+            (*k, val)
         })
         .collect();
 
@@ -451,7 +449,7 @@ fn paginate(
     entries: Vec<SocketEntry>,
     pagination: Option<&Pagination>,
 ) -> (Vec<SocketEntry>, Option<u64>) {
-    let offset = pagination.map_or(0, |p| p.offset as usize);
+    let offset = pagination.map_or(0, |p| usize::try_from(p.offset).unwrap_or(usize::MAX));
     let page_size = pagination.map_or(100, |p| p.page_size.get() as usize);
 
     let slice: Vec<SocketEntry> = entries.into_iter().skip(offset).collect();
@@ -467,6 +465,12 @@ fn paginate(
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module — panics and unwraps on assertion failure are the intended behavior"
+)]
 mod tests {
     use substrate_domain::network::{AddrFamily, Protocol, TcpState};
 

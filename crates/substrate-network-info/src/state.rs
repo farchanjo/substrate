@@ -51,7 +51,7 @@ pub const fn macos_state_from_u8(raw: u8) -> TcpState {
 /// ```
 #[cfg(target_os = "linux")]
 #[must_use]
-pub fn linux_state_from_hex(raw: u8) -> TcpState {
+pub const fn linux_state_from_hex(raw: u8) -> TcpState {
     match raw {
         0x01 => TcpState::Established,
         0x02 => TcpState::SynSent,
