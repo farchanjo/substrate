@@ -762,6 +762,25 @@ impl LaunchPort for LaunchRegistry {
         }
         Ok(StackState::Down)
     }
+
+    async fn forget(&self, stack_id: &StackId) -> Result<(), LaunchError> {
+        let state = {
+            let entry = self.stacks.get(stack_id).ok_or_else(|| {
+                LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                }
+            })?;
+            entry.handle.state
+        };
+        if state != StackState::Down {
+            return Err(LaunchError::StackNotTerminal {
+                stack_id: stack_id.to_crockford(),
+                state: state.to_string(),
+            });
+        }
+        self.stacks.remove(stack_id);
+        Ok(())
+    }
 }
 
 impl LaunchRegistry {
@@ -1339,6 +1358,48 @@ mod tests {
             .expect("stack present");
         assert_eq!(after.state, StackState::Down);
         assert_eq!(after.services.get("db"), Some(&SubprocessState::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn forget_removes_terminal_stack_from_registry() {
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let reg = registry(fake.clone(), dir.path());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        reg.down(&handle.stack_id, &NeverCancel).await.expect("down");
+
+        reg.forget(&handle.stack_id).await.expect("forget a Down stack");
+
+        let after = reg.status(Some(&handle.stack_id)).await.expect("status");
+        assert!(after.is_empty(), "forgotten stack must not appear in status");
+    }
+
+    #[tokio::test]
+    async fn forget_rejects_non_terminal_stack() {
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let reg = registry(fake.clone(), dir.path());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+
+        let err = reg
+            .forget(&handle.stack_id)
+            .await
+            .expect_err("forget on a Running stack must be rejected");
+        assert!(matches!(err, LaunchError::StackNotTerminal { .. }), "got {err:?}");
+
+        let after = reg
+            .status(Some(&handle.stack_id))
+            .await
+            .expect("status")
+            .pop()
+            .expect("stack still present");
+        assert_eq!(after.state, StackState::Running, "stack must be untouched");
     }
 
     #[tokio::test]
