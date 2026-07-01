@@ -24,17 +24,53 @@ use substrate_domain::ports::subprocess::SubprocessPort;
 use substrate_domain::subprocess::handle::SubprocessHandle;
 use substrate_domain::subprocess::request::{CaptureKind, StdinKind, SubprocessRequest};
 use substrate_domain::subprocess::state::SubprocessState;
+use substrate_domain::subprocess::supervisor::HealthProbe;
 use substrate_domain::value_objects::pagination::PageSize;
 use substrate_domain::value_objects::{ClientId, JobId};
 
 /// Cadence at which [`wait_ready`] re-polls the subprocess port for a state change.
-const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(5);
-/// Upper bound on readiness polls before a Service is treated as failed (timeout).
 ///
-/// `200 * 5ms = 1s`. A real health-probe budget (ADR-0056) supersedes this in
-/// Milestone 2; the MVP uses a fixed ceiling so a hung Service cannot block
-/// bring-up indefinitely.
-const READINESS_MAX_POLLS: u32 = 200;
+/// 50ms balances bring-up responsiveness against the cost of polling `port.list()`
+/// across a potentially multi-minute readiness window (a 5ms cadence would issue
+/// tens of thousands of list calls while a Spring Boot service boots).
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Readiness budget for a Service with no real probe (`HealthProbe::None` or absent).
+///
+/// Such a Service is born `Running` and is treated as ready almost immediately, so
+/// this only bounds a pathological never-appears case.
+const NONE_READINESS_BUDGET: Duration = Duration::from_secs(10);
+
+/// Extra time granted, on top of `startup_grace_ms`, for a `PortOpen`/`HttpGet` probe
+/// to first succeed before the Service is failed as "never became ready".
+///
+/// Neither probe carries an overall give-up timeout of its own (only `interval_ms`
+/// cadence + `startup_grace_ms` delay), so the launch BC owns the ceiling here. It is
+/// deliberately generous to accommodate slow cold starts (JVM/Spring Boot, bundlers);
+/// this supersedes the fixed 1s MVP ceiling that made readiness gating a no-op.
+const PROBE_READINESS_BUDGET: Duration = Duration::from_mins(3);
+
+/// Computes the total readiness budget for one Service from its declared probe.
+///
+/// - `None`/absent: [`NONE_READINESS_BUDGET`] (ready is expected almost at once).
+/// - `PortOpen`/`HttpGet`: `startup_grace_ms` + [`PROBE_READINESS_BUDGET`].
+/// - `LogPattern`: its own `timeout_ms` plus a small poll margin.
+fn readiness_budget(probe: Option<&HealthProbe>) -> Duration {
+    match probe {
+        None | Some(HealthProbe::None) => NONE_READINESS_BUDGET,
+        Some(
+            HealthProbe::PortOpen {
+                startup_grace_ms, ..
+            }
+            | HealthProbe::HttpGet {
+                startup_grace_ms, ..
+            },
+        ) => Duration::from_millis(*startup_grace_ms) + PROBE_READINESS_BUDGET,
+        Some(HealthProbe::LogPattern { timeout_ms, .. }) => {
+            Duration::from_millis(*timeout_ms) + READINESS_POLL_INTERVAL * 4
+        },
+    }
+}
 
 /// The terminal readiness verdict for one Service after its bring-up poll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,14 +137,22 @@ pub(crate) fn build_request(
 /// The launch BC never calls `tokio::process::Command`; the subprocess adapter
 /// owns the OS `fork`/`exec` and all security layers.
 ///
+/// Before spawning, the Service binary is resolved to an absolute path (see
+/// [`resolve_binary`]) so a Profile may name a binary as a bare command
+/// (`"node"`, `"java"`) resolved via `$PATH`, or as a `cwd`-relative path
+/// (`"./gradlew"`), in addition to an absolute path. The subprocess adapter still
+/// canonicalizes and allowlist-checks the resolved path — the binary allowlist
+/// remains the security gate (ADR-0070).
+///
 /// # Errors
 ///
 /// Returns [`LaunchError::SpawnFailed`] wrapping the subprocess adapter's failure.
 pub(crate) async fn spawn_service(
     port: &dyn SubprocessPort,
-    request: SubprocessRequest,
+    mut request: SubprocessRequest,
     cancel: &dyn CancelSignal,
 ) -> Result<SubprocessHandle, LaunchError> {
+    request.binary_path = resolve_binary(request.binary_path.clone(), request.cwd.clone()).await;
     port.spawn(request, cancel)
         .await
         .map_err(|e| LaunchError::SpawnFailed {
@@ -116,12 +160,65 @@ pub(crate) async fn spawn_service(
         })
 }
 
+/// Resolves a Service binary to an absolute path, shell-style (ADR-0070).
+///
+/// - An absolute path is returned unchanged.
+/// - A path containing a separator (e.g. `./gradlew`, `bin/tool`) is resolved
+///   against the Service's own working directory (`cwd`), matching how a shell
+///   treats a relative command — NOT against `$PATH`.
+/// - A bare command name (no separator, e.g. `node`) is searched on `$PATH`,
+///   returning the first entry that is a regular, executable file.
+///
+/// On any miss the original value is returned unchanged so the subprocess adapter
+/// surfaces the canonical `BinaryNotAllowed` / spawn error. Resolution is only a
+/// convenience for producing a candidate path: the resolved path is still subject to
+/// the subprocess binary-allowlist canonicalization gate, which is unchanged.
+pub(crate) async fn resolve_binary(binary: PathBuf, cwd: PathBuf) -> PathBuf {
+    if binary.is_absolute() {
+        return binary;
+    }
+    // A relative path with any separator resolves against the Service cwd (shell
+    // semantics: `./x` / `a/b` are never searched on PATH).
+    if binary.components().count() > 1 {
+        return cwd.join(binary);
+    }
+    // Bare name: search $PATH on the blocking pool (filesystem metadata calls,
+    // async zone B per ADR-0003). Fall back to the bare name on any miss.
+    let fallback = binary.clone();
+    tokio::task::spawn_blocking(move || resolve_on_path(&binary).unwrap_or(binary))
+        .await
+        .unwrap_or(fallback)
+}
+
+/// Searches `$PATH` for `name`, returning the first executable regular-file match.
+fn resolve_on_path(name: &Path) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+/// Returns `true` when `path` is a regular file with any execute bit set.
+///
+/// Uses `std::os::unix::fs::PermissionsExt::mode()` (u32 on both Linux and macOS),
+/// avoiding the `nix` `Mode`/`mode_t` width divergence (u32 on Linux, u16 on macOS).
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111 != 0))
+}
+
 /// Polls the subprocess port until `job_id` reaches a readiness verdict.
 ///
 /// Returns [`ServiceOutcome::Ready`] on `Ready`/`Running` (or a zero-exit
-/// `Succeeded`), and [`ServiceOutcome::Failed`] on any failed terminal state or
-/// when the fixed poll budget is exhausted (the MVP readiness timeout). A fired
-/// `cancel` short-circuits to [`ServiceOutcome::Failed`].
+/// `Succeeded`), and [`ServiceOutcome::Failed`] on any failed terminal state or when
+/// the per-Service readiness budget is exhausted (the readiness timeout). A
+/// probe-gated Service is born `Starting` and only reaches `Ready` once its health
+/// probe passes, so this genuinely waits for the declared probe instead of treating
+/// a freshly spawned `Running` child as ready. The budget is derived from `probe`
+/// via [`readiness_budget`]. A fired `cancel` short-circuits to
+/// [`ServiceOutcome::Failed`].
 ///
 /// # Errors
 ///
@@ -132,18 +229,22 @@ pub(crate) async fn wait_ready(
     client_id: &ClientId,
     job_id: &JobId,
     cancel: &dyn CancelSignal,
+    probe: Option<&HealthProbe>,
 ) -> Result<ServiceOutcome, LaunchError> {
-    for _ in 0..READINESS_MAX_POLLS {
+    let deadline = tokio::time::Instant::now() + readiness_budget(probe);
+    loop {
         if cancel.is_cancelled() {
             return Ok(ServiceOutcome::Failed);
         }
         if let Some(outcome) = poll_once(port, client_id, job_id).await? {
             return Ok(outcome);
         }
+        if tokio::time::Instant::now() >= deadline {
+            // Budget exhausted: the Service never reached readiness (timeout).
+            return Ok(ServiceOutcome::Failed);
+        }
         tokio::time::sleep(READINESS_POLL_INTERVAL).await;
     }
-    // Budget exhausted: the Service never reached readiness (timeout).
-    Ok(ServiceOutcome::Failed)
 }
 
 /// Performs a single readiness poll, returning `None` while the Service is still
@@ -298,7 +399,100 @@ mod tests {
             classify_state(SubprocessState::Failed),
             Some(ServiceOutcome::Failed)
         );
+        // A probe-gated Service sits in Starting until its probe passes; the readiness
+        // poll must keep waiting (None), not treat it as ready.
         assert_eq!(classify_state(SubprocessState::Starting), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_binary_absolute_is_unchanged() {
+        // An absolute path bypasses PATH search and cwd-join entirely.
+        let out = resolve_binary(PathBuf::from("/bin/echo"), PathBuf::from("/work")).await;
+        assert_eq!(out, PathBuf::from("/bin/echo"));
+    }
+
+    #[tokio::test]
+    async fn resolve_binary_relative_joins_cwd() {
+        // A relative path with a separator resolves against the Service cwd, not PATH.
+        let out = resolve_binary(PathBuf::from("./gradlew"), PathBuf::from("/work")).await;
+        assert_eq!(out, PathBuf::from("/work").join("./gradlew"));
+
+        let nested = resolve_binary(PathBuf::from("bin/tool"), PathBuf::from("/srv/app")).await;
+        assert_eq!(nested, PathBuf::from("/srv/app").join("bin/tool"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn resolve_binary_bare_name_searches_path() {
+        // `sh` is guaranteed on PATH on any POSIX host; a bare name resolves to an
+        // absolute, executable path (never left as the bare "sh").
+        let out = resolve_binary(PathBuf::from("sh"), PathBuf::from("/nonexistent-cwd")).await;
+        assert!(out.is_absolute(), "bare name must resolve to an absolute path");
+        assert!(out.ends_with("sh"));
+        assert!(is_executable_file(&out));
+    }
+
+    #[tokio::test]
+    async fn resolve_binary_bare_name_miss_falls_back_unchanged() {
+        // A name not present on PATH falls back to the bare value so the subprocess
+        // adapter surfaces the canonical BinaryNotAllowed/spawn error.
+        let name = PathBuf::from("substrate-definitely-not-a-real-binary-xyz");
+        let out = resolve_binary(name.clone(), PathBuf::from("/work")).await;
+        assert_eq!(out, name);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn is_executable_file_requires_regular_file_and_exec_bit() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+
+        // A directory is never an executable file.
+        assert!(!is_executable_file(dir.path()));
+
+        // A regular file without an exec bit is rejected.
+        let plain = dir.path().join("plain");
+        std::fs::write(&plain, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!is_executable_file(&plain));
+
+        // The same file with an exec bit set is accepted.
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_executable_file(&plain));
+
+        // A missing path is not executable.
+        assert!(!is_executable_file(&dir.path().join("missing")));
+    }
+
+    #[test]
+    fn readiness_budget_scales_with_probe() {
+        // No probe: the small fixed budget (child is born Running, ready at once).
+        assert_eq!(readiness_budget(None), NONE_READINESS_BUDGET);
+        assert_eq!(
+            readiness_budget(Some(&HealthProbe::None)),
+            NONE_READINESS_BUDGET
+        );
+
+        // PortOpen/HttpGet: startup_grace_ms + the generous probe ceiling, always far
+        // larger than the None budget (this is what defeats the old 1s no-op ceiling).
+        let port = HealthProbe::PortOpen {
+            host: "127.0.0.1".to_owned(),
+            port: 8080,
+            interval_ms: 500,
+            startup_grace_ms: 2_000,
+        };
+        assert_eq!(
+            readiness_budget(Some(&port)),
+            Duration::from_secs(2) + PROBE_READINESS_BUDGET
+        );
+        assert!(readiness_budget(Some(&port)) > NONE_READINESS_BUDGET);
+
+        // LogPattern: its own timeout drives the budget.
+        let log = HealthProbe::LogPattern {
+            regex: "ready".to_owned(),
+            timeout_ms: 5_000,
+        };
+        assert!(readiness_budget(Some(&log)) >= Duration::from_secs(5));
     }
 
     #[test]

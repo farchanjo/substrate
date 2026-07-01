@@ -303,9 +303,14 @@ impl DetachedSupervisor {
             let mut request = build_request(&name, &service, &self.default_cwd)?;
             request.parent_death_signal = Some(PARENT_DEATH_SIGKILL);
             let handle = spawn_service(self.subprocess.as_ref(), request, &cancel).await?;
-            let outcome =
-                wait_ready(self.subprocess.as_ref(), &self.client_id, &handle.job_id, &cancel)
-                    .await?;
+            let outcome = wait_ready(
+                self.subprocess.as_ref(),
+                &self.client_id,
+                &handle.job_id,
+                &cancel,
+                service.health_probe.as_ref(),
+            )
+            .await?;
             self.record_child(name, &handle, outcome).await;
         }
         Ok(())
@@ -508,9 +513,14 @@ impl DetachedSupervisor {
             let mut request = build_request(&name, service, &self.default_cwd)?;
             request.parent_death_signal = Some(PARENT_DEATH_SIGKILL);
             let handle = spawn_service(self.subprocess.as_ref(), request, &cancel).await?;
-            let outcome =
-                wait_ready(self.subprocess.as_ref(), &self.client_id, &handle.job_id, &cancel)
-                    .await?;
+            let outcome = wait_ready(
+                self.subprocess.as_ref(),
+                &self.client_id,
+                &handle.job_id,
+                &cancel,
+                service.health_probe.as_ref(),
+            )
+            .await?;
             self.record_child(name, &handle, outcome).await;
         }
         Ok(())

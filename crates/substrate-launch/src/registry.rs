@@ -263,7 +263,14 @@ impl LaunchRegistry {
         );
         let handle = spawn_service(self.subprocess.as_ref(), request, cancel).await?;
         entry.job_ids.insert(name.to_owned(), handle.job_id.clone());
-        let outcome = wait_ready(self.subprocess.as_ref(), client_id, &handle.job_id, cancel).await?;
+        let outcome = wait_ready(
+            self.subprocess.as_ref(),
+            client_id,
+            &handle.job_id,
+            cancel,
+            service.health_probe.as_ref(),
+        )
+        .await?;
         entry.set_service(name, outcome_state(outcome));
         match outcome {
             ServiceOutcome::Ready => entry.emit(
@@ -271,11 +278,16 @@ impl LaunchRegistry {
                 Some(name),
                 format!("service '{name}' is ready"),
             ),
-            ServiceOutcome::Failed => entry.emit(
-                LaunchEventKind::Crashed,
-                Some(name),
-                format!("service '{name}' failed readiness"),
-            ),
+            ServiceOutcome::Failed => {
+                // Never became ready within its probe budget (or crashed): stop the
+                // child so a service stuck in Starting is not left running/leaked.
+                stop_service(self.subprocess.as_ref(), &handle.job_id).await;
+                entry.emit(
+                    LaunchEventKind::Crashed,
+                    Some(name),
+                    format!("service '{name}' failed readiness"),
+                );
+            },
         }
         Ok(outcome)
     }
@@ -300,8 +312,14 @@ impl LaunchRegistry {
             };
             let request = build_request(&name, service, &self.state_root)?;
             let handle = spawn_service(self.subprocess.as_ref(), request, cancel).await?;
-            let outcome =
-                wait_ready(self.subprocess.as_ref(), client_id, &handle.job_id, cancel).await?;
+            let outcome = wait_ready(
+                self.subprocess.as_ref(),
+                client_id,
+                &handle.job_id,
+                cancel,
+                service.health_probe.as_ref(),
+            )
+            .await?;
             spawned.push((name, handle.job_id, outcome));
         }
         Ok(spawned)
@@ -655,8 +673,14 @@ impl LaunchPort for LaunchRegistry {
         // subprocess crash-loop budget, which governs restart_policy auto-respawns only.
         let request = build_request(service_name, &service, &self.state_root)?;
         let handle = spawn_service(self.subprocess.as_ref(), request, cancel).await?;
-        let outcome =
-            wait_ready(self.subprocess.as_ref(), &client_id, &handle.job_id, cancel).await?;
+        let outcome = wait_ready(
+            self.subprocess.as_ref(),
+            &client_id,
+            &handle.job_id,
+            cancel,
+            service.health_probe.as_ref(),
+        )
+        .await?;
 
         let mut entry = self.stacks.get_mut(stack_id).ok_or_else(|| {
             LaunchError::SupervisorUnreachable {
@@ -1246,6 +1270,48 @@ mod tests {
         }
         // api must not be spawned once its required dependency db failed.
         assert!(!fake.spawns().contains(&"api".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn probe_gated_service_waits_its_budget_then_fails_and_stops() {
+        // Regression guard for the readiness-gating bug: a service whose subprocess
+        // never leaves `Starting` (its health probe never passes) must NOT be reported
+        // Ready. It must wait roughly its per-probe budget, then fail readiness and be
+        // stopped — not resolve Ready in microseconds off a freshly spawned child.
+        //
+        // A LogPattern probe with the minimum timeout_ms (1000) keeps the launch
+        // readiness budget near ~1s so the test stays fast while still exercising the
+        // real budget path (not the old fixed 1s no-op ceiling).
+        let body = "version = 1\n\n[services.web]\ncommand = [\"web\"]\n\n\
+                    [services.web.health_probe]\nkind = \"LogPattern\"\n\
+                    regex = \"ready\"\ntimeout_ms = 1000\n";
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        // The subprocess stays Starting forever — the probe never confirms readiness.
+        fake.script("web", SubprocessState::Starting);
+        let reg = registry(fake.clone(), dir.path());
+        let profile = write_profile(dir.path(), body).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let started = std::time::Instant::now();
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up completes (single required service degrades, not errors)");
+        let elapsed = started.elapsed();
+
+        // It genuinely waited the probe budget rather than instantly marking Ready.
+        assert!(
+            elapsed >= std::time::Duration::from_secs(1),
+            "readiness must gate on the probe budget; waited only {elapsed:?}"
+        );
+        assert_eq!(handle.state, StackState::Degraded);
+        assert_eq!(handle.services.get("web"), Some(&SubprocessState::Failed));
+        // The service that never became ready was stopped, not left running.
+        assert!(
+            !fake.cancels().is_empty(),
+            "a service that fails readiness must be stopped"
+        );
     }
 
     #[tokio::test]
