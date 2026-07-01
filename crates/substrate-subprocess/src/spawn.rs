@@ -11,13 +11,14 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use substrate_domain::subprocess::request::CaptureKind;
 use substrate_domain::subprocess::state::SubprocessState;
+use substrate_domain::subprocess::supervisor::HealthProbe;
 use substrate_domain::subprocess::{StdinKind, SubprocessError, SubprocessRequest};
 use substrate_domain::value_objects::{JobId, ProcessGroup};
 
@@ -74,6 +75,50 @@ pub(crate) const fn u8_to_state(v: u8) -> SubprocessState {
     }
 }
 
+/// The lifecycle state a freshly spawned child is born in.
+///
+/// A child born [`SubprocessState::Starting`] is live but not yet confirmed ready, so
+/// a readiness consumer (the launch BC) keeps waiting until it is promoted to `Ready`.
+/// This is used ONLY for probes that have an active promoter — the poll-driven
+/// `PortOpen` / `HttpGet` supervisor. Every other child is born
+/// [`SubprocessState::Running`] (immediately treated as ready), which preserves the
+/// ADR-0052 one-shot semantics and, critically, keeps a `LogPattern`-gated child
+/// working: `LogPattern` has no promoter yet (its stream-observer wiring is deferred
+/// per the ADR-0056 amendment), so birthing it `Starting` would strand it until the
+/// readiness deadline. Until `LogPattern` is wired it is treated as ready-when-running,
+/// matching pre-readiness-gating behavior.
+#[inline]
+pub(crate) const fn initial_state(probe: Option<&HealthProbe>) -> SubprocessState {
+    match probe {
+        // Only the poll-driven probes have a supervisor that promotes Starting -> Ready.
+        Some(HealthProbe::PortOpen { .. } | HealthProbe::HttpGet { .. }) => {
+            SubprocessState::Starting
+        },
+        Some(HealthProbe::None | HealthProbe::LogPattern { .. }) | None => {
+            SubprocessState::Running
+        },
+    }
+}
+
+/// Atomically promotes a child from `Starting` to `Ready`, returning `true` on success.
+///
+/// This is a single compare-and-swap that succeeds ONLY when the current state is
+/// still `Starting`. It is the race-safe seam used by the health-probe supervisor to
+/// record a passing probe: if the child exited (terminal state) or was cancelled
+/// between the probe poll and this store, the CAS fails and the probe's `Ready` write
+/// is discarded — so a late `Ready` can never resurrect an already-dead job (the
+/// lost-update hazard flagged in the ADR-0056 wiring review).
+pub(crate) fn promote_starting_to_ready(state: &AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            state_to_u8(SubprocessState::Starting),
+            state_to_u8(SubprocessState::Ready),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
 use crate::tmp_file::TmpFileWriter;
 use crate::watchdog::WatchdogPipe;
 
@@ -124,9 +169,11 @@ pub struct ChildHandle {
 
     /// Live lifecycle state stored atomically for lock-free reads by `snapshot_handle`.
     ///
-    /// Initialized to `Running` at spawn time. Updated by the dispatcher task
-    /// (after `wait_exit` resolves) and by the cancel path (after cascade kill).
-    /// Reads use `Ordering::SeqCst` to guarantee visibility across tasks.
+    /// Initialized at spawn time via [`initial_state`]: `Starting` for a probe-gated
+    /// child, `Running` otherwise. Promoted to `Ready` by the health-probe supervisor
+    /// (via [`promote_starting_to_ready`]), and updated to a terminal state by the
+    /// dispatcher task (after `wait_exit` resolves) or the cancel path (after cascade
+    /// kill). Reads use `Ordering::SeqCst` to guarantee visibility across tasks.
     ///
     /// Encoding: see `state_to_u8` / `u8_to_state` in this module.
     pub state: Arc<AtomicU8>,
@@ -301,6 +348,12 @@ impl RingBuffer {
     reason = "substrate-subprocess is the single authorized host of tokio::process::Command::new \
               per ADR-0052."
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "spawn orchestration (validate, build command, stdio, watchdog, pre-exec, spawn, \
+              tmp-file wiring) is a single cohesive sequence; splitting it would scatter the \
+              security-critical ordering across helpers."
+)]
 pub async fn spawn_supervised(
     req: &SubprocessRequest,
     resolved_binary: &std::path::Path,
@@ -398,6 +451,9 @@ pub async fn spawn_supervised(
 
     let job_id = JobId::now_v7();
 
+    // Probe-gated child born Starting (not yet ready); others born Running.
+    let born_state = initial_state(req.health_probe.as_ref());
+
     // Step 9: TmpFile writers (only when capture_kind == TmpFile).
     //
     // For Stream and InMemory: no file I/O, writers stay None.
@@ -445,7 +501,7 @@ pub async fn spawn_supervised(
         cancel,
         tmp_files: Mutex::new(tmp_files_vec),
         watchdog,
-        state: Arc::new(AtomicU8::new(state_to_u8(SubprocessState::Running))),
+        state: Arc::new(AtomicU8::new(state_to_u8(born_state))),
         child: Mutex::new(Some(child)),
         stdout_ring: Arc::new(Mutex::new(RingBuffer::new(aggregate_buffer_bytes))),
         stderr_ring: Arc::new(Mutex::new(RingBuffer::new(aggregate_buffer_bytes))),
@@ -534,4 +590,77 @@ async fn open_jailed_stdin(
     .map_err(|e| SubprocessError::SpawnFailed {
         source: std::io::Error::other(format!("failed to open stdin file path '{display}': {e}")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_state_starting_only_for_polled_probe() {
+        // A poll-driven probe (PortOpen/HttpGet) has a promoter -> born Starting.
+        let port = HealthProbe::PortOpen {
+            host: "127.0.0.1".to_owned(),
+            port: 8080,
+            interval_ms: 500,
+            startup_grace_ms: 0,
+        };
+        assert_eq!(initial_state(Some(&port)), SubprocessState::Starting);
+        let http = HealthProbe::HttpGet {
+            url: "http://127.0.0.1/health".to_owned(),
+            expected_status: 200,
+            interval_ms: 500,
+            startup_grace_ms: 0,
+        };
+        assert_eq!(initial_state(Some(&http)), SubprocessState::Starting);
+
+        // LogPattern has no promoter yet -> born Running (ready-when-running) so it is
+        // not stranded in Starting until the readiness deadline.
+        let log = HealthProbe::LogPattern {
+            regex: "ready".to_owned(),
+            timeout_ms: 5_000,
+        };
+        assert_eq!(initial_state(Some(&log)), SubprocessState::Running);
+
+        // No probe (absent or explicit None) -> born Running (immediately ready).
+        assert_eq!(initial_state(None), SubprocessState::Running);
+        assert_eq!(
+            initial_state(Some(&HealthProbe::None)),
+            SubprocessState::Running
+        );
+    }
+
+    #[test]
+    fn promote_starting_to_ready_only_from_starting() {
+        // From Starting: promotion succeeds and lands on Ready.
+        let s = AtomicU8::new(state_to_u8(SubprocessState::Starting));
+        assert!(promote_starting_to_ready(&s));
+        assert_eq!(u8_to_state(s.load(Ordering::SeqCst)), SubprocessState::Ready);
+
+        // A second promotion is a no-op (state is no longer Starting).
+        assert!(!promote_starting_to_ready(&s));
+        assert_eq!(u8_to_state(s.load(Ordering::SeqCst)), SubprocessState::Ready);
+    }
+
+    #[test]
+    fn promote_refused_from_running_or_terminal() {
+        // From Running: the probe is not the born-Starting owner -> refused.
+        let running = AtomicU8::new(state_to_u8(SubprocessState::Running));
+        assert!(!promote_starting_to_ready(&running));
+        assert_eq!(
+            u8_to_state(running.load(Ordering::SeqCst)),
+            SubprocessState::Running
+        );
+
+        // From a terminal state: a late probe Ready must NOT resurrect a dead job.
+        for terminal in [
+            SubprocessState::Failed,
+            SubprocessState::Killed,
+            SubprocessState::Cancelled,
+        ] {
+            let s = AtomicU8::new(state_to_u8(terminal));
+            assert!(!promote_starting_to_ready(&s));
+            assert_eq!(u8_to_state(s.load(Ordering::SeqCst)), terminal);
+        }
+    }
 }

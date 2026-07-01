@@ -39,14 +39,15 @@ use substrate_domain::subprocess::handle::SubprocessHandle;
 use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
 use substrate_domain::subprocess::request::{CaptureKind, SubprocessRequest};
 use substrate_domain::subprocess::state::SubprocessState;
-use substrate_domain::subprocess::supervisor::RestartPolicy;
+use substrate_domain::subprocess::supervisor::{HealthProbe, RestartPolicy};
 use substrate_domain::value_objects::pagination::PageSize;
 use substrate_domain::value_objects::{ClientId, JobId, ProcessGroup};
 
 use substrate_policy::Allowlist;
 
 use crate::cascade::terminate_cascade;
-use crate::spawn::{ChildHandle, spawn_supervised};
+use crate::health_probe::{ProbeOutcome, run_probe};
+use crate::spawn::{ChildHandle, promote_starting_to_ready, spawn_supervised};
 use crate::stream_capture::{make_stream_channel, spawn_stream_captures};
 
 /// Default per-job stdout/stderr ring-buffer size per ADR-0054.
@@ -588,6 +589,111 @@ async fn emit_state_change(
     }
 }
 
+/// Upper bound on how long the health-probe supervisor keeps polling a `Starting`
+/// child before giving up.
+///
+/// This is a backstop for a direct `subprocess.spawn` caller that supplies a probe
+/// but has no outer readiness deadline. The launch BC applies its own, usually
+/// shorter, per-Service readiness budget and cancels the job on timeout, which stops
+/// this task early through the child's cancellation token.
+const PROBE_STARTUP_MAX: Duration = Duration::from_mins(5);
+
+/// Returns `true` for probes driven by the [`run_startup_probe`] poll loop.
+///
+/// Only `PortOpen`/`HttpGet` are poll-driven. `None` needs no probe (the child is
+/// born `Running`); `LogPattern` is stream-observer-driven and not wired to this loop.
+const fn probe_is_polled(probe: &HealthProbe) -> bool {
+    matches!(
+        probe,
+        HealthProbe::PortOpen { .. } | HealthProbe::HttpGet { .. }
+    )
+}
+
+/// Extracts `(startup_grace_ms, interval_ms)` from a polled probe.
+const fn probe_timing(probe: &HealthProbe) -> (u64, u64) {
+    match probe {
+        HealthProbe::PortOpen {
+            startup_grace_ms,
+            interval_ms,
+            ..
+        }
+        | HealthProbe::HttpGet {
+            startup_grace_ms,
+            interval_ms,
+            ..
+        } => (*startup_grace_ms, *interval_ms),
+        HealthProbe::None | HealthProbe::LogPattern { .. } => (0, 1_000),
+    }
+}
+
+/// Health-probe supervisor task per ADR-0056.
+///
+/// Holds a probe-gated child in `Starting` (its born state) until the probe passes,
+/// then promotes it to `Ready` via the race-safe [`promote_starting_to_ready`] CAS.
+/// Polls [`run_probe`] every `interval_ms` after an initial `startup_grace_ms` delay,
+/// and exits on the first success, on cancellation, when the child leaves `Starting`
+/// (natural exit / cascade kill won the state), or when the startup backstop elapses.
+///
+/// Probe failures during startup are non-fatal: the loop keeps retrying so a
+/// slow-booting service (Spring Boot, Vite) still reaches `Ready` once its port/URL
+/// comes up. The outer readiness deadline (launch BC) bounds the total wait and
+/// cancels the job if it never becomes ready.
+async fn run_startup_probe(
+    probe: HealthProbe,
+    state: Arc<std::sync::atomic::AtomicU8>,
+    cancel: CancellationToken,
+    observers: Arc<Vec<Arc<dyn StateTransitionObserver>>>,
+    job_id: JobId,
+) {
+    let (grace_ms, interval_ms) = probe_timing(&probe);
+
+    // Initial startup grace — the probe does not fire while the service is still
+    // expected to be booting.
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => return,
+        () = tokio::time::sleep(Duration::from_millis(grace_ms)) => {},
+    }
+
+    let deadline = tokio::time::Instant::now() + PROBE_STARTUP_MAX;
+    loop {
+        // Stop if the child already left `Starting` — it exited, was cancelled, or was
+        // already promoted; the terminal/cancel writer owns the state from here.
+        if crate::spawn::u8_to_state(state.load(Ordering::SeqCst)) != SubprocessState::Starting {
+            return;
+        }
+        match run_probe(&probe, &cancel).await {
+            ProbeOutcome::Ready => {
+                // CAS Starting -> Ready; if it fails the child already went terminal
+                // and the probe's readiness verdict is correctly discarded.
+                if promote_starting_to_ready(&state) {
+                    emit_state_change(
+                        &observers,
+                        &job_id,
+                        SubprocessState::Starting,
+                        SubprocessState::Ready,
+                    )
+                    .await;
+                }
+                return;
+            },
+            // Cancelled: job torn down. Skipped: None/LogPattern never reach a polled
+            // probe — stop defensively. Both end the supervisor.
+            ProbeOutcome::Cancelled | ProbeOutcome::Skipped => return,
+            ProbeOutcome::FailedTransient | ProbeOutcome::FailedTerminal => {
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return,
+                    () = tokio::time::sleep(Duration::from_millis(interval_ms)) => {},
+                }
+            },
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "SubprocessPort impl requires all port methods in one block per the hexagonal               layering constraint; extracted helpers would cross the impl boundary"
@@ -768,6 +874,12 @@ impl SubprocessPort for SubprocessRegistry {
             let terminal_state =
                 Self::terminal_state_from_exit(&handle_for_dispatcher.wait_exit().await);
 
+            // Capture the pre-terminal state BEFORE the store so the control-plane
+            // event reports the real transition (a probe-gated child that reached
+            // Ready emits Ready -> terminal, not the old hardcoded Running -> terminal).
+            let prev_state =
+                crate::spawn::u8_to_state(handle_for_dispatcher.state.load(Ordering::SeqCst));
+
             // Persist the terminal state atomically so snapshot_handle / result()
             // observe the real state instead of the hardcoded Running fallback.
             // Skip the write when the handle is supervised — the watcher writes
@@ -786,13 +898,13 @@ impl SubprocessPort for SubprocessRegistry {
                     .await;
             }
 
-            // Emit state transition to state observers (ADR-0056 control plane).
-            // TODO ADR-0056 health probe wiring: emit Running → Ready here once probe
-            // confirms Ready, rather than treating Running as implicitly Ready.
+            // Emit state transition to state observers (ADR-0056 control plane). The
+            // Starting -> Ready promotion itself is emitted by run_startup_probe; here
+            // we emit the child's exit from whatever state it last held.
             emit_state_change(
                 &state_observers_for_dispatcher,
                 &job_id_for_dispatcher,
-                SubprocessState::Running,
+                prev_state,
                 terminal_state,
             )
             .await;
@@ -811,6 +923,27 @@ impl SubprocessPort for SubprocessRegistry {
         // Register named handle mapping if `req.name` is set (ADR-0056 §idempotent spawn).
         if let Some(ref name) = req.name {
             self.named_handles.insert(name.clone(), job_id.clone());
+        }
+
+        // Step 3b — Health-probe supervisor task per ADR-0056.
+        //
+        // Spawned for any polled probe (`PortOpen`/`HttpGet`); it holds the child in
+        // `Starting` (its born state, see spawn::initial_state) and promotes it to
+        // `Ready` on the first successful probe. This is what makes the launch BC's
+        // readiness gate real instead of "spawned == ready". `HealthProbe::None` and
+        // `LogPattern` do not use this poll loop (None is born Running; LogPattern is
+        // stream-observer-driven and not yet wired — see ADR-0056 amendment).
+        if let Some(probe) = req.health_probe.clone()
+            && probe_is_polled(&probe)
+        {
+            let probe_state = Arc::clone(&handle.state);
+            let probe_cancel = handle.cancel.clone();
+            let probe_observers = Arc::clone(&self.state_observers);
+            let probe_job_id = job_id.clone();
+            tokio::spawn(async move {
+                run_startup_probe(probe, probe_state, probe_cancel, probe_observers, probe_job_id)
+                    .await;
+            });
         }
 
         // Step 4 — Supervisor watcher task per ADR-0056.
@@ -1970,6 +2103,144 @@ mod tests {
             "snapshot_handle must return Succeeded after /bin/sh -c 'exit 0' exits; got {:?}",
             snapshot.state
         );
+    }
+
+    /// Builds a registry allowlisting `/bin/sh` rooted at the canonical temp dir,
+    /// plus a matching cwd, for the probe-gating integration tests.
+    fn probe_test_registry() -> (Arc<SubprocessRegistry>, std::path::PathBuf) {
+        use tokio_util::sync::CancellationToken;
+        let sh = std::path::PathBuf::from("/bin/sh");
+        assert!(sh.exists(), "/bin/sh must exist on this platform");
+        let tmp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).expect("temp_dir must be canonicalisable");
+        let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
+            .expect("temp_dir must be a valid allowlist root");
+        let registry = SubprocessRegistry::new(
+            BinaryAllowlist::new(vec![sh]),
+            Vec::new(),
+            4,
+            8,
+            DEFAULT_AGGREGATE_BUFFER_BYTES,
+            5,
+            path_allowlist,
+            CancellationToken::new(),
+        );
+        (registry, tmp_dir)
+    }
+
+    /// A long-lived `/bin/sh -c 'sleep 5'` request carrying `probe`.
+    fn sleeper_with_probe(cwd: std::path::PathBuf, probe: HealthProbe) -> SubprocessRequest {
+        SubprocessRequest {
+            binary_path: std::path::PathBuf::from("/bin/sh"),
+            args: vec!["-c".to_owned(), "sleep 5".to_owned()],
+            cwd,
+            env_allowlist: Vec::new(),
+            env_override: std::collections::BTreeMap::new(),
+            stdin_kind: substrate_domain::subprocess::StdinKind::None,
+            capture_kind: CaptureKind::InMemory,
+            timeout_secs: None,
+            idempotency_key: None,
+            elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: Some(probe),
+            log_rotation: None,
+            parent_death_signal: None,
+        }
+    }
+
+    fn live_state(registry: &SubprocessRegistry, job_id: &JobId) -> SubprocessState {
+        let guard = registry.handles.get(job_id).expect("handle exists");
+        crate::spawn::u8_to_state(guard.value().state.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn probe_gated_child_is_born_starting_and_not_ready() {
+        // Regression guard: a child gated by a real health probe must be born
+        // `Starting` (live, not yet confirmed ready) — never treated as ready the
+        // instant it spawns. A PortOpen probe against a port nothing listens on never
+        // passes (FailedTransient, with or without outbound-net), so the child stays
+        // `Starting` until it is cancelled — proving readiness is genuinely gated.
+        use substrate_domain::ports::subprocess::SubprocessPort as _;
+        let (registry, cwd) = probe_test_registry();
+        let probe = HealthProbe::PortOpen {
+            host: "127.0.0.1".to_owned(),
+            // Port 1 is privileged and never bound by a test — connect always refused.
+            port: 1,
+            interval_ms: 100,
+            startup_grace_ms: 0,
+        };
+        let snap = registry
+            .spawn(sleeper_with_probe(cwd, probe), &NoCancel)
+            .await
+            .expect("spawn succeeds");
+        assert_eq!(
+            snap.state,
+            SubprocessState::Starting,
+            "a probe-gated child must be born Starting, not Ready"
+        );
+
+        // Let the probe poll a few times; it must NOT spuriously promote to Ready.
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        assert_eq!(
+            live_state(&registry, &snap.job_id),
+            SubprocessState::Starting,
+            "a child whose probe never passes must remain Starting, never Ready"
+        );
+
+        let _ = registry.cancel(&snap.job_id, true).await;
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "outbound-net")]
+    async fn probe_gated_child_promotes_to_ready_when_port_opens() {
+        // End-to-end proof that a passing PortOpen probe drives Starting -> Ready:
+        // bind a real listener, point the probe at it, and observe the registry state
+        // transition to Ready (needs outbound-net so the probe actually connects).
+        use substrate_domain::ports::subprocess::SubprocessPort as _;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let port = listener.local_addr().expect("local_addr").port();
+        // Keep accepting so the probe's connect completes cleanly.
+        tokio::spawn(async move {
+            loop {
+                if listener.accept().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let (registry, cwd) = probe_test_registry();
+        let probe = HealthProbe::PortOpen {
+            host: "127.0.0.1".to_owned(),
+            port,
+            interval_ms: 200,
+            startup_grace_ms: 0,
+        };
+        let snap = registry
+            .spawn(sleeper_with_probe(cwd, probe), &NoCancel)
+            .await
+            .expect("spawn succeeds");
+        assert_eq!(snap.state, SubprocessState::Starting, "born Starting");
+
+        // Poll the registry until the probe promotes the child to Ready (bounded).
+        let mut promoted = false;
+        for _ in 0..50 {
+            if live_state(&registry, &snap.job_id) == SubprocessState::Ready {
+                promoted = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            promoted,
+            "a passing PortOpen probe must promote the child Starting -> Ready"
+        );
+
+        let _ = registry.cancel(&snap.job_id, true).await;
     }
 
     // ---- paginate_lines unit tests (ADR-0057) --------------------------------
