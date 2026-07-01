@@ -311,7 +311,6 @@ pub(crate) async fn handle_launch_up(
     );
     let mut structured = serde_json::to_value(&handle).unwrap_or(Value::Null);
     if let Value::Object(ref mut map) = structured {
-        map.insert("stack_id".to_owned(), Value::String(stack_id.clone()));
         map.insert(
             "stack_state".to_owned(),
             Value::String(handle.state.to_string()),
@@ -449,7 +448,6 @@ pub(crate) async fn handle_launch_restart(
     );
     let mut structured = serde_json::to_value(&handle).unwrap_or(Value::Null);
     if let Value::Object(ref mut map) = structured {
-        map.insert("stack_id".to_owned(), Value::String(id.clone()));
         map.insert(
             "stack_state".to_owned(),
             Value::String(handle.state.to_string()),

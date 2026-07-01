@@ -7,7 +7,6 @@
 //!
 //! References: ADR-0063 (launch orchestration BC), ADR-0040 (`UUIDv7` identity).
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::errors::{SubstrateError, SubstrateResult};
@@ -19,8 +18,14 @@ use crate::value_objects::job_id::JobId;
 /// wire representation matches the `#Stack.stack_id` CUE pattern. The launch BC
 /// uses a distinct newtype to keep stack identity separate from job identity.
 ///
+/// Serialization: Crockford base32 string (26 uppercase chars), matching
+/// [`JobId`]'s `Serialize` impl -- a `#[derive(Serialize)]` on this newtype
+/// would silently delegate to the inner [`Uuid`]'s own serde impl (standard
+/// hyphenated form), diverging from this type's own [`std::fmt::Display`] and
+/// from `#Stack.stack_id`'s documented wire contract.
+///
 /// See ADR-0063 §"`#Stack`".
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StackId(Uuid);
 
 impl StackId {
@@ -88,6 +93,25 @@ impl std::str::FromStr for StackId {
                 reason: format!("invalid stack_id format: {e}"),
                 correlation_id: None,
             })
+    }
+}
+
+impl serde::Serialize for StackId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_crockford())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for StackId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+        s.parse::<Self>().map_err(serde::de::Error::custom)
     }
 }
 

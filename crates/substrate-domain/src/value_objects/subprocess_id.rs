@@ -6,7 +6,6 @@
 //!
 //! References: ADR-0052 (subprocess BC), ADR-0040 (job control-plane identity).
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::errors::SubstrateResult;
@@ -19,8 +18,13 @@ use crate::value_objects::job_id::JobId;
 /// assigned to the corresponding `JobEntry`, enabling correlation across the
 /// job control-plane, MCP `progressToken`, and subprocess-specific audit events.
 ///
+/// Serialization: Crockford base32 string (26 uppercase chars), matching
+/// [`JobId`]'s `Serialize` impl -- a `#[derive(Serialize)]` on this newtype
+/// would silently delegate to the inner [`Uuid`]'s own serde impl (standard
+/// hyphenated form), diverging from this type's own [`std::fmt::Display`].
+///
 /// See ADR-0052 §"`SubprocessHandle`" and ADR-0040 §"triple-equality invariant".
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SubprocessId(Uuid);
 
 impl SubprocessId {
@@ -91,6 +95,25 @@ impl std::str::FromStr for SubprocessId {
                 correlation_id: None,
             }
         })
+    }
+}
+
+impl serde::Serialize for SubprocessId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_crockford())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SubprocessId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+        s.parse::<Self>().map_err(serde::de::Error::custom)
     }
 }
 
