@@ -21,12 +21,18 @@ fast-zlib = []
 fast-deflate = []
 fs-index = ["substrate-fs-index/fs-index", "substrate-fs-mutation/fs-index"]
 fs-index-watch = ["fs-index", "substrate-fs-index/fs-index-watch"]
-outbound-net = ["tokio/net"]
+# outbound-net enables tokio/net locally AND forwards to the subprocess crate's own
+# `outbound-net` (only when that optional dep is active) so PortOpen/HttpGet health
+# probes compile to their live implementation instead of the FailedTransient stub.
+outbound-net = ["tokio/net", "substrate-subprocess?/outbound-net"]
 subprocess = ["dep:substrate-subprocess"]
 # launch orchestration BC (ADR-0063..0069). Off by default. Implies `subprocess`
 # because the LaunchRegistry orchestrates every managed Service through the
-# injected `Arc<dyn SubprocessPort>` wired by the composition root.
-launch = ["dep:substrate-launch", "subprocess"]
+# injected `Arc<dyn SubprocessPort>` wired by the composition root. It also implies
+# `substrate-subprocess/outbound-net`: launch readiness gating is driven by PortOpen/
+# HttpGet health probes, which are inert (FailedTransient) without that feature, so a
+# launch build must enable it for readiness to work at all (ADR-0003/ADR-0065 amend).
+launch = ["dep:substrate-launch", "subprocess", "substrate-subprocess/outbound-net"]
 
 [dependencies]
 substrate-domain = { path = "../substrate-domain" }
