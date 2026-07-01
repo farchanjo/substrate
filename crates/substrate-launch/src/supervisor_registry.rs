@@ -17,7 +17,10 @@
 //!   that would mask a hostile pre-created directory.
 //! - Every ancestor of `${XDG_STATE_HOME:-~/.local/state}/substrate` is checked
 //!   for the world-write bit (`S_IWOTH`); a world-writable ancestor (for example
-//!   a relocated `XDG_STATE_HOME`) is rejected.
+//!   a relocated `XDG_STATE_HOME`) is rejected — unless it also has the sticky
+//!   bit (`S_ISVTX`) set, the standard POSIX convention (e.g. `/tmp` at `1777`)
+//!   that prevents one user from renaming or deleting another user's entries
+//!   in a shared world-writable directory.
 //!
 //! All directory security checks run inside [`tokio::task::spawn_blocking`]
 //! (async zone B per ADR-0003): `mkdir`, `fstat`, and `geteuid` are blocking
@@ -45,6 +48,15 @@ const SECURE_FILE_MODE: u32 = 0o600;
 const GROUP_OTHER_MASK: u32 = 0o077;
 /// Mask isolating the world-write (`S_IWOTH`) bit from `st_mode`.
 const WORLD_WRITABLE_BIT: u32 = 0o002;
+/// Mask isolating the sticky bit (`S_ISVTX`) from `st_mode`.
+///
+/// A world-writable directory with the sticky bit set (e.g. `/tmp` at `1777`)
+/// is the standard POSIX-safe shared-tmp pattern: the kernel restricts rename
+/// and unlink of an entry to its owner (or the directory owner / root), so
+/// other users cannot tamper with entries they do not own even though they
+/// can create their own. This is the same exception `sshd`, `sudo`, and other
+/// hardened daemons apply when validating ancestor directory permissions.
+const STICKY_BIT: u32 = 0o1000;
 
 /// Initializes (creating if absent) and security-checks the durable registry
 /// directory for `stack_id`, returning `stacks/<stack_id>/` under the resolved
@@ -151,14 +163,17 @@ fn open_stack_registry_at(state_root: &Path, stack_id: &StackId) -> Result<PathB
 }
 
 /// Rejects `path` if any existing ancestor (inclusive of `path` itself) has the
-/// world-write bit (`S_IWOTH`) set. Non-existent ancestors are skipped: they
-/// carry no permission bits to check and will be created securely below.
+/// world-write bit (`S_IWOTH`) set without the sticky bit (`S_ISVTX`). A
+/// world-writable-but-sticky ancestor (e.g. `/tmp` at `1777`) is accepted —
+/// see [`STICKY_BIT`]. Non-existent ancestors are skipped: they carry no
+/// permission bits to check and will be created securely below.
 fn reject_world_writable_ancestor(path: &Path) -> Result<(), LaunchError> {
     for ancestor in path.ancestors() {
         let Ok(meta) = std::fs::metadata(ancestor) else {
             continue;
         };
-        if meta.permissions().mode() & WORLD_WRITABLE_BIT != 0 {
+        let mode = meta.permissions().mode();
+        if mode & WORLD_WRITABLE_BIT != 0 && mode & STICKY_BIT == 0 {
             return Err(insecure(ancestor));
         }
     }
@@ -326,6 +341,20 @@ mod tests {
         let err =
             open_stack_registry_at(root.path(), &stack_id).expect_err("world-writable ancestor rejected");
         assert!(matches!(err, LaunchError::RegistryInsecure { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn world_writable_sticky_ancestor_is_accepted() {
+        // A world-writable-but-sticky ancestor (mode 1777, matching real-world
+        // `/tmp`) must NOT be rejected — the sticky bit is the standard POSIX
+        // exception that keeps a shared world-writable directory safe.
+        let root = TempDir::new().expect("tempdir");
+        std::fs::set_permissions(root.path(), Permissions::from_mode(0o1777))
+            .expect("chmod root world-writable + sticky");
+        let stack_id = StackId::now_v7();
+
+        open_stack_registry_at(root.path(), &stack_id)
+            .expect("world-writable-but-sticky ancestor must be accepted");
     }
 
     #[test]
