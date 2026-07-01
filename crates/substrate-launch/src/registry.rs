@@ -60,7 +60,7 @@ use crate::profile_loader::{build_trust_record, load_trusted, load_untrusted, wr
 #[cfg(test)]
 use crate::redaction::Redactor;
 use crate::supervisor::{
-    ServiceOutcome, build_request, edges_only_differ, launch_client_id, outcome_state,
+    ServiceOutcome, build_request, edges_only_differ, launch_client_id, outcome_state, profile_dir,
     spawn_fields_differ, spawn_service, stop_service, wait_ready,
 };
 use crate::supervisor_registry::{open_stack_registry, read_supervisor_registry, run_blocking};
@@ -261,7 +261,15 @@ impl LaunchRegistry {
             Some(name),
             format!("starting service '{name}'"),
         );
-        let handle = spawn_service(self.subprocess.as_ref(), request, cancel).await?;
+        let dir = profile_dir(&entry.handle.profile_path);
+        let handle = spawn_service(
+            self.subprocess.as_ref(),
+            request,
+            cancel,
+            &service.env_file,
+            &dir,
+        )
+        .await?;
         entry.job_ids.insert(name.to_owned(), handle.job_id.clone());
         let outcome = wait_ready(
             self.subprocess.as_ref(),
@@ -300,6 +308,7 @@ impl LaunchRegistry {
         set: &BTreeSet<ServiceName>,
         client_id: &ClientId,
         cancel: &dyn CancelSignal,
+        dir: &Path,
     ) -> Result<Vec<(ServiceName, JobId, ServiceOutcome)>, LaunchError> {
         let order = profile.topological_order()?;
         let mut spawned = Vec::new();
@@ -311,7 +320,14 @@ impl LaunchRegistry {
                 continue;
             };
             let request = build_request(&name, service, &self.state_root)?;
-            let handle = spawn_service(self.subprocess.as_ref(), request, cancel).await?;
+            let handle = spawn_service(
+                self.subprocess.as_ref(),
+                request,
+                cancel,
+                &service.env_file,
+                dir,
+            )
+            .await?;
             let outcome = wait_ready(
                 self.subprocess.as_ref(),
                 client_id,
@@ -653,7 +669,7 @@ impl LaunchPort for LaunchRegistry {
         service_name: &str,
         cancel: &dyn CancelSignal,
     ) -> Result<StackHandle, LaunchError> {
-        let (service, old_job, client_id) = {
+        let (service, old_job, client_id, stored_path) = {
             let entry = self.stacks.get(stack_id).ok_or_else(|| {
                 LaunchError::SupervisorUnreachable {
                     stack_id: stack_id.to_crockford(),
@@ -664,7 +680,12 @@ impl LaunchPort for LaunchRegistry {
                     msg: format!("unknown service '{service_name}'"),
                 }
             })?;
-            (service, entry.job_ids.get(service_name).cloned(), launch_client_id()?)
+            (
+                service,
+                entry.job_ids.get(service_name).cloned(),
+                launch_client_id()?,
+                entry.handle.profile_path.clone(),
+            )
         };
         if let Some(job) = &old_job {
             stop_service(self.subprocess.as_ref(), job).await;
@@ -672,7 +693,15 @@ impl LaunchPort for LaunchRegistry {
         // An orchestrated restart is a fresh spawn; it is NOT counted against the
         // subprocess crash-loop budget, which governs restart_policy auto-respawns only.
         let request = build_request(service_name, &service, &self.state_root)?;
-        let handle = spawn_service(self.subprocess.as_ref(), request, cancel).await?;
+        let dir = profile_dir(&stored_path);
+        let handle = spawn_service(
+            self.subprocess.as_ref(),
+            request,
+            cancel,
+            &service.env_file,
+            &dir,
+        )
+        .await?;
         let outcome = wait_ready(
             self.subprocess.as_ref(),
             &client_id,
@@ -745,8 +774,9 @@ impl LaunchPort for LaunchRegistry {
             .cloned()
             .collect();
         let client_id = launch_client_id()?;
+        let dir = profile_dir(&path);
         let spawned = self
-            .spawn_set(&new_profile, &start_set, &client_id, cancel)
+            .spawn_set(&new_profile, &start_set, &client_id, cancel, &dir)
             .await?;
 
         self.apply_reload(stack_id, new_profile, &report, spawned);

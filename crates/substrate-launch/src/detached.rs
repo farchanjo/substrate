@@ -302,7 +302,15 @@ impl DetachedSupervisor {
             };
             let mut request = build_request(&name, &service, &self.default_cwd)?;
             request.parent_death_signal = Some(PARENT_DEATH_SIGKILL);
-            let handle = spawn_service(self.subprocess.as_ref(), request, &cancel).await?;
+            let dir = self.env_file_dir();
+            let handle = spawn_service(
+                self.subprocess.as_ref(),
+                request,
+                &cancel,
+                &service.env_file,
+                &dir,
+            )
+            .await?;
             let outcome = wait_ready(
                 self.subprocess.as_ref(),
                 &self.client_id,
@@ -314,6 +322,13 @@ impl DetachedSupervisor {
             self.record_child(name, &handle, outcome).await;
         }
         Ok(())
+    }
+
+    /// The directory `.env` file paths resolve against — the profile's own directory.
+    fn env_file_dir(&self) -> PathBuf {
+        self.profile_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
     }
 
     /// Records a freshly spawned child in the in-memory map.
@@ -512,7 +527,15 @@ impl DetachedSupervisor {
             };
             let mut request = build_request(&name, service, &self.default_cwd)?;
             request.parent_death_signal = Some(PARENT_DEATH_SIGKILL);
-            let handle = spawn_service(self.subprocess.as_ref(), request, &cancel).await?;
+            let dir = self.env_file_dir();
+            let handle = spawn_service(
+                self.subprocess.as_ref(),
+                request,
+                &cancel,
+                &service.env_file,
+                &dir,
+            )
+            .await?;
             let outcome = wait_ready(
                 self.subprocess.as_ref(),
                 &self.client_id,
@@ -881,6 +904,7 @@ mod tests {
             required: true,
             restart_policy: None,
             health_probe: None,
+            env_file: Vec::new(),
             on_dependency_restart: DependencyRestartMode::Restart,
             error_patterns: Vec::new(),
             redact: Vec::new(),

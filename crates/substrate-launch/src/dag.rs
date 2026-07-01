@@ -105,6 +105,7 @@ mod tests {
             required: true,
             restart_policy: None,
             health_probe: None,
+            env_file: Vec::new(),
             on_dependency_restart: mode,
             error_patterns: Vec::new(),
             redact: Vec::new(),

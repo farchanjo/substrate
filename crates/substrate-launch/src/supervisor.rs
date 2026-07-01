@@ -151,13 +151,28 @@ pub(crate) async fn spawn_service(
     port: &dyn SubprocessPort,
     mut request: SubprocessRequest,
     cancel: &dyn CancelSignal,
+    env_files: &[String],
+    profile_dir: &Path,
 ) -> Result<SubprocessHandle, LaunchError> {
+    // Merge any `.env` files under the inline env (inline wins) before spawning.
+    if !env_files.is_empty() {
+        request.env_override =
+            crate::env_file::merge_env_files(&request.env_override, env_files, profile_dir).await?;
+    }
     request.binary_path = resolve_binary(request.binary_path.clone(), request.cwd.clone()).await;
     port.spawn(request, cancel)
         .await
         .map_err(|e| LaunchError::SpawnFailed {
             source: io::Error::other(e.to_string()),
         })
+}
+
+/// Returns the directory containing the profile file — the base against which a
+/// Service's `env_file` paths are resolved (ADR-0071).
+pub(crate) fn profile_dir(profile_path: &str) -> PathBuf {
+    Path::new(profile_path)
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 /// Resolves a Service binary to an absolute path, shell-style (ADR-0070).
@@ -360,6 +375,7 @@ mod tests {
             required: true,
             restart_policy: None,
             health_probe: None,
+            env_file: Vec::new(),
             on_dependency_restart: DependencyRestartMode::Restart,
             error_patterns: Vec::new(),
             redact: Vec::new(),

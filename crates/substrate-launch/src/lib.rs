@@ -34,6 +34,7 @@
 pub mod control_fifo;
 pub mod dag;
 pub mod detached;
+pub mod env_file;
 pub mod pid_probe;
 pub mod profile_loader;
 pub mod reaper;
