@@ -105,6 +105,15 @@ pub struct LaunchService {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 
+    /// Paths to `.env` files loaded into the child environment (ADR-0071).
+    ///
+    /// Each path is resolved relative to the profile directory and must not escape
+    /// it. Files are applied in order (a later file overrides an earlier one) and
+    /// the inline `env` map overrides all of them. Values feed the same banned-key
+    /// validation as inline `env`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_file: Vec<String>,
+
     /// Absolute working directory for the child, validated by `PathJail`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -373,6 +382,7 @@ mod tests {
             required: true,
             restart_policy: None,
             health_probe: None,
+            env_file: Vec::new(),
             on_dependency_restart: DependencyRestartMode::Restart,
             error_patterns: Vec::new(),
             redact: Vec::new(),
