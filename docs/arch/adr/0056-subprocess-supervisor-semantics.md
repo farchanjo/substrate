@@ -456,3 +456,42 @@ of an existing job.
 ## Amendment — 2026-06-30 — Launch detached supervisor: Option C scoped exception (ADR-0068)
 
 [ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md) carves a narrow, opt-in exception to the no-sidecar Option C recorded here, for launch detached mode only: a Stack with `on_client_disconnect = "detach"` is supervised by the same `substrate` binary in `--supervise` mode (no second artifact, no socket), so a Stack can outlive the MCP server while staying governable. Every other context retains the in-server, no-sidecar supervisor model of this ADR; the per-process `RestartPolicy`/`HealthProbe` semantics defined here are reused unchanged by the launch supervisor.
+
+## Amendment — 2026-07-01 — Health-probe readiness wiring landed; `Starting -> Ready` edge
+
+The probe runtime specified here (`run_probe` / `run_probe_with_escalation`,
+`PortOpen` / `HttpGet` / `LogPattern`) previously had no caller: every spawned
+child was born `Running`, so the documented `Starting -> Ready` gating never ran and
+a readiness consumer (the launch BC) treated a freshly spawned child as ready. This
+amendment records the wiring that closes that gap:
+
+- **Born state.** A child whose request carries a real `HealthProbe` (anything other
+  than `HealthProbe::None`) is now born `Starting`; every other child is born
+  `Running` (the backward-compatible one-shot default). See `spawn::initial_state`.
+- **Poll-driven promotion.** For `PortOpen` / `HttpGet`, a per-job supervisor task
+  (`registry::run_startup_probe`) waits `startup_grace_ms`, then polls `run_probe`
+  every `interval_ms`. On the first success it promotes the child `Starting -> Ready`
+  via a single compare-and-swap (`spawn::promote_starting_to_ready`) that succeeds
+  only while the state is still `Starting` — a late `Ready` can never overwrite a
+  child that has since gone terminal (the lost-update hazard). Failures during
+  startup are non-fatal: the loop keeps retrying so a slow cold start still reaches
+  `Ready`. The outer readiness deadline (launch BC) bounds the total wait.
+- **`Starting -> Ready` is now a valid domain edge.** The original
+  `SubprocessState::can_transition_to` matrix encoded only `Starting -> Running` and
+  `Running -> Ready`, contradicting this ADR's prose ("first successful probe -> state
+  transitions to Ready"). The matrix now includes `Starting -> Ready` directly, so a
+  probe-gated child never transits `Running` — which matters because a readiness
+  consumer treats `Running` as ready. The prose and the type-level invariant now
+  agree.
+- **`outbound-net` is required.** `PortOpen` / `HttpGet` are inert
+  (`FailedTransient`) without the `substrate-subprocess/outbound-net` Cargo feature.
+  The composition root's `launch` feature now implies it (see
+  [ADR-0065](0065-launch-dependency-graph-and-reconciler-reload.md) amendment).
+- **Deferred.** Continuous liveness re-probing after `Ready` (the 3-consecutive-
+  failure escalation to `restart_policy`) and `LogPattern` stream-observer wiring
+  remain unimplemented; the poll loop covers startup gating for `PortOpen` / `HttpGet`
+  only. Because `LogPattern` has no promoter yet, a `LogPattern`-gated child is born
+  `Running` (treated as ready-when-running, the pre-gating behavior) rather than
+  stranded in `Starting` until the readiness deadline; only `PortOpen` / `HttpGet`
+  children are born `Starting`. `LogPattern` startup gating lands with the stream-
+  observer wiring.

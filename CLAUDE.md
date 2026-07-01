@@ -33,7 +33,7 @@ When changing any file under `docs/arch/`, run `spec validate --lane fast` befor
 
 ```text
 docs/arch/
-  adr/                       MADR 4.0 decision records (0001–0069)
+  adr/                       MADR 4.0 decision records (0001–0070)
   architecture/workspace.dsl Structurizr DSL (C4 context + container views)
   cue.mod/module.cue         CUE module: com.archanjo/substrate
   domain/<bc>/README.md      Bounded-context narratives (10 BCs; launch implemented)
@@ -58,7 +58,7 @@ Ten contexts, split by semantic family (not by binary name):
 7. **job** — job.list, job.result, job.cancel, job.status (async control-plane)
 8. **subprocess** — subprocess.spawn, subprocess.list, subprocess.result, subprocess.cancel, subprocess.signal, subprocess.search (ADR-0052)
 9. **network-info** — net.tcp_list, net.udp_list, net.tcp_stats, net.connection_count (ADR-0058)
-10. **launch** *(ADR-0063..0069; implemented including Milestone 2 detached supervisor, on both Linux and macOS)* — declarative process orchestration over subprocess: launch.init/list/trust/up/status/logs/restart/reload/down/forget (10 tools), gated behind Cargo feature `launch` (default-off, implies `subprocess`)
+10. **launch** *(ADR-0063..0070; implemented including Milestone 2 detached supervisor, on both Linux and macOS)* — declarative process orchestration over subprocess: launch.init/list/trust/up/status/logs/restart/reload/down/forget (10 tools), gated behind Cargo feature `launch` (default-off, implies `subprocess` **and** `substrate-subprocess/outbound-net`). Readiness gating is real (ADR-0056/0065 amendments, 2026-07-01): a probe-gated Service is born `Starting` and only reported `Ready` once its `PortOpen`/`HttpGet` health probe passes (the subprocess supervisor polls and promotes `Starting -> Ready`); `wait_ready` uses a per-probe budget, not the old fixed 1s ceiling; a Service that never becomes ready is stopped. `launch` implies `outbound-net` because those probes are inert without it. Service `command[0]` may be absolute, `cwd`-relative, or a bare name resolved on `$PATH`, resolved to an absolute path before the spawn while the binary allowlist stays the execution gate (ADR-0070)
 
 Tools are namespaced `<bc>.<verb>` (e.g., `fs.find`, `proc.signal`). Total `tools/list` count is 61 with the `launch` feature enabled (51 without). Each BC maps to a Cargo crate under `crates/substrate-<bc>` (see ADR-0022). The `substrate-launch` crate (ADR-0063) is a workspace member, gated behind the default-off Cargo feature `launch`. Its detached-supervisor mode (ADR-0068) is fully built: `LaunchRegistry::up` forks a `substrate --supervise <stack_id>` child on `on_client_disconnect = detach`, polls its durable `supervisor.json`, and a fresh MCP server reaps/re-attaches any Stack left behind by a prior session at startup. See ADR-0068's amendments for the three deliberate deviations from its literal design (tokio `select!` reactor instead of hand-rolled `mio`; poll-based child-exit instead of `pidfd`/`kqueue`; macOS pgid+reaper-on-boot instead of watchdog-pipe cooperation for arbitrary children). The pure-domain shared kernel lives in `crates/substrate-domain` and MUST NOT import any infra crate (hexagonal layering enforced via `policies/hexagonal_layering.rego`).
 
@@ -99,7 +99,7 @@ crates/
   substrate-jobs                adapter for job control-plane BC
   substrate-subprocess          adapter for subprocess BC (ADR-0052)
   substrate-network-info        adapter for network-info BC (ADR-0058)
-  substrate-launch              adapter for launch orchestration BC (ADR-0063..0069), feature-gated
+  substrate-launch              adapter for launch orchestration BC (ADR-0063..0070), feature-gated
   substrate-mcp-server          binary (composition root, rmcp wiring)
 ```
 
@@ -120,7 +120,7 @@ When picking up this repo cold, read in this order:
 
 For implementation work later: read the ADRs cross-referenced from the relevant BC README, then the matching CUE schemas under `docs/arch/schemas/`, then the matching Gherkin features under `docs/arch/specs/features/<bc>/`.
 
-For the launch BC specifically, ADR-0063 (bounded context), ADR-0064 (profile trust model), ADR-0065 (dependency graph + reconciler/reload), ADR-0066 (event stream), ADR-0067 (concurrency/messaging topology), ADR-0068 (detached supervisor + orphan governance), and ADR-0069 (tool cards + ToolSearch discoverability) form one connected design — read them together, in that order.
+For the launch BC specifically, ADR-0063 (bounded context), ADR-0064 (profile trust model), ADR-0065 (dependency graph + reconciler/reload; 2026-07-01 amendment: readiness gating made real + per-probe budget + `launch` implies `outbound-net`), ADR-0066 (event stream), ADR-0067 (concurrency/messaging topology), ADR-0068 (detached supervisor + orphan governance), ADR-0069 (tool cards + ToolSearch discoverability), and ADR-0070 (PATH binary resolution) form one connected design — read them together, in that order. The health-probe wiring these depend on is in ADR-0056 (2026-07-01 amendment: `Starting -> Ready` edge + probe supervisor).
 
 ## Spec conventions (enforced by linters)
 

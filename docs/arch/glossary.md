@@ -598,6 +598,16 @@ injections, symlink escapes, null bytes, and Zip Slip payloads. Implemented in
 the `strict-path` crate, invoked by the policy layer. See
 [ADR-0004](adr/0004-security-model.md).
 
+## PATH resolution
+
+The launch bounded context's shell-style resolution of a Service's `command[0]`
+to an absolute path before it builds the `SubprocessRequest`. An absolute path is
+used unchanged; a path with a separator (`./gradlew`) is resolved against the
+Service `cwd`; a bare name (`node`) is searched on `$PATH` for the first
+executable regular file. The resolved path is still subject to the unchanged
+subprocess binary allowlist, which remains the execution gate — resolution only
+produces a candidate. See [ADR-0070](adr/0070-launch-path-binary-resolution.md).
+
 ## Pid
 
 The operating-system process identifier of an inspected or controlled process.

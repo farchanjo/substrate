@@ -34,6 +34,11 @@ package schemas
 	// command is the executable plus arguments as an array. A bare string form is
 	// rejected at parse time per ADR-0064 to remove the argument-injection surface.
 	// command[0] is the binary; it must be in security.subprocess_binary_allowlist.
+	// command[0] may be an absolute path, a cwd-relative path (with a separator, e.g.
+	// "./gradlew"), or a bare name resolved on $PATH (e.g. "node"); the launch BC
+	// resolves it to an absolute path BEFORE building the SubprocessRequest, so
+	// subprocess.cue's absolute-path binary_path contract is preserved and the binary
+	// allowlist remains the execution gate (ADR-0070).
 	command: [string, ...string]
 
 	// args are appended after command[1:]. Present for ergonomic separation of the

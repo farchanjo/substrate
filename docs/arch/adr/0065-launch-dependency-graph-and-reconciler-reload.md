@@ -226,3 +226,36 @@ is deferred to **Milestone 2** alongside the detached supervisor
 ([ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)); the
 MVP reload surfaces a per-Service partial outcome without the subgraph
 fallback.
+
+## Amendment — 2026-07-01 — Readiness gating is now real; per-probe budget; `launch` implies `outbound-net`
+
+This ADR gates each Service start on its dependencies reaching the subprocess
+`Ready` state and delegates the deadline entirely to the per-Service `HealthProbe`
+budget ([ADR-0056](0056-subprocess-supervisor-semantics.md)). The MVP shipped that
+gating as a no-op: `wait_ready` treated a freshly spawned `Running` child as ready
+and used a fixed 1s poll ceiling unrelated to the probe, so every Service resolved
+`Ready` in microseconds regardless of its declared probe. With the ADR-0056 probe
+wiring now landed, the launch side is corrected to match this ADR:
+
+- **Per-probe readiness budget.** `wait_ready` derives its deadline from the
+  Service's `health_probe` (`supervisor::readiness_budget`): a small fixed budget for
+  `None`; `startup_grace_ms` plus a generous ceiling for `PortOpen` / `HttpGet`
+  (neither carries its own overall timeout); the declared `timeout_ms` for
+  `LogPattern`. This replaces the fixed 1s ceiling. A probe-gated Service is born
+  `Starting` and only satisfies `depends_on` once its probe actually passes.
+- **Stop on readiness failure.** A Service that never becomes ready within its budget
+  is now stopped (cascade-cancelled) rather than left running, before the `Crashed`
+  event is emitted, so a stuck-in-`Starting` child is not leaked.
+- **`launch` implies `outbound-net`.** `PortOpen` / `HttpGet` probes are inert without
+  `substrate-subprocess/outbound-net`, which would make readiness gating a no-op
+  again. The composition root's `launch` Cargo feature therefore now implies
+  `substrate-subprocess/outbound-net`. This is a deliberate, documented narrowing of
+  ADR-0003's default-off outbound-network posture: enabling the launch orchestration
+  BC necessarily enables the network health probes its readiness gate depends on. The
+  opt-in surface is the `launch` feature itself.
+- **Timeout vs. crash are still conflated.** A readiness timeout and a real crash both
+  surface as `LaunchEventKind::Crashed` with no exit code; a dedicated readiness-
+  timeout event/error remains future work.
+
+The **subgraph degradation** and a **config-tunable readiness budget** (the budget is
+currently a compile-time constant, not a `RuntimeConfig` knob) remain deferred.
