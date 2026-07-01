@@ -233,9 +233,32 @@ impl substrate_domain::PathJailPort for Openat2Jail {
             });
         }
 
-        // Build CString from raw_path. For relative candidates we pass them
-        // as-is; openat2 with RESOLVE_BENEATH rejects absolute escape attempts.
-        let candidate_cstr = path_to_cstring(raw_path)?;
+        // `RESOLVE_BENEATH` categorically rejects an absolute pathname argument
+        // (the kernel returns EXDEV -- see openat2(2) §RESOLVE_BENEATH: "...in
+        // particular, this means that .. and absolute path components are
+        // disallowed"), so raw_path (always absolute per this port's calling
+        // convention -- see ONoFollowAnyJail's identical convention on macOS)
+        // must be made relative to allowlist_root before the syscall. Both
+        // sides are NFC-normalized first (ADR-0035 §Decision 6) for
+        // consistency with the containment check below. A raw_path that
+        // isn't lexically beneath allowlist_root is rejected immediately,
+        // without a syscall; one that is (even via a `..`-containing
+        // relative remainder from a lexical trick) is left for openat2's own
+        // RESOLVE_BENEATH kernel check to accept or reject.
+        let normalized_raw = nfc::normalize_path(raw_path);
+        let normalized_root = nfc::normalize_path(allowlist_root.as_path());
+        let relative_path = normalized_raw.strip_prefix(&normalized_root).map_err(|_| {
+            SubstrateError::PathOutsideAllowlist {
+                path: raw_path.display().to_string(),
+                correlation_id: None,
+            }
+        })?;
+        let relative_path: &Path = if relative_path.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            relative_path
+        };
+        let candidate_cstr = path_to_cstring(relative_path)?;
 
         // Open the allowlist root as a dirfd for openat2.
         let root_fd = open_root_dirfd(allowlist_root.as_path())?;
@@ -454,6 +477,25 @@ mod tests {
             code == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
                 || code == "SUBSTRATE_IO_ERROR"
                 || code == "SUBSTRATE_INTERNAL_ERROR",
+            "unexpected error code: {code}"
+        );
+    }
+
+    /// A `..`-escape whose lexical byte-prefix still matches the root (e.g.
+    /// `<root>/../outside`) must be rejected by openat2's own
+    /// `RESOLVE_BENEATH` kernel check, not silently accepted just because the
+    /// `strip_prefix` relative-ization above found a matching prefix.
+    #[test]
+    fn rejects_dotdot_escape_within_lexical_root_prefix() {
+        use substrate_domain::PathJailPort as _;
+
+        let (dir, jail, root_jailed) = make_jail();
+        let escape = dir.path().join("..").join("outside_marker");
+        let result = jail.jail(&root_jailed, &escape);
+        assert!(result.is_err(), "dotdot escape must be rejected, got {result:?}");
+        let code = result.unwrap_err().code();
+        assert!(
+            code == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || code == "SUBSTRATE_INTERNAL_ERROR",
             "unexpected error code: {code}"
         );
     }
