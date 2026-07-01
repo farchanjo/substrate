@@ -1835,10 +1835,21 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_binary_allowed_accepts_real_binary_via_glob() {
-        let allowlist = BinaryAllowlist::new(vec![PathBuf::from("/bin/*")]);
+        // /bin is a symlink to /usr/bin on Debian/Ubuntu's merged-usr layout
+        // (and thus on this very test's own CI container). resolve_binary_allowed
+        // canonicalizes the requested binary before glob matching (ADR-0052's
+        // TOCTOU/symlink protection: "a glob therefore cannot be satisfied by a
+        // symlink that resolves outside the pattern's coverage"), so the glob
+        // must cover echo's *canonical* parent directory, not the conventional
+        // /bin path it was requested through -- otherwise this test would be
+        // asserting the exact opposite of ADR-0052's documented, intended
+        // behavior on any merged-usr system.
+        let canonical_echo = std::fs::canonicalize("/bin/echo").expect("canonicalize /bin/echo");
+        let canonical_dir = canonical_echo.parent().expect("echo has a parent dir");
+        let allowlist = BinaryAllowlist::new(vec![canonical_dir.join("*")]);
         let resolved = resolve_binary_allowed(&allowlist, std::path::Path::new("/bin/echo"))
             .await
-            .expect("a glob covering /bin/* must allow /bin/echo");
+            .expect("a glob covering echo's canonical parent dir must allow /bin/echo");
         assert!(resolved.ends_with("echo"));
     }
 
