@@ -48,10 +48,9 @@ impl PortFactory<dyn PathJailPort> for PathJailFactory {
         // --- Tier 1: Linux openat2 ---
         #[cfg(target_os = "linux")]
         if caps.has_openat2 {
-            self.chosen_tier.set("linux-openat2").unwrap_or_else(|_| {
-                // OnceLock was already set — factory called more than once.
-                // Non-fatal; the first value wins.
-            });
+            // OnceLock was already set — factory called more than once.
+            // Non-fatal; the first value wins.
+            self.chosen_tier.set("linux-openat2").unwrap_or(());
             tracing::info!(tier = "linux-openat2", "PathJail tier selected");
             return Arc::new(crate::linux::Openat2Jail::new(self.allowlist.clone()));
         }

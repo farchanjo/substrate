@@ -53,7 +53,7 @@ const RESOLVE_BENEATH: u64 = 0x08;
 /// `SYS_openat2` syscall number per architecture.
 ///
 /// Stable values since kernel 5.6 per `arch/*/entry/syscalls/` in the Linux tree:
-/// - x86_64:  437 (`arch/x86/entry/syscalls/syscall_64.tbl`)
+/// - `x86_64`:  437 (`arch/x86/entry/syscalls/syscall_64.tbl`)
 /// - aarch64: 437 (`arch/arm64/include/asm/unistd.h`)
 /// - riscv64: 437 (`arch/riscv/include/asm/unistd.h`)
 /// - riscv32: 437 (same table as riscv64)
@@ -112,25 +112,36 @@ pub fn probe_openat2_available() -> bool {
     // SAFETY: `libc::syscall` with `SYS_OPENAT2`:
     //   - `SYS_OPENAT2` is the arch-correct syscall number from this module.
     //   - `AT_FDCWD` is a valid pseudo-fd; no open descriptor required.
-    //   - `b"\0".as_ptr()` is a NUL-terminated empty path in static storage;
+    //   - `c"".as_ptr()` is a NUL-terminated empty path in static storage;
     //     valid for the call duration.
-    //   - `&how as *const _` points to a stack-allocated `OpenHow`; valid for
+    //   - `&raw const how` points to a stack-allocated `OpenHow`; valid for
     //     the call duration; no pointer is retained after the syscall returns.
-    //   - The fourth argument is `size_of::<OpenHow>()` as required by the ABI.
+    //   - The fourth argument is `size_of::<OpenHow>()` as required by the ABI;
+    //     the struct is a fixed 24 bytes (3x u64), so the usize -> c_long cast
+    //     below can never wrap.
     // On success (unexpected for empty path), we close the fd immediately.
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "size_of::<OpenHow>() is a fixed 24-byte struct; can never approach c_long::MAX"
+    )]
     let result = unsafe {
         libc::syscall(
             SYS_OPENAT2,
-            libc::AT_FDCWD as libc::c_long,
-            b"\0".as_ptr() as *const libc::c_char,
-            &how as *const OpenHow,
+            libc::c_long::from(libc::AT_FDCWD),
+            c"".as_ptr(),
+            &raw const how,
             std::mem::size_of::<OpenHow>() as libc::c_long,
         )
     };
 
     if result >= 0 {
         // Unexpected success with empty path — close fd, report present.
-        // SAFETY: `result` is a valid file descriptor just returned by the kernel.
+        // SAFETY: `result` is a valid file descriptor just returned by the kernel;
+        // fd values are always small non-negative numbers well within i32 range.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "fd values are always small non-negative numbers well within i32 range"
+        )]
         unsafe {
             libc::close(result as libc::c_int);
         }
@@ -182,6 +193,14 @@ fn path_to_cstring(path: &Path) -> SubstrateResult<CString> {
 /// Tier-1 Linux path-jail adapter backed by `openat2(2)`.
 ///
 /// Constructed by `PathJailFactory` when `caps.has_openat2` is `true`.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "clippy::redundant_pub_crate and clippy::unreachable_pub directly \
+              contradict each other for a pub(crate) item inside a private \
+              module (each lint's suggested fix is what the other flags); \
+              pub(crate) is the semantically correct choice. See \
+              substrate-policy/nfc.rs for the same precedent."
+)]
 pub(crate) struct Openat2Jail {
     allowlist: Allowlist,
 }
@@ -189,7 +208,7 @@ pub(crate) struct Openat2Jail {
 impl Openat2Jail {
     /// Creates a new `Openat2Jail` wrapping the given allowlist.
     #[must_use]
-    pub(crate) fn new(allowlist: Allowlist) -> Self {
+    pub(crate) const fn new(allowlist: Allowlist) -> Self {
         Self { allowlist }
     }
 }
@@ -231,15 +250,21 @@ impl substrate_domain::PathJailPort for Openat2Jail {
         //   - `SYS_OPENAT2` is the correct syscall number for this arch.
         //   - `root_fd.as_raw_fd()` is a live, owned descriptor opened above.
         //   - `candidate_cstr.as_ptr()` is valid for the call duration.
-        //   - `&how as *const _` points to a stack-allocated `OpenHow`.
-        //   - `size_of::<OpenHow>()` is the required fourth argument.
+        //   - `&raw const how` points to a stack-allocated `OpenHow`.
+        //   - `size_of::<OpenHow>()` is the required fourth argument; the
+        //     struct is a fixed 24 bytes, so the usize -> c_long cast below
+        //     can never wrap.
         // The syscall cannot escape the stack frame; no pointer is stored.
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "size_of::<OpenHow>() is a fixed 24-byte struct; can never approach c_long::MAX"
+        )]
         let fd = unsafe {
             libc::syscall(
                 SYS_OPENAT2,
-                root_fd.as_raw_fd() as libc::c_long,
+                libc::c_long::from(root_fd.as_raw_fd()),
                 candidate_cstr.as_ptr(),
-                &how as *const OpenHow,
+                &raw const how,
                 std::mem::size_of::<OpenHow>() as libc::c_long,
             )
         };
@@ -254,14 +279,20 @@ impl substrate_domain::PathJailPort for Openat2Jail {
         // lexically constructed one.  Lexical construction (join + strip_prefix)
         // produces a double-prefix phantom path when allowlist_root is a prefix
         // of raw_path (e.g. root=/data, path=/data/sub/f → /data/data/sub/f).
-        let proc_link = format!("/proc/self/fd/{}", fd as libc::c_int);
+        // `fd` is formatted directly (no cast to c_int needed for display).
+        let proc_link = format!("/proc/self/fd/{fd}");
         let readlink_result = std::fs::read_link(&proc_link);
 
         // Close the validation fd after we have read the procfs link (success
         // or failure). SAFETY: `fd` is a valid file descriptor returned by the
-        // syscall above. `libc::close` is the correct way to release it; it
-        // cannot fail in a way that causes UB here (EINTR is benign on Linux
-        // for close(2)).
+        // syscall above (checked `fd >= 0` earlier); fd values are always small
+        // non-negative numbers well within i32 range. `libc::close` is the
+        // correct way to release it; it cannot fail in a way that causes UB
+        // here (EINTR is benign on Linux for close(2)).
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "fd values are always small non-negative numbers well within i32 range"
+        )]
         unsafe {
             libc::close(fd as libc::c_int);
         }
@@ -331,6 +362,12 @@ fn map_openat2_errno(errno: i32, path: &Path) -> SubstrateError {
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module — panics and unwraps on assertion failure are the intended behavior"
+)]
 mod tests {
     use std::path::PathBuf;
 
@@ -374,7 +411,7 @@ mod tests {
     }
 
     /// Verifies the openat2 call accepts a file that actually exists within
-    /// the tempdir root. Only runs on Linux where SYS_openat2 is available.
+    /// the tempdir root. Only runs on Linux where `SYS_openat2` is available.
     #[test]
     fn allows_file_within_root_via_openat2() {
         use substrate_domain::PathJailPort as _;
