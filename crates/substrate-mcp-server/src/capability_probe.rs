@@ -74,27 +74,33 @@ fn detect_simd_tier() -> SimdTier {
         // Even when the CPU reports AVX-512F, we stay at AVX2 unless the feature
         // is explicitly opted in (to avoid frequency throttling on older steppings).
         if cfg!(feature = "simd-avx512") && std::is_x86_feature_detected!("avx512f") {
-            return SimdTier::Avx512;
+            SimdTier::Avx512
+        } else if cfg!(feature = "simd-avx2") && std::is_x86_feature_detected!("avx2") {
+            SimdTier::Avx2
+        } else if std::is_x86_feature_detected!("sse4.2") {
+            SimdTier::Sse42
+        } else {
+            SimdTier::Sse2
         }
-        if cfg!(feature = "simd-avx2") && std::is_x86_feature_detected!("avx2") {
-            return SimdTier::Avx2;
-        }
-        if std::is_x86_feature_detected!("sse4.2") {
-            return SimdTier::Sse42;
-        }
-        return SimdTier::Sse2;
     }
 
     #[cfg(target_arch = "aarch64")]
     {
-        // NEON is architecturally mandatory on all AArch64 hardware.
+        // NEON is architecturally mandatory on all AArch64 hardware; the
+        // check is defensive in case that invariant is ever violated by
+        // future/unusual hardware.
         if std::arch::is_aarch64_feature_detected!("neon") {
-            return SimdTier::Neon;
+            SimdTier::Neon
+        } else {
+            SimdTier::Portable
         }
     }
 
     // Fallback for unsupported architectures (e.g., RISC-V, WASM).
-    SimdTier::Portable
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        SimdTier::Portable
+    }
 }
 
 // ---- Linux capability probes -------------------------------------------------
@@ -124,7 +130,7 @@ fn detect_linux(caps: &mut Capabilities) {
 }
 
 #[cfg(target_os = "linux")]
-fn probe_statx_stub() -> bool {
+const fn probe_statx_stub() -> bool {
     // Stub: returns false until Wave D implements the real syscall probe.
     // Real probe: statx(AT_FDCWD, "", AT_EMPTY_PATH, STATX_NLINK, &mut buf)
     // ENOSYS -> false; ENOENT or any other -> true.
