@@ -1,5 +1,4 @@
-//! Linux native walker — `nix::dir::Dir` (readdir_r / getdents64 family) +
-//! `nix::sys::stat::statx` for per-entry metadata in a single syscall.
+//! Linux directory walker.
 //!
 //! # Implementation notes
 //!
@@ -11,23 +10,22 @@
 //! every 256 entries. On cancellation, the mpsc sender is dropped which causes
 //! the async receiver stream to terminate cleanly.
 //!
-//! Raw `getdents64(2)` would shave one syscall per batch but `nix::dir::Dir`
-//! already wraps `readdir_r` which uses the same kernel path. Raw getdents64 is
-//! deferred as a Wave I micro-optimisation.
+//! # Current tier: portable `std::fs`, not `statx(2)`-accelerated
 //!
-//! # Safety justification (ADR-0042 + ADR-0044)
-//!
-//! No `unsafe` code is required in this module: `nix::dir::Dir` and
-//! `nix::sys::stat::statx` are safe wrappers. The module-level
-//! `#[allow(unsafe_code)]` below is intentionally absent.
+//! This was originally written against `nix::dir::Dir` + `nix::sys::stat::statx`
+//! for a `getdents64`/`statx` batched-syscall fast path, but neither symbol is
+//! reachable in this workspace's pinned `nix = "0.30"` feature set (`dir` is
+//! feature-gated and not enabled; `statx` is not exposed by this nix version at
+//! all) — the code had never actually been compiled on Linux until verified in
+//! a real Linux environment. `DirWalkerPort::walk` here is a portable
+//! `std::fs::read_dir` + `symlink_metadata` walk in the meantime, matching
+//! `WalkerFactory`'s own documented "currently delegates to legacy" tier
+//! description. A real `statx`-accelerated implementation (raw
+//! `libc::statx`/`getdents64`, mirroring the `substrate-policy` macOS
+//! `O_NOFOLLOW_ANY` unsafe carve-out pattern) remains a Wave I
+//! micro-optimisation, not done here.
 
 use futures::stream::BoxStream;
-use nix::{
-    dir::{Dir, Type},
-    fcntl::OFlag,
-    sys::stat::Mode,
-    sys::stat::{StatxFlags, StatxMask, statx},
-};
 use substrate_domain::{
     SubstrateResult,
     ports::dir_walker::{DirEntry, DirWalkerPort, WalkOpts},
@@ -42,23 +40,13 @@ use tokio_util::sync::CancellationToken;
 /// and the async consumer.
 const CHANNEL_DEPTH: usize = 64;
 
-/// How many entries to process between CancellationToken checks (ADR-0037).
+/// How many entries to process between `CancellationToken` checks (ADR-0037).
 const CANCEL_CHECK_INTERVAL: usize = 256;
-
-/// Minimal `statx` attribute mask: type, mode, size, mtime.
-/// Using the smallest mask reduces kernel I/O per entry.
-const STATX_MASK: StatxMask = StatxMask::STATX_TYPE
-    .union(StatxMask::STATX_MODE)
-    .union(StatxMask::STATX_SIZE)
-    .union(StatxMask::STATX_MTS);
 
 // ---- Walker ------------------------------------------------------------------
 
-/// Linux-native directory walker backed by `nix::dir::Dir` and `statx(2)`.
-///
-/// Uses `nix::dir::Dir` (readdir_r / getdents64 family) to enumerate directory
-/// entries and `statx(2)` for per-entry metadata in a single syscall per entry,
-/// reducing total syscall count versus the legacy `ignore`-crate path.
+/// Linux directory walker. See module docs for the current (portable, not
+/// `statx`-accelerated) implementation status.
 #[derive(Debug, Default)]
 pub struct LinuxStatxWalker {
     /// Cancellation token for cooperative early-exit.
@@ -76,7 +64,7 @@ impl LinuxStatxWalker {
 
     /// Creates a walker that shares a caller-owned `CancellationToken`.
     #[must_use]
-    pub fn with_cancel(cancel: CancellationToken) -> Self {
+    pub const fn with_cancel(cancel: CancellationToken) -> Self {
         Self { cancel }
     }
 }
@@ -93,12 +81,11 @@ impl DirWalkerPort for LinuxStatxWalker {
         // Zone B: open + walk in a blocking thread; stream results via mpsc.
         let (tx, rx) = mpsc::channel::<SubstrateResult<DirEntry>>(CHANNEL_DEPTH);
 
-        let tx_clone = tx.clone();
         let max_depth = opts.max_depth;
 
         tokio::task::spawn_blocking(move || {
-            walk_dir_recursive(&root_path, max_depth, 0, &tx_clone, &cancel, &mut 0usize);
-            // tx_clone dropped here — rx will observe stream end.
+            walk_dir_recursive(&root_path, max_depth, 0, &tx, &cancel, &mut 0usize);
+            // tx dropped here — rx will observe stream end.
         });
 
         // Convert the mpsc receiver into a Stream.
@@ -122,18 +109,14 @@ fn walk_dir_recursive(
     counter: &mut usize,
 ) {
     // Depth limit.
-    if let Some(limit) = max_depth {
-        if current_depth > limit {
-            return;
-        }
+    if let Some(limit) = max_depth
+        && current_depth > limit
+    {
+        return;
     }
 
     // Open the directory.
-    let dir = match Dir::open(
-        dir_path,
-        OFlag::O_RDONLY | OFlag::O_DIRECTORY,
-        Mode::empty(),
-    ) {
+    let read_dir = match std::fs::read_dir(dir_path) {
         Ok(d) => d,
         Err(err) => {
             let _ = tx.blocking_send(Err(substrate_domain::SubstrateError::IoError {
@@ -145,13 +128,13 @@ fn walk_dir_recursive(
         },
     };
 
-    // Collect entries first to avoid holding the Dir handle while recursing.
+    // Collect entries first to avoid holding the directory handle while recursing.
     let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
 
-    for entry_result in dir.into_iter() {
+    for entry_result in read_dir {
         // Cooperative cancellation check every CANCEL_CHECK_INTERVAL entries.
         *counter = counter.wrapping_add(1);
-        if *counter % CANCEL_CHECK_INTERVAL == 0 && cancel.is_cancelled() {
+        if counter.is_multiple_of(CANCEL_CHECK_INTERVAL) && cancel.is_cancelled() {
             return;
         }
 
@@ -167,35 +150,22 @@ fn walk_dir_recursive(
             },
         };
 
-        // Skip "." and "..".
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str == "." || name_str == ".." {
-            continue;
-        }
+        let entry_path = entry.path();
 
-        let entry_path = dir_path.join(name_str.as_ref());
-
-        // Use statx for metadata.
-        let (is_dir, size_bytes) = match statx(
-            nix::libc::AT_FDCWD,
-            &entry_path,
-            StatxFlags::AT_NO_AUTOMOUNT | StatxFlags::AT_SYMLINK_NOFOLLOW,
-            STATX_MASK,
-        ) {
-            Ok(sx) => {
-                let kind = sx.stx_mode as u32 & 0o0170000; // S_IFMT bits
-                let is_dir = kind == 0o0040000; // S_IFDIR
-                let is_reg = kind == 0o0100000; // S_IFREG
-                let size = if is_reg { Some(sx.stx_size) } else { None };
-                (is_dir, size)
-            },
-            Err(_) => {
-                // Fallback: use the d_type from the dirent if available.
-                let is_dir = entry.file_type() == Some(Type::Directory);
+        // DirEntry::metadata() is lstat-based (does not follow symlinks),
+        // matching the prior statx AT_SYMLINK_NOFOLLOW semantics.
+        let (is_dir, size_bytes) = entry.metadata().map_or_else(
+            |_| {
+                // Fallback: use the d_type from the dirent if the kernel provided it.
+                let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
                 (is_dir, None)
             },
-        };
+            |meta| {
+                let is_dir = meta.is_dir();
+                let size = if meta.is_file() { Some(meta.len()) } else { None };
+                (is_dir, size)
+            },
+        );
 
         let jailed = JailedPath::new_jailed(entry_path.clone());
 
@@ -228,6 +198,12 @@ fn walk_dir_recursive(
 // ---- Tests ------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module — panics and unwraps on assertion failure are the intended behavior"
+)]
 mod tests {
     use super::*;
     use std::fs;
