@@ -661,10 +661,11 @@ impl ToolDispatcher {
             // ---- launch.* tools (feature-gated) -----------------------------
             //
             // Buckets per ADR-0069: init/trust=D, list/status/logs=A, up=E,
-            // restart/reload/down=C. All nine dispatch inline through the launch
-            // port: the port API completes the orchestrated operation and returns
-            // a domain value, so `launch_err` maps `LaunchError` at the edge with
-            // its numeric `-32044..-32056` code (see `launch_tools::launch_err`).
+            // restart/reload/down/forget=C. All ten dispatch inline through the
+            // launch port: the port API completes the orchestrated operation and
+            // returns a domain value, so `launch_err` maps `LaunchError` at the
+            // edge with its numeric `-32044..-32058` code (see
+            // `launch_tools::launch_err`).
             #[cfg(feature = "launch")]
             "launch_init" => {
                 let port = Arc::clone(&self.launch);
@@ -709,6 +710,11 @@ impl ToolDispatcher {
             "launch_down" => {
                 let port = Arc::clone(&self.launch);
                 crate::handlers::launch_tools::handle_launch_down(args, port).await
+            },
+            #[cfg(feature = "launch")]
+            "launch_forget" => {
+                let port = Arc::clone(&self.launch);
+                crate::handlers::launch_tools::handle_launch_forget(args, port).await
             },
             // ---- network.* tools (always-on; Noop on unsupported platforms) --
             "net_tcp_list" => {

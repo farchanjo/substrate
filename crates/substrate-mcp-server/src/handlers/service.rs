@@ -670,6 +670,11 @@ mod descriptions {
         "Cascade-stop a stack in reverse order. Destructive. See substrate skill."
     }
 
+    #[cfg(feature = "launch")]
+    pub(super) const fn launch_forget() -> &'static str {
+        "Remove a Down stack's registry entry (no reconnect needed). Destructive. See substrate skill."
+    }
+
     // ---- network-info -------------------------------------------------------
 
     pub(super) const fn net_tcp_list() -> &'static str {
@@ -1038,6 +1043,16 @@ fn schema_launch_down() -> std::sync::Arc<serde_json::Map<String, serde_json::Va
     }))
 }
 
+#[cfg(feature = "launch")]
+fn schema_launch_forget() -> std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+    launch_schema_from_json(serde_json::json!({
+        "type": "object",
+        "required": ["stack_id"],
+        "properties": { "stack_id": launch_stack_id_property() },
+        "additionalProperties": false
+    }))
+}
+
 /// launch BC tool cards (compiled only with the `launch` feature).
 #[cfg(feature = "launch")]
 fn registry_launch() -> Vec<Tool> {
@@ -1071,6 +1086,11 @@ fn registry_launch() -> Vec<Tool> {
             schema_launch_reload(),
         ),
         Tool::new("launch_down", descriptions::launch_down(), schema_launch_down()),
+        Tool::new(
+            "launch_forget",
+            descriptions::launch_forget(),
+            schema_launch_forget(),
+        ),
     ]
 }
 
@@ -1920,13 +1940,13 @@ mod tests {
         // 7 archive + 4 job + 4 network-info = 45 base.
         // (process adds proc_stats + proc_top; sys-info adds sys_mem + sys_cpu.)
         // +6 subprocess when that feature is enabled = 51.
-        // +9 launch when that feature is enabled; `launch` implies `subprocess`,
-        // so the launch build carries 45 + 6 + 9 = 60 tools.
+        // +10 launch when that feature is enabled; `launch` implies `subprocess`,
+        // so the launch build carries 45 + 6 + 10 = 61 tools.
         // The dispatch match arms in `dispatcher.rs` define the authoritative
         // count; this test pins parity between the registry and the dispatcher.
         let tools = tool_registry();
         let expected = if cfg!(feature = "launch") {
-            60
+            61
         } else if cfg!(feature = "subprocess") {
             51
         } else {

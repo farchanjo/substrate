@@ -67,11 +67,12 @@ fn new_correlation_id() -> uuid::Uuid {
     uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))
 }
 
-/// Returns the numeric JSON-RPC code for a [`LaunchError`] per ADR-0063..0068.
+/// Returns the numeric JSON-RPC code for a [`LaunchError`] per ADR-0063..0069.
 ///
-/// The launch BC reserves `-32044..-32056`; `InvalidProfile` reuses the base
-/// invalid-argument code (`-32009`) and `SpawnFailed` the internal code
-/// (`-32099`).
+/// The launch BC reserves `-32044..-32056` plus `-32058`
+/// (`StackNotTerminal`, added for `launch.forget`); `InvalidProfile` reuses
+/// the base invalid-argument code (`-32009`) and `SpawnFailed` the internal
+/// code (`-32099`).
 const fn launch_rpc_code(e: &LaunchError) -> i32 {
     match e {
         LaunchError::ProfileNotTrusted { .. } => -32044,
@@ -89,6 +90,7 @@ const fn launch_rpc_code(e: &LaunchError) -> i32 {
         LaunchError::ChildPidRecycled { .. } => -32056,
         LaunchError::InvalidProfile { .. } => -32009,
         LaunchError::SpawnFailed { .. } => -32099,
+        LaunchError::StackNotTerminal { .. } => -32058,
     }
 }
 
@@ -127,6 +129,11 @@ fn launch_err(e: &LaunchError) -> SubstrateError {
                 reason,
                 correlation_id,
             }
+        },
+        LaunchError::StackNotTerminal { .. } => SubstrateError::InvalidArgument {
+            offending_field: "stack_id".to_owned(),
+            reason,
+            correlation_id,
         },
         LaunchError::SupervisorUnreachable { .. }
         | LaunchError::OrphanReaped { .. }
@@ -547,6 +554,40 @@ pub(crate) async fn handle_launch_down(
     })
 }
 
+// ---- launch_forget ----------------------------------------------------------
+
+/// Request type for `launch_forget`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LaunchForgetRequest {
+    /// Stack id to remove from the registry; must already be in state `Down`.
+    stack_id: String,
+}
+
+/// Dispatches `launch_forget` — purge a terminal Stack's registry entry. See substrate skill.
+#[instrument(skip(port, args))]
+pub(crate) async fn handle_launch_forget(
+    args: Value,
+    port: Arc<dyn LaunchPort>,
+) -> SubstrateResult<DispatchedResponse> {
+    let req: LaunchForgetRequest = parse_args(args)?;
+    let stack_id = StackId::parse_crockford(&req.stack_id)?;
+    port.forget(&stack_id).await.map_err(|e| launch_err(&e))?;
+
+    let content = format!("launch.forget: stack {} removed from the registry.", req.stack_id);
+    let structured = json!({ "stack_id": req.stack_id });
+    let hints = substrate_domain::Hints {
+        next_action_suggested: Some("launch_status".to_owned()),
+        confirm_destructive: Some(true),
+        ..substrate_domain::Hints::default()
+    };
+    Ok(DispatchedResponse {
+        content,
+        structured_content: structured,
+        hints,
+    })
+}
+
 // ---- Unit tests -------------------------------------------------------------
 
 #[cfg(test)]
@@ -593,6 +634,13 @@ mod tests {
                 -32056,
             ),
             (LaunchError::InvalidProfile { msg: "m".to_owned() }, -32009),
+            (
+                LaunchError::StackNotTerminal {
+                    stack_id: "s".to_owned(),
+                    state: "Running".to_owned(),
+                },
+                -32058,
+            ),
         ];
         for (err, expected) in cases {
             assert_eq!(launch_rpc_code(&err), expected, "{}", err.code());
