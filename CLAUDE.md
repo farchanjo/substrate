@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `substrate` is a Model Context Protocol (MCP) server written in Rust 1.95 that exposes POSIX baseutils-equivalent OS management to LLM agents. Org: `com.archanjo`. Transport: STDIO only (no socket server, no HTTP/SSE). License: MIT/Apache-2.0 dual.
 
-**Current phase: active implementation** (16-crate Cargo workspace, v0.2.0). The spec under `docs/arch/` remains the source of truth — read it before changing code. Where spec and code contradict, the code is ground truth; raise a spec-correction PR alongside any code change.
+**Current phase: active implementation** (17-crate Cargo workspace, v0.2.0). The spec under `docs/arch/` remains the source of truth — read it before changing code. Where spec and code contradict, the code is ground truth; raise a spec-correction PR alongside any code change.
+
+**Target platforms**: macOS and Linux, both actively built/clippy'd/tested (verify commands: `cargo build --workspace --all-features`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace --all-features`). Linux has no local dev machine in this project's usual workflow — verify Linux-only (`#[cfg(target_os = "linux")]`) changes via Docker (`rust:1.95.0` image) on a remote host before assuming they compile; several such code paths (path jail via `openat2`, fs-index/fs-query statx-tier walkers, procfs-based process/system-info readers) went uncompiled on real Linux for a long time and had genuine bugs (API drift, `nix`/`libc` field-width divergence between platforms, an `openat2(2)` `RESOLVE_BENEATH` absolute-path bug) that only surfaced once actually exercised there. **Never remove a clippy-flagged "redundant" cast on one platform without checking the field's width on the other** — `nix::sys::stat::Mode`/`mode_t` is `u32` on Linux but `u16` on macOS/BSD; `nix::sys::statvfs::Statvfs::blocks_available()` is `u64` on Linux but `u32` on macOS/BSD. The established idiom for a genuine divergence is `#[cfg_attr(target_os = "linux", expect(clippy::..., reason = "..."))]`, never a bare removal.
 
 ## Spec workflow
 
@@ -35,9 +37,9 @@ docs/arch/
   architecture/workspace.dsl Structurizr DSL (C4 context + container views)
   cue.mod/module.cue         CUE module: com.archanjo/substrate
   domain/<bc>/README.md      Bounded-context narratives (10 BCs; launch implemented)
-  policies/*.rego            Open Policy Agent rules (16 policies)
-  schemas/*.cue              CUE schemas (13 files, all with DDD role headers)
-  specs/features/<area>/     Gherkin feature specs (98 features)
+  policies/*.rego            Open Policy Agent rules (17 policies)
+  schemas/*.cue              CUE schemas (14 files, all with DDD role headers)
+  specs/features/<area>/     Gherkin feature specs (155 features)
   glossary.md                Ubiquitous-language vocabulary
   README.md                  Architecture-spec entry point
   .specconfig.yml            Spec framework per-project config
@@ -56,9 +58,9 @@ Ten contexts, split by semantic family (not by binary name):
 7. **job** — job.list, job.result, job.cancel, job.status (async control-plane)
 8. **subprocess** — subprocess.spawn, subprocess.list, subprocess.result, subprocess.cancel, subprocess.signal, subprocess.search (ADR-0052)
 9. **network-info** — net.tcp_list, net.udp_list, net.tcp_stats, net.connection_count (ADR-0058)
-10. **launch** *(ADR-0063..0069; MVP implemented, detached supervisor is Milestone 2)* — declarative process orchestration over subprocess: launch.init/list/trust/up/status/logs/restart/reload/down, gated behind Cargo feature `launch`
+10. **launch** *(ADR-0063..0069; implemented including Milestone 2 detached supervisor, on both Linux and macOS)* — declarative process orchestration over subprocess: launch.init/list/trust/up/status/logs/restart/reload/down (9 tools), gated behind Cargo feature `launch` (default-off, implies `subprocess`)
 
-Tools are namespaced `<bc>.<verb>` (e.g., `fs.find`, `proc.signal`). Each BC maps to a Cargo crate under `crates/substrate-<bc>` (see ADR-0022). The `substrate-launch` crate (ADR-0063) is a workspace member, gated behind the default-off Cargo feature `launch`; its detached-supervisor mode (ADR-0068) is deferred to Milestone 2. The pure-domain shared kernel lives in `crates/substrate-domain` and MUST NOT import any infra crate (hexagonal layering enforced via `policies/hexagonal_layering.rego`).
+Tools are namespaced `<bc>.<verb>` (e.g., `fs.find`, `proc.signal`). Total `tools/list` count is 60 with the `launch` feature enabled (51 without). Each BC maps to a Cargo crate under `crates/substrate-<bc>` (see ADR-0022). The `substrate-launch` crate (ADR-0063) is a workspace member, gated behind the default-off Cargo feature `launch`. Its detached-supervisor mode (ADR-0068) is fully built: `LaunchRegistry::up` forks a `substrate --supervise <stack_id>` child on `on_client_disconnect = detach`, polls its durable `supervisor.json`, and a fresh MCP server reaps/re-attaches any Stack left behind by a prior session at startup. See ADR-0068's amendments for the three deliberate deviations from its literal design (tokio `select!` reactor instead of hand-rolled `mio`; poll-based child-exit instead of `pidfd`/`kqueue`; macOS pgid+reaper-on-boot instead of watchdog-pipe cooperation for arbitrary children). The pure-domain shared kernel lives in `crates/substrate-domain` and MUST NOT import any infra crate (hexagonal layering enforced via `policies/hexagonal_layering.rego`).
 
 ## Locked architectural decisions
 
@@ -67,7 +69,7 @@ When implementation begins, the following decisions are anchors — do not re-de
 - **Stack**: Rust 1.95 (edition 2024) pinned via `mise.toml`. rmcp 1.7.x with features `["server", "transport-io", "macros"]` (NO `transport-sse`, NO `transport-streamable-http`). tokio 1.4x multi-threaded work-stealing, NO `net` feature unless Cargo feature `outbound-net` is opted in. See ADR-0003, ADR-0006.
 - **Async zones**: A (async-native), B (sync I/O via `spawn_blocking`), C (CPU-bound via `spawn_blocking` + `Semaphore` sized to `num_cpus`). See ADR-0003.
 - **Transport**: STDIO only. `stdout` is sacred (JSON-RPC channel). `println!`/`print!` forbidden in `src/`. All logging to `stderr` via `tracing_subscriber::fmt().with_writer(std::io::stderr)`. See ADR-0005.
-- **Security (defense in depth)**: allowlist (TOML, default-deny) → path jail via `strict-path` + `openat2(RESOLVE_BENEATH|NO_SYMLINKS)` on Linux / `O_NOFOLLOW_ANY` on macOS → dry-run mandatory for mutations → elicitation form-mode for destructive ops (fs.remove, fs.rename, fs.set_permissions, proc.signal SIGKILL/SIGTERM/SIGSTOP, archive create/extract). See ADR-0004, ADR-0035.
+- **Security (defense in depth)**: allowlist (TOML, default-deny) → path jail via `strict-path` + `openat2(RESOLVE_BENEATH|NO_SYMLINKS)` on Linux / `O_NOFOLLOW_ANY` on macOS → dry-run mandatory for mutations → elicitation form-mode for destructive ops (fs.remove, fs.rename, fs.set_permissions, proc.signal SIGKILL/SIGTERM/SIGSTOP, archive create/extract). The Linux `openat2` jail resolves the requested path relative to the allowlist-root dirfd before the syscall (`RESOLVE_BENEATH` categorically rejects absolute pathnames per the kernel ABI); a lexical `..`-escape still reaches the kernel's own containment check. See ADR-0004, ADR-0035.
 - **Signal safety**: `signal(SIGPIPE, SIG_IGN)` at startup. blake3 mmap feature DISABLED to avoid SIGBUS on concurrent truncation. SIGTERM/SIGINT trigger graceful drain (`shutdown_drain_secs` default 5s). See ADR-0032.
 - **Cancellation**: `tokio-util` `CancellationToken` + `tokio::select! biased` with work as first arm. Use `Arc<Semaphore>::acquire_owned()` for permits; permits MUST live in async scope, never moved into `spawn_blocking` closures (because `panic = "abort"` per ADR-0014 prevents unwind-based RAII inside blocking closures). See ADR-0037.
 - **Transactional writes**: every disk-write tool uses `<target>.tmp.<uuid7>` + atomic rename + cleanup on cancel/error. `statvfs` preflight for disk-space guard. See ADR-0033.
@@ -97,6 +99,7 @@ crates/
   substrate-jobs                adapter for job control-plane BC
   substrate-subprocess          adapter for subprocess BC (ADR-0052)
   substrate-network-info        adapter for network-info BC (ADR-0058)
+  substrate-launch              adapter for launch orchestration BC (ADR-0063..0069), feature-gated
   substrate-mcp-server          binary (composition root, rmcp wiring)
 ```
 
@@ -117,6 +120,8 @@ When picking up this repo cold, read in this order:
 
 For implementation work later: read the ADRs cross-referenced from the relevant BC README, then the matching CUE schemas under `docs/arch/schemas/`, then the matching Gherkin features under `docs/arch/specs/features/<bc>/`.
 
+For the launch BC specifically, ADR-0063 (bounded context), ADR-0064 (profile trust model), ADR-0065 (dependency graph + reconciler/reload), ADR-0066 (event stream), ADR-0067 (concurrency/messaging topology), ADR-0068 (detached supervisor + orphan governance), and ADR-0069 (tool cards + ToolSearch discoverability) form one connected design — read them together, in that order.
+
 ## Spec conventions (enforced by linters)
 
 - All artifacts en-US. Spec markdown uses CommonMark + Mermaid diagrams (per ADR-0047). GFM tables, emojis, and task lists remain disallowed in spec markdown. Mermaid is MANDATORY where a diagram aids comprehension (flowchart, sequence, state, ER, class, gantt, pie, gitGraph, mindmap, timeline, C4). ASCII art is retained only when Mermaid cannot render the intended shape.
@@ -130,10 +135,10 @@ For implementation work later: read the ADRs cross-referenced from the relevant 
 
 ## Commit / branch conventions
 
-- Angular format: `<type>(<scope>): <subject>` where types are `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`, `style`, `security`. Scopes match crate names (`fs-query`, `process`, `mcp-server`, etc.) or `adr` for ADR-only changes. See ADR-0024.
+- Angular format: `<type>(<scope>): <subject>` where types are `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `perf`, `style`, `security`. Scopes match crate names (`fs-query`, `process`, `mcp-server`, `launch`, etc.) or `adr` for ADR-only changes. See ADR-0024.
 - Small contextual commits — never bulk "various changes".
 - Branch naming: `feat/<scope>-<short-desc>`, `fix/<scope>-<short-desc>`, `chore/<short-desc>`.
-- DCO sign-off required (`Signed-off-by:` trailer). No CLA.
+- DCO sign-off required (`Signed-off-by:` trailer, `git commit -s`). No CLA.
 
 ## Implementation guidance
 
@@ -143,9 +148,9 @@ The workspace is bootstrapped and active. When adding a new BC or adapter, the r
 
 1. Confirm the relevant BC ADR and CUE schema are up-to-date with the code before changing anything.
 2. Work in `substrate-domain` for new port traits / value objects / error codes. Round-trip with `schemas/*.cue` definitions.
-3. Work in `substrate-policy` for allowlist / path jail changes. Test against `specs/features/filesystem-query/fs-find-path-traversal-blocked.feature` and ADR-0035 scenarios.
+3. Work in `substrate-policy` for allowlist / path jail changes. Test against `specs/features/filesystem-query/fs-find-path-traversal-blocked.feature` and ADR-0035 scenarios. Path-jail changes are security-critical — read the full existing implementation for the platform(s) you touch before editing, and verify both the macOS (`ONoFollowAnyJail`) and Linux (`Openat2Jail`) tiers stay behaviorally consistent (same absolute-path calling convention, same NFC-normalized containment check).
 4. Adjust `substrate-config` (figment + TOML, `deny_unknown_fields`, allowlist canonicalization at startup) for any new configuration surface.
-5. Implement adapter changes BC-by-BC. For each adapter, validate against corresponding Gherkin features (executable via `cucumber-rs` in `crates/substrate-mcp-server/tests/`).
+5. Implement adapter changes BC-by-BC. For each adapter, validate against corresponding Gherkin features (executable via `cucumber-rs` in `crates/substrate-mcp-server/tests/`). Note: the cucumber suite has a known, pre-existing gap of undefined step definitions for some `text.head`/`text.tail` and other scenarios (steps referenced in `.feature` files with no matching `#[given]`/`#[when]`/`#[then]` regex) — this is a step-coverage gap from the project's spec-first workflow, not a regression signal; don't assume every cucumber failure is your change's fault, but don't silently paper over new ones either.
 6. Wire `substrate-mcp-server` composition root for any new service surface (rmcp service, signal handlers per ADR-0032, capability negotiation per ADR-0013).
 
 Every adapter implementation must obey async-zone classification (A/B/C) declared in ADR-0003 and the cancellation patterns in ADR-0037. Use `criterion` benchmarks per ADR-0030 to verify performance budgets; CI fails on >15% regression.
