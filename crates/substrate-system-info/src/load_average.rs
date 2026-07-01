@@ -67,11 +67,11 @@ fn read_load_average() -> SubstrateResult<LoadAverage> {
             correlation_id: None,
         }
     })?;
-    let (load_1, load_5, load_15) = info.load_average();
+    let (one_min, five_min, fifteen_min) = info.load_average();
     Ok(LoadAverage {
-        load_1,
-        load_5,
-        load_15,
+        load_1: one_min,
+        load_5: five_min,
+        load_15: fifteen_min,
     })
 }
 

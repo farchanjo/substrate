@@ -16,7 +16,7 @@
 //!
 //! # Platform strategy
 //!
-//! - **Linux (Tier 1)**: logical cores via `nix::unistd::sysconf(NPROCESSORS_ONLN)`;
+//! - **Linux (Tier 1)**: logical cores via `nix::unistd::sysconf(_NPROCESSORS_ONLN)`;
 //!   physical cores from `/proc/cpuinfo` `cpu cores` field; per-core load via
 //!   `/proc/stat` delta; frequency via `/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq`;
 //!   temperature via `/sys/class/thermal/thermal_zone0/temp` when present.
@@ -164,10 +164,10 @@ fn parse_proc_stat() -> SubstrateResult<(Vec<u64>, Vec<u64>)> {
     Ok((user_nice_sys, total))
 }
 
-/// Reads logical core count via `nix::unistd::sysconf(NPROCESSORS_ONLN)`.
+/// Reads logical core count via `nix::unistd::sysconf(_NPROCESSORS_ONLN)`.
 #[cfg(target_os = "linux")]
 fn linux_logical_cores() -> u32 {
-    nix::unistd::sysconf(nix::unistd::SysconfVar::NPROCESSORS_ONLN)
+    nix::unistd::sysconf(nix::unistd::SysconfVar::_NPROCESSORS_ONLN)
         .ok()
         .flatten()
         .and_then(|n| u32::try_from(n).ok())
@@ -235,8 +235,9 @@ pub(crate) fn read_cpu_linux(
     let (user_nice_sys, total) = parse_proc_stat()?;
     let now = Instant::now();
 
-    let per_core_load = prev
-        .map(|p| {
+    let per_core_load = prev.map_or_else(
+        || vec![0.0_f32; user_nice_sys.len()],
+        |p| {
             user_nice_sys
                 .iter()
                 .zip(total.iter())
@@ -249,15 +250,17 @@ pub(crate) fn read_cpu_linux(
                     } else {
                         #[expect(
                             clippy::cast_precision_loss,
-                            reason = "tick counts fit in f64 mantissa at any realistic core count"
+                            clippy::cast_possible_truncation,
+                            reason = "tick counts fit in f64 mantissa at any realistic core count; \
+                                      result is clamped to 0.0..=100.0 so f32 truncation is inconsequential"
                         )]
                         let pct = (delta_busy as f64 / delta_total as f64 * 100.0) as f32;
                         pct.clamp(0.0, 100.0)
                     }
                 })
                 .collect::<Vec<f32>>()
-        })
-        .unwrap_or_else(|| vec![0.0_f32; user_nice_sys.len()]);
+        },
+    );
 
     let snapshot = CpuSnapshot {
         user_nice_sys,

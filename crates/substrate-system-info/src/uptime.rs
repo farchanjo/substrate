@@ -72,6 +72,7 @@ pub(crate) fn read_uptime_secs_pub() -> SubstrateResult<u64> {
 
 #[cfg(target_os = "linux")]
 fn read_uptime_secs() -> SubstrateResult<u64> {
+    use procfs::Current;
     use procfs::Uptime as ProcUptime;
     let up =
         ProcUptime::current().map_err(|e| substrate_domain::SubstrateError::InternalError {

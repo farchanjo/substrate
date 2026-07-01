@@ -112,9 +112,8 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
             continue;
         }
         let mount_path = entry.mount_point.to_string_lossy().into_owned();
-        let stat = match nix::sys::statvfs::statvfs(entry.mount_point.as_path()) {
-            Ok(s) => s,
-            Err(_) => continue, // skip unmountable or inaccessible entries
+        let Ok(stat) = nix::sys::statvfs::statvfs(entry.mount_point.as_path()) else {
+            continue; // skip unmountable or inaccessible entries
         };
         let block_size = stat.block_size();
         let total_bytes = stat.blocks() * block_size;
