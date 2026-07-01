@@ -240,3 +240,19 @@ out of scope for this ADR (see "Out of scope" below).
 - macOS codesign reference:
   <https://developer.apple.com/library/archive/technotes/tn2206/_index.html>
 - just task runner: <https://github.com/casey/just>
+
+## Amendments
+
+### 2026-06-30 — Install targets moved from justfile to Makefile
+
+`install`, `uninstall`, and `verify-install` are now `make` targets (root
+`Makefile`) instead of `just` targets; `just install` no longer exists. The
+exact shell logic (build, `uname -s` branch, codesign source + destination on
+macOS, plain `install(1)` on Linux, `SUBSTRATE_SIGN_IDENTITY` fallback to `-`)
+is unchanged — only the runner changed. Rationale: `make` has no external
+dependency (ships with Xcode CLT on macOS and virtually every Linux distro),
+whereas `just` requires a separate one-line install; narrowing the install
+path's own toolchain dependency to something already present lowers the
+bar for a first-time operator. The remaining developer-workflow recipes
+(`build`, `test`, `clippy`, `ci*`, `spec-validate`, `lint-mermaid`) stay in
+the `justfile`, which is unaffected by this amendment.

@@ -38,23 +38,8 @@ spec-validate:
 lint-mermaid:
     ./scripts/lint-mermaid.sh --keep-going
 
-# Install to /usr/local/bin with codesign on macOS, plain install on Linux.
-# Per ADR-0045 -- signs source AND destination on macOS. Set
-# SUBSTRATE_SIGN_IDENTITY to a Developer ID for Gatekeeper-trusted builds;
-# defaults to ad-hoc ("-") which is local-only.
-install: build-release
-    @if [ "$(uname -s)" = "Darwin" ]; then just _install-macos; else just _install-linux; fi
-
-_install-macos: build-release
-    codesign --options runtime --timestamp -f -s "${SUBSTRATE_SIGN_IDENTITY:--}" target/release/substrate
-    sudo install -m 0755 target/release/substrate /usr/local/bin/substrate
-    sudo codesign --options runtime --timestamp -f -s "${SUBSTRATE_SIGN_IDENTITY:--}" /usr/local/bin/substrate
-    codesign --verify --strict /usr/local/bin/substrate
-    @echo "installed and signed at /usr/local/bin/substrate"
-
-_install-linux: build-release
-    sudo install -m 0755 target/release/substrate /usr/local/bin/substrate
-    @echo "installed at /usr/local/bin/substrate"
+# Install / uninstall / verify-install moved to the Makefile (`make install`,
+# `make uninstall`, `make verify-install`) -- see ADR-0045 amendment.
 
 # ---------------------------------------------------------------------------
 # CI mirror recipes — reproduce each CI gate locally.
@@ -118,18 +103,3 @@ ci-shear:
 ci: ci-fmt ci-clippy ci-nextest ci-nextest-subprocess ci-deny ci-audit ci-semver ci-coverage ci-bench ci-spec ci-mermaid ci-typos ci-shear
 
 # ---------------------------------------------------------------------------
-
-# Uninstall from /usr/local/bin.
-uninstall:
-    sudo rm -f /usr/local/bin/substrate
-    @echo "removed /usr/local/bin/substrate"
-
-# Inspect the installed binary's signature (macOS only).
-verify-install:
-    @if [ "$(uname -s)" = "Darwin" ]; then \
-        codesign --display --verbose=4 /usr/local/bin/substrate; \
-        codesign --verify --strict /usr/local/bin/substrate; \
-    else \
-        file /usr/local/bin/substrate; \
-        /usr/local/bin/substrate --help 2>/dev/null || true; \
-    fi
