@@ -3,21 +3,23 @@
 # the workflow is mirrored here too so `make` alone covers everything the
 # justfile does. Run `make help` to list targets.
 
-.PHONY: help build build-release test lint fmt-check spec-validate lint-mermaid \
-	install uninstall verify-install _install-macos _install-linux \
+.PHONY: help build build-release build-release-launch test lint fmt-check spec-validate lint-mermaid \
+	install install-launch uninstall verify-install _install-macos _install-linux \
 	ci ci-fmt ci-lint ci-test ci-test-subprocess ci-deny ci-audit ci-semver \
 	ci-coverage ci-bench ci-spec ci-mermaid ci-typos ci-shear
 
 help:
-	@echo "make build           - build everything (workspace, all targets) in dev profile"
-	@echo "make build-release   - build the optimised release binary"
-	@echo "make test            - run all unit + integration tests"
-	@echo "make lint            - clippy gate at -D warnings"
-	@echo "make fmt-check       - rustfmt check"
-	@echo "make spec-validate   - spec validate --lane full"
-	@echo "make lint-mermaid    - validate every Mermaid block in every .md"
-	@echo "make install         - build + install to /usr/local/bin (codesign on macOS)"
-	@echo "make uninstall       - remove /usr/local/bin/substrate"
+	@echo "make build             - build everything (workspace, all targets) in dev profile"
+	@echo "make build-release     - build the optimised release binary (subprocess feature)"
+	@echo "make build-release-launch - same, plus the launch orchestration BC (60-tool surface)"
+	@echo "make test              - run all unit + integration tests"
+	@echo "make lint              - clippy gate at -D warnings"
+	@echo "make fmt-check         - rustfmt check"
+	@echo "make spec-validate     - spec validate --lane full"
+	@echo "make lint-mermaid      - validate every Mermaid block in every .md"
+	@echo "make install           - build + install to /usr/local/bin (codesign on macOS)"
+	@echo "make install-launch    - same, with the launch feature (launch.* tools)"
+	@echo "make uninstall         - remove /usr/local/bin/substrate"
 	@echo "make verify-install  - inspect the installed binary"
 	@echo "make ci              - run all CI gate mirrors sequentially"
 	@echo "make ci-<gate>       - run a single CI gate mirror (fmt/lint/test/test-subprocess/deny/audit/semver/coverage/bench/spec/mermaid/typos/shear)"
@@ -63,11 +65,29 @@ lint-mermaid:
 build-release:
 	cargo build --workspace --release --bin substrate --features substrate-mcp-server/subprocess
 
+# Same as build-release, plus the launch orchestration BC (launch.init/list/
+# trust/up/status/logs/restart/reload/down, 9 tools). `launch` implies
+# `subprocess` (see substrate-mcp-server/Cargo.toml), so this is the full
+# 60-tool surface. Default-off in build-release because launch is an opt-in
+# feature, not because it's incomplete.
+build-release-launch:
+	cargo build --workspace --release --bin substrate --features substrate-mcp-server/launch
+
 # Install to /usr/local/bin with codesign on macOS, plain install on Linux.
 # Signs source AND destination on macOS (ADR-0045 "Signing rationale").
 # SUBSTRATE_SIGN_IDENTITY selects the codesign identity; defaults to the
 # ad-hoc identity ("-"), which is local-only and not Gatekeeper-trusted.
 install: build-release
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		$(MAKE) _install-macos; \
+	else \
+		$(MAKE) _install-linux; \
+	fi
+
+# Same as install, but with the launch feature built in (see
+# build-release-launch). Use this if your MCP client config expects
+# launch.* tools to be present.
+install-launch: build-release-launch
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		$(MAKE) _install-macos; \
 	else \
