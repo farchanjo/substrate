@@ -48,7 +48,17 @@ fn check_disk_space_sync(path: &Path, required_bytes: u64) -> SubstrateResult<()
         correlation_id: None,
     })?;
 
-    let available: u64 = stat.blocks_available() * stat.block_size();
+    // Statvfs::blocks_available() is u64 on Linux but u32 on macOS/BSD;
+    // u64::from() is a no-op identity conversion on Linux (hence the
+    // cfg_attr-scoped expect) but a required widening cast on macOS.
+    #[cfg_attr(
+        target_os = "linux",
+        expect(
+            clippy::useless_conversion,
+            reason = "blocks_available() is already u64 on Linux; u32 on macOS/BSD needs widening"
+        )
+    )]
+    let available: u64 = u64::from(stat.blocks_available()) * stat.block_size();
     let needed = required_bytes.saturating_add(FREE_SPACE_CUSHION_BYTES);
 
     if available < needed {
