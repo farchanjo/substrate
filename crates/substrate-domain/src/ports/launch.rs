@@ -168,6 +168,19 @@ pub trait LaunchPort: Send + Sync {
         stack_id: &StackId,
         cancel: &dyn CancelSignal,
     ) -> Result<StackState, LaunchError>;
+
+    /// Removes a terminal (`Down`) Stack's bookkeeping entry from the registry.
+    ///
+    /// Purely an in-memory/local housekeeping operation: no process is
+    /// signalled (the Stack is already fully torn down by [`Self::down`]).
+    /// Frees `launch.status`/`launch.logs` from listing Stacks the operator no
+    /// longer cares about, without requiring an MCP server restart.
+    ///
+    /// # Errors
+    ///
+    /// - [`LaunchError::SupervisorUnreachable`] — no Stack with that id is known.
+    /// - [`LaunchError::StackNotTerminal`] — the Stack's state is not `Down`.
+    async fn forget(&self, stack_id: &StackId) -> Result<(), LaunchError>;
 }
 
 /// Convenience alias for a boxed trait object of [`LaunchPort`].

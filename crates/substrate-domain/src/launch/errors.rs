@@ -157,6 +157,17 @@ pub enum LaunchError {
         #[source]
         source: io::Error,
     },
+
+    /// `launch.forget` was called on a Stack whose state is not `Down`.
+    ///
+    /// Stable code: `SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL` (-32058).
+    #[error("Stack '{stack_id}' is not terminal (state: {state}); run launch.down first")]
+    StackNotTerminal {
+        /// The Stack id that is not yet terminal.
+        stack_id: String,
+        /// The Stack's current (non-terminal) state.
+        state: String,
+    },
 }
 
 impl LaunchError {
@@ -182,6 +193,7 @@ impl LaunchError {
             Self::ChildPidRecycled { .. } => "SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED",
             Self::InvalidProfile { .. } => "SUBSTRATE_INVALID_ARGUMENT",
             Self::SpawnFailed { .. } => "SUBSTRATE_LAUNCH_SPAWN_FAILED",
+            Self::StackNotTerminal { .. } => "SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL",
         }
     }
 
@@ -238,6 +250,9 @@ impl LaunchError {
             Self::SpawnFailed { .. } => {
                 "The launch supervisor could not spawn a service via the subprocess port; verify the binary exists and is in the allowlist."
             },
+            Self::StackNotTerminal { .. } => {
+                "Run launch.down on this stack_id first; launch.forget only removes stacks whose state is already Down."
+            },
         }
     }
 }
@@ -268,6 +283,10 @@ mod tests {
             LaunchError::InvalidProfile { msg: "m".to_owned() },
             LaunchError::SpawnFailed {
                 source: io::Error::new(io::ErrorKind::NotFound, "x"),
+            },
+            LaunchError::StackNotTerminal {
+                stack_id: "s".to_owned(),
+                state: "Running".to_owned(),
             },
         ]
     }
@@ -339,6 +358,13 @@ mod tests {
                     source: io::Error::new(io::ErrorKind::NotFound, "x"),
                 },
                 "SUBSTRATE_LAUNCH_SPAWN_FAILED",
+            ),
+            (
+                LaunchError::StackNotTerminal {
+                    stack_id: "s".to_owned(),
+                    state: "Running".to_owned(),
+                },
+                "SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL",
             ),
         ];
         for (err, expected) in pairs {
