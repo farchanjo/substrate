@@ -281,9 +281,19 @@ fn host_supports_tier1_jail() -> bool {
     {
         // Attempt a no-op openat2 call (empty path, flags=0, resolve=0).
         // EINVAL or ENOENT means the syscall exists; ENOSYS means it does not.
+        // `libc::open_how` is `#[non_exhaustive]`, so it cannot be built with a
+        // struct literal from outside the `libc` crate. Mirror the local ABI
+        // struct already used by `substrate_policy::linux::probe_openat2_available`.
+        #[repr(C)]
+        struct OpenHow {
+            flags: u64,
+            mode: u64,
+            resolve: u64,
+        }
+
         use std::ffi::CString;
         let path = CString::new("/proc/self").expect("CString");
-        let how = libc::open_how {
+        let how = OpenHow {
             flags: libc::O_PATH as u64,
             mode: 0,
             resolve: 0,
@@ -293,8 +303,8 @@ fn host_supports_tier1_jail() -> bool {
                 libc::SYS_openat2,
                 libc::AT_FDCWD,
                 path.as_ptr(),
-                &how as *const libc::open_how,
-                std::mem::size_of::<libc::open_how>() as libc::size_t,
+                &raw const how,
+                std::mem::size_of::<OpenHow>() as libc::size_t,
             )
         };
         let err = if ret < 0 {
@@ -304,7 +314,12 @@ fn host_supports_tier1_jail() -> bool {
         };
         // ENOSYS == syscall not available; anything else means it is present.
         if ret >= 0 {
-            unsafe { libc::close(ret as libc::c_int) };
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "fd values are always small non-negative numbers well within i32 range"
+            )]
+            let fd = ret as libc::c_int;
+            unsafe { libc::close(fd) };
         }
         err != libc::ENOSYS
     }
