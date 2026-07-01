@@ -190,12 +190,19 @@ fn apply_chmod(path: &Path, mode: u32) -> SubstrateResult<()> {
     use nix::fcntl::AT_FDCWD;
     use nix::sys::stat::{FchmodatFlags, Mode, fchmodat};
 
-    // nix::sys::stat::Mode uses u16 internally (matching st_mode lower 12 bits).
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "Unix chmod mode is a 12-bit value (octal 0000–7777); the upper 20 bits of u32 are never set by callers"
+    // nix::sys::stat::Mode wraps libc::mode_t, which is u32 on Linux but u16 on
+    // macOS/BSD -- `as _` infers the correct width per platform instead of
+    // hardcoding one. Callers only ever set the low 12 bits (octal 0000-7777),
+    // so no truncation occurs on either platform even where the cast narrows.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::cast_possible_truncation,
+            reason = "u32 -> u16 on macOS/BSD; Unix chmod mode is a 12-bit value, \
+                      the upper bits are never set by callers"
+        )
     )]
-    let nix_mode = Mode::from_bits_truncate(mode as u16);
+    let nix_mode = Mode::from_bits_truncate(mode as _);
     fchmodat(AT_FDCWD, path, nix_mode, FchmodatFlags::FollowSymlink).map_err(|_e| {
         SubstrateError::PermissionDenied {
             path: path.display().to_string(),
