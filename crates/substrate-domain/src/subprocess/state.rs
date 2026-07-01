@@ -75,11 +75,18 @@ impl SubprocessState {
     ///
     /// Valid edges per ADR-0052 and ADR-0056:
     /// - `Pending` -> `Starting | Cancelled`
-    /// - `Starting` -> `Running | Failed | Cancelled`
+    /// - `Starting` -> `Running | Ready | Failed | Cancelled`
     /// - `Running` -> `Ready | Succeeded | Failed | Cancelled | Killed | TimedOut`
     /// - `Ready` -> `Restarting | Succeeded | Failed | Cancelled | Killed | TimedOut`
     /// - `Restarting` -> `Starting | Cancelled`
     /// - Terminal -> (nothing; all transitions return `false`)
+    ///
+    /// The `Starting -> Ready` edge lets a supervised child gated by a `HealthProbe`
+    /// go straight from `Starting` to `Ready` when the first probe passes, without
+    /// transiting `Running` — so a readiness consumer (the launch BC) never observes
+    /// a probe-gated child as `Running` (which it treats as "ready"). This matches the
+    /// ADR-0056 prose ("first successful probe -> state transitions to Ready") that the
+    /// original matrix omitted.
     ///
     /// Callers that receive `false` MUST treat the attempted transition as a no-op.
     /// No panic is raised; this is intentional (State pattern per `GoF`).
@@ -92,7 +99,7 @@ impl SubprocessState {
                 Self::Starting | Self::Cancelled
             ) | (
                 Self::Starting,
-                Self::Running | Self::Failed | Self::Cancelled
+                Self::Running | Self::Ready | Self::Failed | Self::Cancelled
             ) | (
                 Self::Running,
                 Self::Ready
@@ -161,6 +168,9 @@ mod tests {
         assert!(SubprocessState::Pending.can_transition_to(SubprocessState::Cancelled));
         // Starting edges.
         assert!(SubprocessState::Starting.can_transition_to(SubprocessState::Running));
+        // Probe-gated fast path: Starting -> Ready directly on first probe success
+        // (ADR-0056), so a readiness consumer never sees the child as Running.
+        assert!(SubprocessState::Starting.can_transition_to(SubprocessState::Ready));
         assert!(SubprocessState::Starting.can_transition_to(SubprocessState::Failed));
         assert!(SubprocessState::Starting.can_transition_to(SubprocessState::Cancelled));
         // Running edges.
