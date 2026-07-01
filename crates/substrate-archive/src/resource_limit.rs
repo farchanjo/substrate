@@ -67,7 +67,7 @@ fn check_disk_space_sync(path: &Path, required_bytes: u64) -> SubstrateResult<()
         correlation_id: Some(uuid::Uuid::now_v7()),
     })?;
 
-    let available: u64 = u64::from(stat.blocks_available()) * stat.block_size();
+    let available: u64 = stat.blocks_available() * stat.block_size();
     let needed = required_bytes.saturating_add(FREE_SPACE_CUSHION_BYTES);
 
     if available < needed {
