@@ -56,6 +56,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use procfs::WithCurrentSystemInfo;
 use procfs::process::{Process, all_processes};
 use tracing::warn;
 
@@ -109,7 +110,14 @@ fn read_boot_time_unix() -> Result<u64, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("SystemTime before UNIX_EPOCH: {e}"))?
         .as_secs();
-    Ok(now_secs.saturating_sub(uptime_secs.floor() as u64))
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "/proc/uptime is always non-negative; floor() before the cast leaves no \
+                  fractional part, and system uptime never approaches u64::MAX seconds"
+    )]
+    let uptime_secs_floor = uptime_secs.floor() as u64;
+    Ok(now_secs.saturating_sub(uptime_secs_floor))
 }
 
 /// Returns the clock-tick frequency (`CLK_TCK`) in ticks per second, cached
@@ -119,10 +127,7 @@ fn read_boot_time_unix() -> Result<u64, String> {
 /// `sysconf(2)` internally. Guaranteed to return at least 1 to avoid
 /// divide-by-zero if the kernel returns an unexpected value.
 fn clk_tck() -> u64 {
-    *CLK_TCK.get_or_init(|| {
-        let hz = procfs::ticks_per_second();
-        u64::try_from(hz).unwrap_or(100).max(1)
-    })
+    *CLK_TCK.get_or_init(|| procfs::ticks_per_second().max(1))
 }
 
 /// Converts a `starttime` field (ticks since boot) from `/proc/<pid>/stat` to
@@ -231,18 +236,16 @@ impl LinuxProcessScanner {
         let now = Instant::now();
         let mut new_sample: HashMap<u32, TickSnapshot> = HashMap::new();
 
-        for entry in all {
-            if let Ok(proc) = entry {
-                if let Ok(stat) = proc.stat() {
-                    let current_ticks = stat.utime.saturating_add(stat.stime);
-                    new_sample.insert(
-                        proc.pid() as u32,
-                        TickSnapshot {
-                            ticks: current_ticks,
-                            at: now,
-                        },
-                    );
-                }
+        for proc in all.flatten() {
+            if let Ok(stat) = proc.stat() {
+                let current_ticks = stat.utime.saturating_add(stat.stime);
+                new_sample.insert(
+                    proc.pid().cast_unsigned(),
+                    TickSnapshot {
+                        ticks: current_ticks,
+                        at: now,
+                    },
+                );
             }
         }
 
@@ -251,6 +254,7 @@ impl LinuxProcessScanner {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = new_sample;
+        drop(guard);
         Ok(())
     }
 }
@@ -284,7 +288,7 @@ fn read_process(
         .map(|args| args.join(" "))
         .unwrap_or_default();
 
-    let rss_kb = stat.rss_bytes().ok().map(|b| b / 1024).unwrap_or(0) as u64;
+    let rss_kb = stat.rss_bytes().get() / 1024;
     let vm_kb = stat.vsize / 1024;
 
     // Convert starttime (jiffies since boot) to Unix epoch seconds.
@@ -306,17 +310,26 @@ fn read_process(
         if wall_secs < f32::EPSILON {
             0.0
         } else {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "clock-tick rates and per-scan tick deltas fit in f32 mantissa \
+                          at any realistic uptime/CPU-count; result is clamped below"
+            )]
             let tick_hz = procfs::ticks_per_second() as f32;
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "tick delta between two consecutive scans fits in f32 mantissa"
+            )]
             let tick_delta = current_ticks.saturating_sub(p.ticks) as f32;
             // Clamp to [0, 100 * num_cpus] to guard against spurious spikes.
             (tick_delta / tick_hz / wall_secs * 100.0).clamp(0.0, 100.0 * num_cpus)
         }
     });
 
-    let pid = proc.pid() as u32;
+    let pid = proc.pid().cast_unsigned();
     let info = ProcessInfo {
         pid,
-        ppid: stat.ppid as u32,
+        ppid: stat.ppid.cast_unsigned(),
         name: stat.comm.clone(),
         command,
         uid: status.ruid,
@@ -367,8 +380,15 @@ impl ProcessScannerPort for LinuxProcessScanner {
         let now = Instant::now();
         // Logical CPU count; capped at 1 as a minimum to avoid divide-by-zero.
         let num_cpus = std::thread::available_parallelism()
-            .map(|n| n.get() as f32)
-            .unwrap_or(1.0)
+            .map_or(1.0_f32, |n| {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "logical core count is realistically well under 2^24; \
+                              f32 precision loss is inconsequential"
+                )]
+                let cores = n.get() as f32;
+                cores
+            })
             .max(1.0);
 
         // Take a snapshot of the previous sample under lock, then release
@@ -387,7 +407,7 @@ impl ProcessScannerPort for LinuxProcessScanner {
         for entry in all {
             match entry {
                 Ok(proc) => {
-                    let pid = proc.pid() as u32;
+                    let pid = proc.pid().cast_unsigned();
                     let prev = prev_sample.get(&pid).copied();
                     if let Some((info, snap)) = read_process(&proc, prev, now, num_cpus) {
                         new_sample.insert(pid, snap);
@@ -409,16 +429,24 @@ impl ProcessScannerPort for LinuxProcessScanner {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = new_sample;
+        drop(guard);
 
         Ok(result)
     }
 }
 
 #[cfg(all(test, target_os = "linux"))]
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::cast_possible_wrap,
+    reason = "test module — panics and unwraps on assertion failure are the intended behavior"
+)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{BOOT_TIME_UNIX, CLK_TCK, boot_time_unix, clk_tck, starttime_to_unix};
+    use super::{boot_time_unix, clk_tck, starttime_to_unix};
     use crate::scanner::ProcessScannerPort;
     use crate::scanner::linux::LinuxProcessScanner;
 
@@ -502,7 +530,7 @@ mod tests {
         // The test process was started at most 60 seconds ago (generous for CI).
         let delta = now_secs - start_time;
         assert!(
-            delta >= 0 && delta <= 60,
+            (0..=60).contains(&delta),
             "start_time_unix delta from now should be 0..=60 s; got {delta} s \
              (start={start_time}, now={now_secs})"
         );

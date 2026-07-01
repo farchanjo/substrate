@@ -218,9 +218,10 @@ pub fn new_pid_cpu_cache() -> SharedPidCpuCache {
 /// process exited between the call and the read).
 #[cfg(target_os = "linux")]
 pub(crate) fn read_stats_linux(pid: u32, cache: &mut PidCpuCache) -> SubstrateResult<ProcessStats> {
+    use procfs::WithCurrentSystemInfo;
     use procfs::process::Process;
 
-    let proc = Process::new(pid as i32).map_err(|e| {
+    let proc = Process::new(pid.cast_signed()).map_err(|e| {
         substrate_domain::SubstrateError::NotFound {
             resource: format!("process {pid}"),
             correlation_id: None,
@@ -241,9 +242,9 @@ pub(crate) fn read_stats_linux(pid: u32, cache: &mut PidCpuCache) -> SubstrateRe
             correlation_id: None,
         })?;
 
-    let rss_bytes = stat.rss_bytes().unwrap_or(0).max(0) as u64;
+    let rss_bytes = stat.rss_bytes().get();
     let virt_bytes = stat.vsize;
-    let threads = stat.num_threads.max(0) as u32;
+    let threads = u32::try_from(stat.num_threads.max(0)).unwrap_or(u32::MAX);
     let uid = status.ruid;
     let command = stat.comm.clone();
     let state = crate::stats::ProcessState::from_linux_char(stat.state);
@@ -298,9 +299,8 @@ fn linux_starttime_to_unix(starttime: u64) -> u64 {
 
 #[cfg(target_os = "linux")]
 fn read_boot_time_linux() -> u64 {
-    let content = match std::fs::read_to_string("/proc/uptime") {
-        Ok(s) => s,
-        Err(_) => return 0,
+    let Ok(content) = std::fs::read_to_string("/proc/uptime") else {
+        return 0;
     };
     let uptime_secs: f64 = content
         .split_whitespace()
@@ -309,9 +309,15 @@ fn read_boot_time_linux() -> u64 {
         .unwrap_or(0.0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    now.saturating_sub(uptime_secs.floor() as u64)
+        .map_or(0, |d| d.as_secs());
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "/proc/uptime is always non-negative; floor() before the cast leaves no \
+                  fractional part, and system uptime never approaches u64::MAX seconds"
+    )]
+    let uptime_secs_floor = uptime_secs.floor() as u64;
+    now.saturating_sub(uptime_secs_floor)
 }
 
 /// Counts open file descriptors by listing `/proc/<pid>/fd`.
@@ -319,7 +325,9 @@ fn read_boot_time_linux() -> u64 {
 #[cfg(target_os = "linux")]
 fn count_fd_linux(pid: u32) -> Option<u32> {
     let path = format!("/proc/{pid}/fd");
-    std::fs::read_dir(&path).ok().map(|dir| dir.count() as u32)
+    std::fs::read_dir(&path)
+        .ok()
+        .and_then(|dir| u32::try_from(dir.count()).ok())
 }
 
 /// Computes CPU% from current and previous Linux tick counters.
@@ -330,15 +338,27 @@ fn compute_linux_cpu_pct(current_ticks: u64, prev: Option<&PidCpuEntry>) -> f32 
     if wall_secs < f32::EPSILON {
         return 0.0;
     }
-    let tick_hz = procfs::ticks_per_second() as f32;
-    let tick_delta = current_ticks.saturating_sub(p.cpu_units) as f32;
     #[expect(
         clippy::cast_precision_loss,
-        reason = "tick counts at reasonable values fit in f32 for display"
+        reason = "clock-tick rates and per-scan tick deltas fit in f32 mantissa \
+                  at any realistic uptime/CPU-count; result is clamped below"
     )]
+    let tick_hz = procfs::ticks_per_second() as f32;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "tick delta between two consecutive scans fits in f32 mantissa"
+    )]
+    let tick_delta = current_ticks.saturating_sub(p.cpu_units) as f32;
     let num_cpus = std::thread::available_parallelism()
-        .map(|n| n.get() as f32)
-        .unwrap_or(1.0)
+        .map_or(1.0_f32, |n| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "logical core count is realistically well under 2^24; \
+                          f32 precision loss is inconsequential"
+            )]
+            let cores = n.get() as f32;
+            cores
+        })
         .max(1.0);
     (tick_delta / tick_hz / wall_secs * 100.0).clamp(0.0, 100.0 * num_cpus)
 }
@@ -354,13 +374,11 @@ impl IntoNotFoundOrInternal for substrate_domain::SubstrateError {
     fn into_not_found_or_internal(self, ctx: String) -> substrate_domain::SubstrateError {
         // If the process simply vanished we report NotFound; other errors are Internal.
         match self {
-            substrate_domain::SubstrateError::NotFound { .. } => {
-                substrate_domain::SubstrateError::NotFound {
-                    resource: ctx,
-                    correlation_id: None,
-                }
+            Self::NotFound { .. } => Self::NotFound {
+                resource: ctx,
+                correlation_id: None,
             },
-            _ => substrate_domain::SubstrateError::InternalError {
+            _ => Self::InternalError {
                 reason: ctx,
                 correlation_id: None,
             },
