@@ -4,7 +4,7 @@ Model Context Protocol (MCP) server in Rust 1.95 exposing POSIX baseutils-equiva
 OS management to LLM agents over STDIO. Ten bounded contexts: filesystem-query,
 filesystem-mutation, process, system-info, text-processing, archive, job,
 subprocess, network-info, launch (declarative process orchestration, feature-gated).
-60 tools with the `launch` feature enabled (51 without). Built and verified on both
+61 tools with the `launch` feature enabled (51 without). Built and verified on both
 macOS and Linux.
 
 ## Quick Start
