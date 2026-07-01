@@ -156,6 +156,10 @@ pub async fn run_probe_with_escalation(
 // ---------------------------------------------------------------------------
 
 #[cfg(not(feature = "outbound-net"))]
+#[expect(
+    clippy::unused_async,
+    reason = "declared async so callers can .await it uniformly with the outbound-net-enabled arm"
+)]
 async fn run_port_probe(
     host: &str,
     port: u16,
@@ -209,6 +213,10 @@ async fn run_port_probe(
 // ---------------------------------------------------------------------------
 
 #[cfg(not(feature = "outbound-net"))]
+#[expect(
+    clippy::unused_async,
+    reason = "declared async so callers can .await it uniformly with the outbound-net-enabled arm"
+)]
 async fn run_http_probe(
     url: &str,
     _expected_status: u16,
@@ -336,9 +344,12 @@ fn parse_url(url: &str) -> Option<(String, u16, String)> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "test code: TcpListener::bind/local_addr setup where panic on failure is the correct failure mode"
+#[cfg_attr(
+    feature = "outbound-net",
+    expect(
+        clippy::expect_used,
+        reason = "test code: TcpListener::bind/local_addr setup where panic on failure is the correct failure mode"
+    )
 )]
 mod tests {
     use super::*;
