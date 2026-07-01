@@ -49,6 +49,13 @@ package schemas
 	// same banned-variable list as the subprocess BC (LD_PRELOAD and friends rejected).
 	env: [string]: string
 
+	// env_file lists .env files loaded into the child environment (ADR-0071). Each
+	// path is relative to the profile directory and must not escape it (no absolute
+	// paths, no ".."). Files apply in order (a later file overrides an earlier one)
+	// and the inline env map overrides all of them. Values feed the same banned-key
+	// validation as env.
+	env_file?: [...string]
+
 	// cwd is the working directory for the child, validated by PathJail. Absolute.
 	cwd?: string & !=""
 
