@@ -1,4 +1,8 @@
 ---
+# SUPERSEDED (2026-07-02): project migrated from the legacy `spec` framework to
+# `speckit`. This file is no longer consulted — speckit config lives under
+# `.specify/` (config.toml, guard-policy.toml, features.json, memory/constitution.md).
+# Retained for historical reference only.
 # Per-project spec overrides. Optional - delete if defaults suffice.
 spec_root: docs/arch
 project: substrate

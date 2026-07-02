@@ -12,22 +12,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Spec workflow
 
-This repo uses the `spec` CLI (`~/bin/spec`) backed by a Python framework at `~/dev/fapp/spec-framework/`. All spec artifacts live under `docs/arch/`.
+This repo uses `speckit` (`~/bin/speckit`), a self-contained, AI-agnostic Spec-Driven Development (SDD) CLI. It replaces the legacy Python `spec` framework (`~/bin/spec` / `~/dev/fapp/spec-framework/`). All spec artifacts still live under `docs/arch/`, validated by `speckit` in place; SDD lifecycle state (constitution, feature registry, guard policy) lives under `.specify/` — never hand-edit its state files (`config.toml`, `features.json`, `guard-policy.toml`, `guard-audit.jsonl`, `memory/constitution.md`), drive them through the `speckit` subcommands instead.
+
+Lifecycle: `constitution -> specify -> clarify -> plan -> tasks -> analyze -> implement`. Orient with `speckit status` (where the spec system is) and `speckit next` (recommended next step); `speckit check` verifies prerequisites/project health.
 
 ```shell
-# Fast lane (~1.5s) — runs on every save / pre-commit
-spec validate --lane fast
+# Native validators (fast, no external deps) — run on every save / pre-commit
+speckit validate
 
-# Default lane (~10s) — adds Structurizr DSL, MADR lint, markdown lint
-spec validate
+# Adds external validators (conftest/vale/Structurizr CLI/TLC) — CI gate
+speckit validate --deep
 
-# Full lane (CI) — adds conftest/vale/SLO/AsyncAPI/TLC validators (currently no inputs for several)
-spec validate --lane full
+# Executable Gherkin corpus (ADR-0020) against this binary
+speckit verify
 ```
 
-Individual linters: `spec lint:cue`, `spec lint:madr`, `spec lint:features`, `spec lint:ddd-role`, `spec lint:structurizr`, `spec lint:md`, `spec lint:yaml`.
+`speckit validate --list` prints the validator catalog; `speckit verify --filter <substr>` scopes to matching scenario names; `speckit diagram` renders the Structurizr model to Mermaid; `speckit guard check` gates file writes against the SDD scope policy.
 
-When changing any file under `docs/arch/`, run `spec validate --lane fast` before committing. CI gates on `spec validate --lane full`.
+When changing any file under `docs/arch/`, run `speckit validate` before committing. CI gates on `speckit validate --deep`.
 
 ## Spec layout
 
@@ -42,7 +44,16 @@ docs/arch/
   specs/features/<area>/     Gherkin feature specs (155 features)
   glossary.md                Ubiquitous-language vocabulary
   README.md                  Architecture-spec entry point
-  .specconfig.yml            Spec framework per-project config
+  .specconfig.yml            Legacy spec-framework config; superseded by .specify/config.toml, no longer consulted
+```
+
+```text
+.specify/
+  config.toml              speckit bridge config (Python spec-framework escape hatch, disabled by default)
+  features.json             feature registry state (managed by `speckit feature` / `speckit specify`)
+  guard-policy.toml         Guard scope-of-writes policy (managed by `speckit guard`)
+  guard-audit.jsonl         Guard decision audit log
+  memory/constitution.md   Project constitution (managed by `speckit constitution`)
 ```
 
 ## Bounded contexts (DDD strategic)
@@ -131,7 +142,7 @@ For the launch BC specifically, ADR-0063 (bounded context), ADR-0064 (profile tr
 - Rego packages: `substrate.<area>`.
 - Cross-ref ADRs via relative markdown links: `[ADR-NNNN](NNNN-slug.md)`.
 - UUIDv7 only.
-- pnpm/npm FORBIDDEN. uv for Python tooling only (this is a Rust project; uv only used by the `spec` framework itself).
+- pnpm/npm FORBIDDEN. `speckit` is a self-contained Rust binary — no Python/uv dependency for day-to-day SDD workflow. `.specify/config.toml`'s `[bridge]` section is a disabled-by-default escape hatch to the legacy Python spec-framework (uv-managed) and should stay off.
 
 ## Commit / branch conventions
 

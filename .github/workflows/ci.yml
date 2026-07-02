@@ -99,32 +99,63 @@ jobs:
         run: cargo fmt --all -- --check
 
   # ---------------------------------------------------------------------------
-  # spec validate --lane full: intentionally NOT wired into CI.
+  # speckit validate --deep: native + external SDD validators over docs/arch/.
   #
-  # The full spec lane depends on the external Python `spec` framework
-  # (normally checked out at ~/dev/fapp/spec-framework on a contributor's
-  # machine), managed via uv, plus conftest/vale/Structurizr CLI/TLC. None of
-  # that is vendored into this repository or otherwise reachable from a clean
-  # GitHub-hosted runner, so a real job here would either depend on a private,
-  # unversioned local path (not reproducible in CI) or fail outright. Rather
-  # than ship a broken or faked job, this requirement is documented as a
-  # MANUAL step to run before merging any change under docs/arch/:
+  # This repo's spec tooling migrated from the old Python `spec` framework to
+  # `speckit` (github.com/farchanjo/speckit), a self-contained Rust binary.
+  # speckit is not published to crates.io (`publish = false`) and does not
+  # yet ship prebuilt release artifacts, and its source repo is private, so a
+  # clean GitHub-hosted runner cannot fetch it without a checkout credential.
   #
-  #   spec validate --lane full
-  #
-  # The fast lane (`spec validate --lane fast`) is cheap (~1.5s) and already
-  # expected to run locally on save / pre-commit per CLAUDE.md, so it does not
-  # need a CI job either. Revisit adding a hermetic CI job once spec-framework
-  # is published as an installable, versioned artifact (e.g. a pinned
-  # uv/PyPI package or a public git ref) that CI can fetch without relying on
-  # a contributor's local checkout.
+  # This job is wired as a REAL, blocking gate rather than a stub: when the
+  # `SPECKIT_REPO_TOKEN` secret (a PAT or deploy key with read access to
+  # farchanjo/speckit) is configured on this repository, it checks out
+  # speckit at `main`, builds it with the already-pinned Rust toolchain, and
+  # runs `speckit validate --deep` against docs/arch/ as a blocking check.
+  # When the secret is absent (e.g. on a fork without repo access), the job
+  # skips cleanly instead of failing CI for contributors who cannot hold that
+  # credential — run `speckit validate --deep` manually before merging any
+  # docs/arch/ change until the secret is wired up. `speckit validate`
+  # (native-only, no --deep) is the cheap local/pre-commit check; only the
+  # --deep lane belongs in CI per CLAUDE.md.
   # ---------------------------------------------------------------------------
-  # spec-validate-full:
-  #   name: spec validate --lane full (not hermetic in CI — see comment above)
-  #   runs-on: ubuntu-latest
-  #   if: false
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - run: |
-  #         echo "spec validate --lane full is not hermetic in CI yet."
-  #         echo "Run it manually before merging any docs/arch/ change."
+  speckit-validate-deep:
+    name: speckit validate --deep (docs/arch/)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout substrate
+        uses: actions/checkout@v4
+
+      - name: Checkout speckit source
+        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: farchanjo/speckit
+          ref: main
+          token: ${{ secrets.SPECKIT_REPO_TOKEN }}
+          path: .speckit-src
+
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        uses: dtolnay/rust-toolchain@master
+
+      - name: Cache cargo registry/build artifacts
+        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .speckit-src
+          shared-key: speckit-build
+
+      - name: Build and install speckit
+        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        run: cargo install --locked --path .speckit-src
+
+      - name: speckit validate --deep
+        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        run: speckit validate --deep
+
+      - name: Skip (SPECKIT_REPO_TOKEN not configured)
+        if: ${{ secrets.SPECKIT_REPO_TOKEN == '' }}
+        run: |
+          echo "::warning::SPECKIT_REPO_TOKEN not set — skipping speckit validate --deep."
+          echo "Run it manually before merging any docs/arch/ change: speckit validate --deep"
