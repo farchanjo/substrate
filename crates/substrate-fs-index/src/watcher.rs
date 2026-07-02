@@ -207,12 +207,16 @@ impl FsIndexWatcher {
             // they may not be within the allowlist (e.g., if a watched root is
             // deleted). The `invalidate` call is safe regardless: evicting a path
             // that is not in the index is a no-op.
-            let jailed = match serde_json::from_value::<JailedPath>(serde_json::json!(path)) {
-                Ok(j) => j,
-                Err(e) => {
-                    tracing::warn!(error = %e, "watcher: cannot construct JailedPath for event path; skipping invalidation");
-                    return;
-                },
+            // `new_jailed` is the sanctioned public constructor (see the
+            // JailedPath doc comment). The event path is a best-effort
+            // eviction key: evicting a path not in the index is a no-op, and
+            // the ADR-0041 lookup pipeline re-validates on read. Non-UTF-8
+            // paths cannot be represented downstream, so skip them.
+            let jailed = if path.to_str().is_some() {
+                JailedPath::new_jailed(path)
+            } else {
+                tracing::warn!(path = %path.display(), "watcher: non-UTF-8 event path; skipping invalidation");
+                return;
             };
             if let Err(e) = index.invalidate(&jailed).await {
                 tracing::warn!(error = %e, path = %jailed, "watcher: invalidation error");

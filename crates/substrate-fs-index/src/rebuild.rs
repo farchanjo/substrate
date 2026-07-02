@@ -108,13 +108,18 @@ pub(crate) fn walk_root(
         // and `ignore` does not resolve symlink targets. A path-jail
         // re-validation step in the lookup pipeline provides the inviolable
         // last check per ADR-0041.
-        let jailed =
-            serde_json::from_value::<JailedPath>(serde_json::json!(path)).map_err(|_| {
-                SubstrateError::EncodingError {
-                    detail: format!("non-UTF-8 path during rebuild: {}", path.display()),
-                    correlation_id: None,
-                }
-            })?;
+        // `root` is already jail-validated and the walk never follows symlinks,
+        // so every entry is provably within `root`; `new_jailed` is the
+        // sanctioned public constructor. Non-UTF-8 paths cannot be represented
+        // downstream, so reject the rebuild rather than silently dropping them.
+        let jailed = if path.to_str().is_some() {
+            JailedPath::new_jailed(path.to_path_buf())
+        } else {
+            return Err(SubstrateError::EncodingError {
+                detail: format!("non-UTF-8 path during rebuild: {}", path.display()),
+                correlation_id: None,
+            });
+        };
 
         let is_file = metadata.is_file();
         let size = if is_file { metadata.len() } else { 0 };

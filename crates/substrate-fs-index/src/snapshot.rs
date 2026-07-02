@@ -265,15 +265,10 @@ mod tests {
     use substrate_domain::JailedPath;
 
     fn make_jailed(s: &str) -> JailedPath {
-        // SAFETY (semantic): test-only constructor; invariants not enforced.
-        // `new_unchecked` is `pub(crate)` in substrate-domain, so we use the
-        // Display/From path via PathBuf directly for tests in this crate.
-        // In production, JailedPath values always originate from substrate-policy.
-        //
-        // Since new_unchecked is pub(crate) to substrate-domain we cannot call it
-        // here. We use serde round-trip as a workaround to construct test values.
-        let p = PathBuf::from(s);
-        serde_json::from_value(serde_json::json!(p)).expect("test helper: serde round-trip")
+        // Test-only constructor. `new_jailed` is the sanctioned public
+        // constructor; in production JailedPath values originate from
+        // substrate-policy after validation. Invariants are not enforced here.
+        JailedPath::new_jailed(PathBuf::from(s))
     }
 
     fn make_entry(path: &str, is_file: bool) -> IndexEntry {
