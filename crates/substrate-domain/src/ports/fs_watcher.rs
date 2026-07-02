@@ -5,7 +5,7 @@
 //! is emitted.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::errors::SubstrateResult;
 use crate::value_objects::JailedPath;
@@ -14,8 +14,13 @@ use crate::value_objects::JailedPath;
 ///
 /// The full event surface (create/modify/delete/rename/overflow) will be
 /// expanded when the fs-index-watch feature is implemented.
+///
+/// `Deserialize` is intentionally not derived: `path` is a [`JailedPath`],
+/// which is `Serialize`-only for the same reason (see its doc comment) --
+/// there is no validating constructor this crate can route a deserialize
+/// through.
 // TODO: expand WatchEvent variants in the fs-index-watch adapter wave.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WatchEvent {
     /// The path affected by this event.
     pub path: JailedPath,

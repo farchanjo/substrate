@@ -4,7 +4,7 @@
 //! depends on `caps.walker_tier`. Implementations live in adapter crates.
 
 use futures::stream::BoxStream;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::errors::SubstrateResult;
 use crate::value_objects::JailedPath;
@@ -13,8 +13,14 @@ use crate::value_objects::JailedPath;
 ///
 /// The full surface (symlink target, extended attributes, inode details) will
 /// be fleshed out when the filesystem-query adapter is implemented.
+///
+/// `Deserialize` is intentionally not derived: `path` is a [`JailedPath`],
+/// which is `Serialize`-only for the same reason (see its doc comment) --
+/// there is no validating constructor this crate can route a deserialize
+/// through. Production code always constructs a `DirEntry` directly from a
+/// walker tier, never from deserialized JSON.
 // TODO: expand DirEntry fields in the fs-query adapter wave.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
     /// The jailed, canonical path to this entry.
     pub path: JailedPath,
