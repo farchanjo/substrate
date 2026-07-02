@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -52,6 +52,19 @@ use crate::stream_capture::{make_stream_channel, spawn_stream_captures};
 
 /// Default per-job stdout/stderr ring-buffer size per ADR-0054.
 const DEFAULT_AGGREGATE_BUFFER_BYTES: usize = 65_536;
+
+/// Retention window for a terminal handle before [`terminal_gc_loop`] evicts it.
+///
+/// Bounds how long `subprocess.result` stays readable for a job after it exits
+/// (naturally or otherwise) without an explicit `subprocess.cancel`. Chosen to
+/// mirror `substrate-jobs`' `result_ttl_secs` default (ADR-0040) so the two
+/// control planes offer comparable readability windows.
+const TERMINAL_HANDLE_RETENTION: Duration = Duration::from_mins(5);
+
+/// Sleep interval between [`terminal_gc_loop`] sweeps.
+///
+/// Mirrors `substrate-jobs`' `gc_interval_secs` default (ADR-0040).
+const TERMINAL_GC_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Unconditionally banned environment variable keys per ADR-0052 §"Layer 5".
 ///
@@ -303,6 +316,18 @@ pub struct SubprocessRegistry {
     /// Inserted when a supervisor watcher task is spawned (non-`Never` restart policy).
     /// Cancelled and removed in `SubprocessRegistry::cancel` to stop the restart loop.
     supervisor_cancels: Arc<DashMap<JobId, CancellationToken>>,
+
+    /// First-observed-terminal timestamp per job, used by the background
+    /// [`terminal_gc_loop`] to bound how long a naturally-terminated handle
+    /// stays in `handles` before eviction.
+    ///
+    /// Populated lazily by [`sweep_terminal_handles`] the first time a sweep
+    /// observes a given job in a terminal state; cleared if the job later
+    /// leaves the terminal state (a supervised job rebound to a freshly
+    /// respawned child) or once the handle itself is gone (e.g. an explicit
+    /// `cancel()` already removed it from `handles`). Never consulted outside
+    /// the sweep — it is bookkeeping only, not part of the public port surface.
+    terminal_since: Arc<DashMap<JobId, Instant>>,
 }
 
 impl SubprocessRegistry {
@@ -336,7 +361,7 @@ impl SubprocessRegistry {
         path_allowlist: Allowlist,
         root_cancel: CancellationToken,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        let registry = Arc::new(Self {
             handles: Arc::default(),
             binary_allowlist,
             env_allowlist,
@@ -352,7 +377,26 @@ impl SubprocessRegistry {
             state_observers: Arc::new(Vec::new()),
             named_handles: Arc::default(),
             supervisor_cancels: Arc::default(),
-        })
+            terminal_since: Arc::default(),
+        });
+
+        // Background terminal-handle GC per the ADR-0052 quota fix: naturally
+        // terminated (non-cancelled) handles are otherwise never removed from
+        // `handles`, which both grows the map without bound and — since the
+        // global quota historically counted every handle ever inserted —
+        // permanently locks out new spawns once `max_concurrent` fire-and-forget
+        // jobs have completed. The quota check below now counts only non-terminal
+        // handles, so this sweep is a bounded-growth backstop, not a quota fix
+        // in itself; it mirrors `substrate-jobs`' `ttl_gc` pattern (ADR-0040).
+        tokio::spawn(terminal_gc_loop(
+            Arc::clone(&registry.handles),
+            Arc::clone(&registry.terminal_since),
+            Arc::clone(&registry.named_handles),
+            Arc::clone(&registry.supervisor_cancels),
+            registry.root_cancel.clone(),
+        ));
+
+        registry
     }
 
     /// Builder-style setter for the stream-chunk observers fanned-out by the
@@ -380,6 +424,7 @@ impl SubprocessRegistry {
             state_observers: Arc::clone(&arc.state_observers),
             named_handles: Arc::clone(&arc.named_handles),
             supervisor_cancels: Arc::clone(&arc.supervisor_cancels),
+            terminal_since: Arc::clone(&arc.terminal_since),
         });
         Arc::new(Self {
             observers: Arc::new(observers),
@@ -413,6 +458,7 @@ impl SubprocessRegistry {
             state_observers: Arc::clone(&arc.state_observers),
             named_handles: Arc::clone(&arc.named_handles),
             supervisor_cancels: Arc::clone(&arc.supervisor_cancels),
+            terminal_since: Arc::clone(&arc.terminal_since),
         });
         Arc::new(Self {
             state_observers: Arc::new(observers),
@@ -462,7 +508,35 @@ impl SubprocessRegistry {
     /// Returns the number of currently active (non-terminal) subprocesses.
     #[must_use]
     pub fn active_count(&self) -> usize {
-        self.handles.len()
+        self.count_active_handles() as usize
+    }
+
+    /// Counts handles whose current state is NOT terminal.
+    ///
+    /// The global (and per-client) quota must reflect subprocesses that are
+    /// still consuming OS resources, not every handle ever inserted into
+    /// `handles` — see ADR-0052 §"Quotas": "maximum ACTIVE subprocesses". A
+    /// handle lingers in `handles` after its child exits until the background
+    /// [`terminal_gc_loop`] (or an explicit `cancel()`) removes it, so a raw
+    /// `handles.len()` would permanently lock out new spawns once
+    /// `max_concurrent` fire-and-forget jobs have completed.
+    fn count_active_handles(&self) -> u32 {
+        // usize -> u32: the count of non-terminal handles is, by construction,
+        // bounded near max_concurrent (u32) by this very check on every spawn;
+        // truncation is impossible in practice.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "non-terminal handle count is bounded by max_concurrent (u32); truncation is impossible in practice"
+        )]
+        let count = self
+            .handles
+            .iter()
+            .filter(|entry| {
+                !crate::spawn::u8_to_state(entry.value().state.load(Ordering::SeqCst))
+                    .is_terminal()
+            })
+            .count() as u32;
+        count
     }
 
     /// Checks and enforces the quota for `client_id`.
@@ -474,12 +548,9 @@ impl SubprocessRegistry {
         reason = "Wave 2c: called from MCP handler layer with per-request client_id"
     )]
     fn check_quotas(&self, client_id: &ClientId) -> Result<(), SubprocessError> {
-        // Global quota. usize -> u32: handle count is bounded by max_concurrent (u32).
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "handle count is bounded by max_concurrent which is u32; truncation is impossible in practice"
-        )]
-        let global = self.handles.len() as u32;
+        // Global quota: count only non-terminal handles (ADR-0052 — the quota is
+        // on ACTIVE subprocesses, not on every handle ever inserted).
+        let global = self.count_active_handles();
         if global >= self.max_concurrent {
             return Err(SubprocessError::QuotaExceeded {
                 limit: self.max_concurrent,
@@ -570,6 +641,117 @@ impl SubprocessRegistry {
             reason: format!("signal {signal_name} to {process_group} failed: {e}"),
             correlation_id: None,
         })
+    }
+}
+
+/// Performs one terminal-handle GC sweep, returning the number of evicted entries.
+///
+/// Mirrors `substrate-jobs`' `ttl_gc::sweep_once` (ADR-0040): separated from the
+/// async [`terminal_gc_loop`] wrapper so the eviction logic itself is unit
+/// testable without spawning tasks or waiting on real timers.
+///
+/// For every handle currently in a terminal state ([`SubprocessState::is_terminal`]),
+/// the first sweep to observe it records "now" in `terminal_since`; a later sweep
+/// evicts the handle once that recorded instant is `ttl` or more in the past. A
+/// handle observed NOT in a terminal state has its `terminal_since` entry cleared
+/// — this covers the supervisor-restart case where `handles` rebinds a job's key
+/// to a freshly spawned (non-terminal) `ChildHandle`, which must not inherit the
+/// previous child's exit-time tracking.
+///
+/// Eviction also removes the job from `named_handles` and `supervisor_cancels` so
+/// those maps cannot grow without bound either. `terminal_since` itself is
+/// reconciled against `handles` on every sweep so an entry orphaned by an
+/// explicit `cancel()` (which removes the handle immediately, bypassing this
+/// sweep) does not linger forever.
+fn sweep_terminal_handles(
+    handles: &DashMap<JobId, Arc<ChildHandle>>,
+    terminal_since: &DashMap<JobId, Instant>,
+    named_handles: &DashMap<String, JobId>,
+    supervisor_cancels: &DashMap<JobId, CancellationToken>,
+    ttl: Duration,
+) -> u64 {
+    let now = Instant::now();
+    let mut expired: Vec<JobId> = Vec::new();
+
+    for entry in handles {
+        let job_id = entry.key().clone();
+        let is_terminal =
+            crate::spawn::u8_to_state(entry.value().state.load(Ordering::SeqCst)).is_terminal();
+        if is_terminal {
+            let first_seen = *terminal_since.entry(job_id.clone()).or_insert(now);
+            if now.saturating_duration_since(first_seen) >= ttl {
+                expired.push(job_id);
+            }
+        } else {
+            // Left the terminal state (e.g. a supervised job rebound to a
+            // freshly respawned, non-terminal child) — drop stale tracking so
+            // it is never evicted based on a previous life's exit time.
+            terminal_since.remove(&job_id);
+        }
+    }
+
+    for job_id in &expired {
+        handles.remove(job_id);
+        terminal_since.remove(job_id);
+        named_handles.retain(|_, v| v != job_id);
+        supervisor_cancels.remove(job_id);
+    }
+
+    // Drop tracking for any handle already gone (e.g. an explicit `cancel()`
+    // removed it from `handles` before this sweep observed the TTL elapsing),
+    // so `terminal_since` cannot outlive the handles it shadows.
+    terminal_since.retain(|job_id, _| handles.contains_key(job_id));
+
+    // usize -> u64 is always widening (u64 is never narrower than usize), so no
+    // truncation is possible on any target and no clippy annotation is needed.
+    expired.len() as u64
+}
+
+/// Background sweep that evicts terminal subprocess handles after a bounded
+/// retention window ([`TERMINAL_HANDLE_RETENTION`]), mirroring `substrate-jobs`'
+/// `ttl_gc::gc_loop` (ADR-0040).
+///
+/// Without this, a naturally terminated (never explicitly cancelled) handle
+/// stays in `handles` forever, growing the map without bound. The global spawn
+/// quota is no longer sensitive to this — [`SubprocessRegistry::count_active_handles`]
+/// already counts only non-terminal handles — but the map itself, plus
+/// `named_handles`/`supervisor_cancels` entries pinned to a since-exited job,
+/// would otherwise grow unbounded over the process lifetime.
+///
+/// Cancel-safe: checks `cancel` at the start of each sleep phase; exits cleanly
+/// with no partial state on shutdown. Spawned once per [`SubprocessRegistry::new`]
+/// call against the registry's shared interior `Arc<DashMap<..>>` fields, so it
+/// keeps observing the same live maps across any later builder rebuild
+/// (`with_observers`, `with_state_observers`, `with_tmp_root`).
+async fn terminal_gc_loop(
+    handles: Arc<DashMap<JobId, Arc<ChildHandle>>>,
+    terminal_since: Arc<DashMap<JobId, Instant>>,
+    named_handles: Arc<DashMap<String, JobId>>,
+    supervisor_cancels: Arc<DashMap<JobId, CancellationToken>>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                tracing::debug!(
+                    "subprocess terminal_gc_loop stopping: cancellation token triggered"
+                );
+                return;
+            }
+            () = tokio::time::sleep(TERMINAL_GC_INTERVAL) => {}
+        }
+
+        let evicted = sweep_terminal_handles(
+            &handles,
+            &terminal_since,
+            &named_handles,
+            &supervisor_cancels,
+            TERMINAL_HANDLE_RETENTION,
+        );
+        if evicted > 0 {
+            tracing::debug!(evicted, "terminal_gc_loop sweep evicted expired subprocess handles");
+        }
     }
 }
 
@@ -793,12 +975,13 @@ impl SubprocessPort for SubprocessRegistry {
 
         // Quota check: enforce global quota only at this layer.
         // Per-client quota enforcement is wired at the MCP handler layer (Wave 2c).
-        // usize -> u32: bounded by max_concurrent which is u32.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "active handle count is bounded by max_concurrent (u32); truncation is impossible"
-        )]
-        let global = self.handles.len() as u32;
+        // Count only non-terminal handles — ADR-0052 defines the quota over ACTIVE
+        // subprocesses, not every handle ever inserted into `handles`. A naturally
+        // terminated (never explicitly cancelled) child otherwise lingers in
+        // `handles` until the background `terminal_gc_loop` sweep evicts it, and a
+        // raw `handles.len()` here would permanently lock out new spawns once
+        // `max_concurrent` fire-and-forget jobs have completed.
+        let global = self.count_active_handles();
         if global >= self.max_concurrent {
             return Err(SubprocessError::QuotaExceeded {
                 limit: self.max_concurrent,
@@ -985,6 +1168,7 @@ impl SubprocessPort for SubprocessRegistry {
                     Arc::clone(&self.per_client_active),
                     self.tmp_root.clone(),
                     Arc::clone(&self.observers),
+                    Arc::clone(&self.terminal_since),
                 )
             };
 
@@ -1007,6 +1191,7 @@ impl SubprocessPort for SubprocessRegistry {
                 per_client_active,
                 tmp_root,
                 chunk_observers,
+                watcher_terminal_since,
             ) = registry_arc;
 
             tokio::spawn(async move {
@@ -1170,6 +1355,7 @@ impl SubprocessPort for SubprocessRegistry {
                         state_observers: Arc::clone(&watcher_state_observers),
                         named_handles: Arc::clone(&watcher_named_handles),
                         supervisor_cancels: Arc::clone(&watcher_supervisor_cancels),
+                        terminal_since: Arc::clone(&watcher_terminal_since),
                     });
 
                     last_spawn_at = std::time::Instant::now();
@@ -2103,6 +2289,111 @@ mod tests {
             "snapshot_handle must return Succeeded after /bin/sh -c 'exit 0' exits; got {:?}",
             snapshot.state
         );
+    }
+
+    /// Regression guard for the ADR-0052 quota lockout: the global quota check
+    /// used to count `self.handles.len()` — every handle EVER inserted, terminal
+    /// or not — instead of only ACTIVE (non-terminal) subprocesses. Once
+    /// `max_concurrent` fire-and-forget jobs had exited naturally (no explicit
+    /// `subprocess.cancel`), nothing ever removed their handles, so every later
+    /// spawn permanently failed with `SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED` —
+    /// even though zero subprocesses were actually running.
+    ///
+    /// This spawns `max_concurrent` short-lived children, waits for all of them
+    /// to reach a terminal state, then asserts a further spawn succeeds. The
+    /// background `terminal_gc_loop` sweep (60s interval) has not run by the
+    /// time this assertion fires, so `self.handles` still holds all
+    /// `max_concurrent` (now-terminal) entries — proving the fix is the quota
+    /// check counting only non-terminal handles ([`SubprocessRegistry::count_active_handles`]),
+    /// not merely the background GC eventually shrinking the map.
+    #[tokio::test]
+    async fn spawn_after_max_concurrent_handles_terminate_naturally_succeeds() {
+        use substrate_domain::ports::subprocess::SubprocessPort as _;
+
+        const MAX_CONCURRENT: u32 = 2;
+
+        let sh = std::path::PathBuf::from("/bin/sh");
+        assert!(sh.exists(), "/bin/sh must exist on this platform");
+        let tmp_dir = std::fs::canonicalize(std::env::temp_dir())
+            .expect("temp_dir must be canonicalisable");
+        let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
+            .expect("temp_dir must be a valid allowlist root");
+
+        let registry = SubprocessRegistry::new(
+            BinaryAllowlist::new(vec![sh.clone()]),
+            Vec::new(),
+            MAX_CONCURRENT,
+            MAX_CONCURRENT,
+            DEFAULT_AGGREGATE_BUFFER_BYTES,
+            5,
+            path_allowlist,
+            CancellationToken::new(),
+        );
+
+        let make_req = || SubprocessRequest {
+            binary_path: sh.clone(),
+            args: vec!["-c".to_owned(), "exit 0".to_owned()],
+            cwd: tmp_dir.clone(),
+            env_allowlist: Vec::new(),
+            env_override: std::collections::BTreeMap::new(),
+            stdin_kind: substrate_domain::subprocess::StdinKind::None,
+            capture_kind: CaptureKind::InMemory,
+            timeout_secs: None,
+            idempotency_key: None,
+            elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
+            parent_death_signal: None,
+        };
+
+        // Fill the quota with MAX_CONCURRENT fire-and-forget spawns — no caller
+        // ever cancels these, mirroring the real-world lockout scenario.
+        let mut job_ids = Vec::with_capacity(MAX_CONCURRENT as usize);
+        for _ in 0..MAX_CONCURRENT {
+            let snap = registry
+                .spawn(make_req(), &NoCancel)
+                .await
+                .expect("spawn within quota must succeed");
+            job_ids.push(snap.job_id);
+        }
+
+        // Wait for every handle to reach a terminal state (bounded poll).
+        for job_id in &job_ids {
+            let mut reached_terminal = false;
+            for _ in 0..100 {
+                if live_state(&registry, job_id).is_terminal() {
+                    reached_terminal = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            assert!(
+                reached_terminal,
+                "child must reach a terminal state within the poll budget"
+            );
+        }
+
+        // `self.handles` still holds all MAX_CONCURRENT entries here (the
+        // background GC sweep interval is 60s, far longer than this test), so
+        // the pre-fix `handles.len()` quota check would reject this spawn
+        // forever. The fix counts only non-terminal handles.
+        let result = registry.spawn(make_req(), &NoCancel).await;
+        assert!(
+            result.is_ok(),
+            "spawn after all max_concurrent handles terminated naturally must succeed, got {:?}",
+            result.err()
+        );
+
+        // Cleanup: cancel every handle so the test does not leak child
+        // processes or supervisor tasks past this test's runtime lifetime.
+        if let Ok(snap) = result {
+            let _ = registry.cancel(&snap.job_id, true).await;
+        }
+        for job_id in &job_ids {
+            let _ = registry.cancel(job_id, true).await;
+        }
     }
 
     /// Builds a registry allowlisting `/bin/sh` rooted at the canonical temp dir,
