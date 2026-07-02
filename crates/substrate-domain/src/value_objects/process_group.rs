@@ -18,13 +18,41 @@ use crate::errors::{SubstrateError, SubstrateResult};
 /// per ADR-0035 security policy.
 ///
 /// See ADR-0052 §"`ProcessGroup`" and ADR-0053 §"Process Group Leadership".
+///
+/// Deserialization is routed through [`ProcessGroup::new`] via
+/// `#[serde(try_from = "RawProcessGroup")]` so the `pid >= 2 && pgid >= 2`
+/// invariant holds for every deserialized value, not just ones built through
+/// the constructor. A derived `Deserialize` on the raw fields would silently
+/// accept an out-of-range `pid`/`pgid` pair as pre-validated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "RawProcessGroup")]
 pub struct ProcessGroup {
     /// OS process identifier of the spawned child. Always >= 2.
     pid: i32,
     /// Process group identifier assigned by `setsid()`. Always >= 2.
     /// Equals `pid` when the child is the process group leader.
     pgid: i32,
+}
+
+/// Wire-format mirror of [`ProcessGroup`] used only to gate deserialization
+/// through [`ProcessGroup::new`].
+///
+/// Field names and JSON shape match `ProcessGroup`'s own derived `Serialize`
+/// output exactly, so the wire format is unchanged; this type exists solely
+/// so `#[serde(try_from = "RawProcessGroup")]` has a plain-data intermediate
+/// to deserialize into before the fallible conversion runs.
+#[derive(Deserialize)]
+struct RawProcessGroup {
+    pid: i32,
+    pgid: i32,
+}
+
+impl TryFrom<RawProcessGroup> for ProcessGroup {
+    type Error = SubstrateError;
+
+    fn try_from(raw: RawProcessGroup) -> SubstrateResult<Self> {
+        Self::new(raw.pid, raw.pgid)
+    }
 }
 
 impl ProcessGroup {
@@ -148,5 +176,29 @@ mod tests {
         )]
         let pg = ProcessGroup::new(1001, 1000).expect("pid=1001, pgid=1000 must be valid");
         assert!(!pg.is_group_leader(), "pid != pgid => not a group leader");
+    }
+
+    #[test]
+    fn deserialize_accepts_valid_process_group() {
+        #[expect(
+            clippy::expect_used,
+            reason = "test assertion: valid JSON must deserialize"
+        )]
+        let pg: ProcessGroup =
+            serde_json::from_str(r#"{"pid":1000,"pgid":1000}"#).expect("valid pair deserializes");
+        assert_eq!(pg.pid(), 1000);
+        assert_eq!(pg.pgid(), 1000);
+    }
+
+    #[test]
+    fn deserialize_rejects_pid_zero() {
+        let result: Result<ProcessGroup, _> = serde_json::from_str(r#"{"pid":0,"pgid":1000}"#);
+        assert!(result.is_err(), "pid=0 must be rejected on deserialize");
+    }
+
+    #[test]
+    fn deserialize_rejects_pgid_one() {
+        let result: Result<ProcessGroup, _> = serde_json::from_str(r#"{"pid":1000,"pgid":1}"#);
+        assert!(result.is_err(), "pgid=1 must be rejected on deserialize");
     }
 }

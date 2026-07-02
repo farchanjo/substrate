@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// An opaque wrapper around [`PathBuf`] representing a jail-validated path.
 ///
@@ -22,7 +22,20 @@ use serde::{Deserialize, Serialize};
 /// Domain code that receives a `JailedPath` may treat these invariants as
 /// holding. The domain never re-validates; re-validation is the policy adapter's
 /// responsibility.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// # Intentionally `Serialize`-only
+///
+/// This type deliberately does **not** derive [`serde::Deserialize`]. The
+/// invariants above are enforced exclusively by `substrate-policy`'s jail
+/// syscalls (`openat2`/`O_NOFOLLOW_ANY`) plus allowlist-root matching, none of
+/// which this crate can perform (zero infra deps, per the hexagonal layering
+/// rule). A derived `Deserialize` on the raw `PathBuf` would accept any path
+/// as pre-validated, silently bypassing both invariants -- there is no
+/// validating constructor this crate can route through, unlike `JobId`'s
+/// self-contained Crockford parse. Callers that need a `JailedPath` from
+/// untrusted input MUST go through [`Self::new_jailed`] after the caller has
+/// itself run the value through `substrate-policy`'s jail.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct JailedPath(PathBuf);
 
 impl JailedPath {

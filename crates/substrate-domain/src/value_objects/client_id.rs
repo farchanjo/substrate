@@ -11,8 +11,23 @@ use crate::errors::{SubstrateError, SubstrateResult};
 ///
 /// Pattern: alphanumeric with dots, underscores, and hyphens; 1–64 characters.
 /// Cross-client visibility is forbidden; each client sees only its own jobs.
+///
+/// Deserialization is routed through [`ClientId::parse`] via
+/// `#[serde(try_from = "String")]` so the `^[A-Za-z0-9._-]{1,64}$` pattern
+/// holds for every deserialized value, not just ones built through the
+/// constructor. A derived `Deserialize` on the raw `String` would silently
+/// accept any string as pre-validated.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct ClientId(String);
+
+impl TryFrom<String> for ClientId {
+    type Error = SubstrateError;
+
+    fn try_from(s: String) -> SubstrateResult<Self> {
+        Self::parse(s)
+    }
+}
 
 impl ClientId {
     /// The regex pattern enforced at construction time.
@@ -90,5 +105,34 @@ mod tests {
     #[test]
     fn invalid_chars_rejected() {
         assert!(ClientId::parse("bad/client").is_err());
+    }
+
+    #[test]
+    fn deserialize_accepts_valid_client_id() {
+        #[expect(
+            clippy::expect_used,
+            reason = "test assertion: valid JSON must deserialize"
+        )]
+        let id: ClientId =
+            serde_json::from_str(r#""mcp-client_1.0""#).expect("valid client_id deserializes");
+        assert_eq!(id.as_str(), "mcp-client_1.0");
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_chars() {
+        let result: Result<ClientId, _> = serde_json::from_str(r#""bad/client""#);
+        assert!(
+            result.is_err(),
+            "invalid characters must be rejected on deserialize"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_empty_string() {
+        let result: Result<ClientId, _> = serde_json::from_str(r#""""#);
+        assert!(
+            result.is_err(),
+            "empty client_id must be rejected on deserialize"
+        );
     }
 }
