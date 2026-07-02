@@ -49,12 +49,15 @@ pub async fn handle_fs_stat(
     deps: &FsQueryDeps,
     _cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
-    // Jail the path.
+    // Jail the path against the real allowlist root (never the path itself —
+    // see `FsQueryDeps::allowlist_root` doc comment for why that would make
+    // the kernel dirfd confinement check a no-op).
     let raw = std::path::Path::new(&req.path).to_path_buf();
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
+    let allowlist_root = deps.allowlist_root.clone();
     let jail_result: SubstrateResult<JailedPath> = tokio::task::spawn_blocking(move || {
-        jail.jail(&JailedPath::new_jailed(raw_clone.clone()), &raw_clone)
+        jail.jail(&allowlist_root, &raw_clone)
     })
     .await
     .map_err(|e| SubstrateError::InternalError {
@@ -145,6 +148,7 @@ async fn handle_symlink_escape(
 ) -> SubstrateResult<ToolResponse> {
     let jail = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
+    let allowlist_root = deps.allowlist_root.clone();
     let disposition = tokio::task::spawn_blocking(move || {
         // lstat the symlink node itself — succeeds for both internal and escaping
         // symlinks regardless of whether the target exists.
@@ -165,7 +169,7 @@ async fn handle_symlink_escape(
         // A non-existent hop within the allowlist → Broken.
         // Any hop outside the allowlist → Escape.
         // All hops within allowlist and final target exists → Internal.
-        symlink_chain_disposition(&raw_clone, jail.as_ref(), &lstat, 0)
+        symlink_chain_disposition(&raw_clone, jail.as_ref(), &allowlist_root, &lstat, 0)
     })
     .await
     .unwrap_or(SymlinkDisposition::Escape);
@@ -285,6 +289,34 @@ mod tests {
         }
     }
 
+    /// Regression guard for the self-referential jail bug: asserts the
+    /// `allowlist_root` argument `handle_fs_stat` passes to `jail()` is the
+    /// real configured root (`deps.allowlist_root`), never a `JailedPath`
+    /// fabricated from the request path itself (which would make the kernel
+    /// dirfd containment check a no-op).
+    struct AssertRealRootJail {
+        expected_root: std::path::PathBuf,
+    }
+    impl substrate_domain::PathJailPort for AssertRealRootJail {
+        fn jail(
+            &self,
+            allowlist_root: &JailedPath,
+            raw_path: &std::path::Path,
+        ) -> SubstrateResult<JailedPath> {
+            assert_eq!(
+                allowlist_root.as_path(),
+                self.expected_root.as_path(),
+                "jail() must receive the real allowlist root, not a fabricated one"
+            );
+            assert_ne!(
+                allowlist_root.as_path(),
+                raw_path,
+                "allowlist_root must not equal the raw request path (self-referential jail)"
+            );
+            Ok(JailedPath::new_jailed(raw_path.to_path_buf()))
+        }
+    }
+
     fn make_deps() -> FsQueryDeps {
         FsQueryDeps {
             jail: Arc::new(NoopJail),
@@ -292,6 +324,7 @@ mod tests {
             hasher: Arc::new(crate::hash_factory::Blake3Hasher::new()),
             statter: Arc::new(crate::stat_factory::PortableStatter::new()),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(std::env::temp_dir()),
         }
     }
 
@@ -344,5 +377,35 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, SubstrateError::NotFound { .. }));
+    }
+
+    /// Regression test for the self-referential jail bug (FIX 1): `handle_fs_stat`
+    /// must jail the requested path against `deps.allowlist_root`, not against a
+    /// `JailedPath` fabricated from the path itself.
+    #[tokio::test]
+    async fn stat_jails_against_configured_allowlist_root() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("file.txt");
+        std::fs::write(&path, b"hello").unwrap();
+
+        let deps = FsQueryDeps {
+            jail: Arc::new(AssertRealRootJail {
+                expected_root: tmp.path().to_path_buf(),
+            }),
+            walker: Arc::new(crate::walker::legacy::LegacyWalker::new()),
+            hasher: Arc::new(crate::hash_factory::Blake3Hasher::new()),
+            statter: Arc::new(crate::stat_factory::PortableStatter::new()),
+            capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(tmp.path().to_path_buf()),
+        };
+        handle_fs_stat(
+            FsStatRequest {
+                path: path.to_string_lossy().into_owned(),
+            },
+            &deps,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
     }
 }

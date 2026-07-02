@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use substrate_domain::{Capabilities, DirWalkerPort, HashPort, Hints, PathJailPort, StatPort};
+use substrate_domain::{
+    Capabilities, DirWalkerPort, HashPort, Hints, JailedPath, PathJailPort, StatPort,
+};
 
 /// Dependency bundle for all fs-query tool handlers.
 ///
@@ -27,6 +29,17 @@ pub struct FsQueryDeps {
 
     /// Runtime capability snapshot — used to annotate SIMD / walker tier in hints.
     pub capabilities: Arc<Capabilities>,
+
+    /// The real allowlist root anchor for kernel-level path confinement.
+    ///
+    /// Every handler must pass this (not a `JailedPath` fabricated from the
+    /// caller-supplied path itself) as the first argument to
+    /// `PathJailPort::jail`. Jailing a path against itself makes the kernel
+    /// dirfd containment check a no-op (a path trivially "contains" itself)
+    /// and, on Linux's `openat2` tier, opening a regular file as the root dir
+    /// fails with `ENOTDIR`. Mirrors how `substrate-fs-mutation` threads its
+    /// `allowlist_root: &JailedPath` handler parameter.
+    pub allowlist_root: JailedPath,
 }
 
 impl std::fmt::Debug for FsQueryDeps {

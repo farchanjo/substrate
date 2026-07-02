@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 
 use substrate_domain::{JailedPath, PathJailPort, SubstrateError};
 
+// NOTE: `jail.jail(...)` below is always called with the REAL allowlist root
+// passed in by the caller (`allowlist_root`), never a `JailedPath` fabricated
+// from the hop's own resolved target. Jailing a path against itself makes the
+// kernel dirfd containment check a no-op (a path trivially "contains" itself)
+// — see `FsQueryDeps::allowlist_root` for the full rationale.
+
 /// Maximum symlink hops before treating the chain as an escape (loop guard).
 #[expect(
     clippy::redundant_pub_crate,
@@ -64,6 +70,7 @@ pub(crate) enum SymlinkDisposition {
 pub(crate) fn symlink_chain_disposition(
     path: &Path,
     jail: &dyn PathJailPort,
+    allowlist_root: &JailedPath,
     lstat_of_start: &std::fs::Metadata,
     depth: u8,
 ) -> SymlinkDisposition {
@@ -94,13 +101,14 @@ pub(crate) fn symlink_chain_disposition(
     };
 
     // Use the jail to check if `resolved_target` is within an allowed root.
-    // `JailedPath::new_jailed` + `jail.jail` checks WITHOUT following symlinks.
+    // `jail.jail` checks WITHOUT following symlinks, anchored on the REAL
+    // allowlist root (never a `JailedPath` fabricated from `resolved_target`
+    // itself, which would make the containment check a no-op).
     // Return Escape only when the jail reports a security boundary violation
     // (PathOutsideAllowlist, SymlinkEscape, etc.).  NotFound / IoError mean the
     // path is absent but the prefix is within the allowlist — fall through to
     // the symlink_metadata check below.
-    let jailed_target = JailedPath::new_jailed(resolved_target.clone());
-    if let Err(e) = jail.jail(&jailed_target, &resolved_target) {
+    if let Err(e) = jail.jail(allowlist_root, &resolved_target) {
         // NotFound / IoError mean the path is absent but the prefix is within
         // the allowlist — fall through.  All other errors (PathOutsideAllowlist,
         // SymlinkEscape, …) mean the hop crosses a security boundary.
@@ -118,7 +126,7 @@ pub(crate) fn symlink_chain_disposition(
         Err(_) => SymlinkDisposition::Broken,
         Ok(target_meta) if target_meta.file_type().is_symlink() => {
             // Target is itself a symlink — recurse.
-            symlink_chain_disposition(&resolved_target, jail, lstat_of_start, depth + 1)
+            symlink_chain_disposition(&resolved_target, jail, allowlist_root, lstat_of_start, depth + 1)
         },
         Ok(_) => SymlinkDisposition::Internal {
             lstat: lstat_of_start.clone(),

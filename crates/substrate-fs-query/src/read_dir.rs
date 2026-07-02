@@ -25,7 +25,9 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use substrate_domain::{JailedPath, PathJailPort, SubstrateError, SubstrateResult};
+use substrate_domain::{
+    JailedPath, PathJailPort, SubstrateError, SubstrateResult, value_objects::PageSize,
+};
 
 use crate::hint_helpers::build_hints;
 use crate::response::{FsQueryDeps, ToolResponse};
@@ -44,6 +46,12 @@ pub struct FsReadDirRequest {
     pub path: String,
 
     /// Maximum number of entries per page.
+    ///
+    /// Routed through the domain [`PageSize`] value object (ADR-0057 /
+    /// ADR-0060): `0` or a value above [`PageSize::MAX`] (10 000) returns
+    /// `INVALID_ARGUMENT`. Values within `[1, 10_000]` but above
+    /// [`MAX_PAGE_SIZE`] (5 000) are silently capped to `MAX_PAGE_SIZE` at the
+    /// handler level (ADR-0008), mirroring `fs.find`'s `FS_FIND_PAGE_SIZE_CAP`.
     #[serde(default = "default_page_size")]
     pub page_size: u32,
 
@@ -82,35 +90,58 @@ pub struct DirEntryInfo {
 ///
 /// Propagates any [`SubstrateError`] from jail validation, cursor decoding,
 /// or `tokio::fs::read_dir` I/O.
+#[expect(
+    clippy::too_many_lines,
+    reason = "handle_fs_read_dir orchestrates PageSize validation, overflow-checked cursor \
+              arithmetic, jail, and paginated directory iteration in one cohesive Zone-A handler"
+)]
 #[instrument(skip(deps, _cancel), fields(path = %req.path))]
 pub async fn handle_fs_read_dir(
     req: FsReadDirRequest,
     deps: &FsQueryDeps,
     _cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
-    // Reject an explicit `page_size` of 0 instead of silently clamping it to 1
-    // (ADR-0008 / ADR-0060): a zero page size is a caller error, not a request
-    // for a single entry. The upper bound is still clamped to MAX_PAGE_SIZE.
-    if req.page_size == 0 {
-        return Err(SubstrateError::InvalidArgument {
-            offending_field: "page_size".to_owned(),
-            reason: format!("page_size must be in [1, {MAX_PAGE_SIZE}]; got 0"),
-            correlation_id: Some(uuid::Uuid::now_v7()),
-        });
-    }
-    let page_size = req.page_size.min(MAX_PAGE_SIZE);
+    // Route `page_size` through the domain `PageSize` value object (ADR-0057 /
+    // ADR-0060): `0` or a value above `PageSize::MAX` (10 000) is rejected
+    // outright instead of being silently clamped. A value inside the domain
+    // range but above the handler-level `MAX_PAGE_SIZE` (5 000) is still
+    // capped, mirroring `fs.find`'s `FS_FIND_PAGE_SIZE_CAP` (ADR-0008).
+    let page_size = PageSize::try_from(req.page_size)?.get().min(MAX_PAGE_SIZE);
     let skip_count: usize = if let Some(ref cursor_str) = req.page_cursor {
         decode_cursor(cursor_str)?
     } else {
         0
     };
 
-    // Jail the path.
+    // Guard against a malformed or adversarial cursor whose decoded
+    // `skip_count` is large enough that adding `page_size` (or the +1
+    // lookahead) would overflow `usize`. Treated the same way as malformed
+    // base64 below: both are caller input errors, not internal errors.
+    let skip_plus_page =
+        skip_count
+            .checked_add(page_size as usize)
+            .ok_or_else(|| SubstrateError::InvalidArgument {
+                offending_field: "page_cursor".to_owned(),
+                reason: "page_cursor combined with page_size overflows usize".to_owned(),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+    let target = skip_plus_page
+        .checked_add(1)
+        .ok_or_else(|| SubstrateError::InvalidArgument {
+            offending_field: "page_cursor".to_owned(),
+            reason: "page_cursor combined with page_size overflows usize".to_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        })?;
+
+    // Jail the path against the real allowlist root (never the path itself —
+    // see `FsQueryDeps::allowlist_root` doc comment for why that would make
+    // the kernel dirfd confinement check a no-op).
     let raw = std::path::Path::new(&req.path).to_path_buf();
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
+    let allowlist_root = deps.allowlist_root.clone();
     let jailed: JailedPath = tokio::task::spawn_blocking(move || {
-        jail.jail(&JailedPath::new_jailed(raw_clone.clone()), &raw_clone)
+        jail.jail(&allowlist_root, &raw_clone)
     })
     .await
     .map_err(|e| SubstrateError::InternalError {
@@ -123,9 +154,9 @@ pub async fn handle_fs_read_dir(
         .await
         .map_err(|e| map_io_err(e, &req.path))?;
 
-    // Collect all entries (async iterator).
+    // Collect all entries (async iterator). `target` was already validated
+    // above (skip_count + page_size + 1, overflow-checked).
     let mut all_entries: Vec<DirEntryInfo> = Vec::new();
-    let target = skip_count + page_size as usize + 1;
 
     loop {
         let entry = match read_dir.next_entry().await {
@@ -172,7 +203,7 @@ pub async fn handle_fs_read_dir(
         }
     }
 
-    let has_more = all_entries.len() > skip_count + page_size as usize;
+    let has_more = all_entries.len() > skip_plus_page;
     let page: Vec<DirEntryInfo> = all_entries
         .into_iter()
         .skip(skip_count)
@@ -180,7 +211,7 @@ pub async fn handle_fs_read_dir(
         .collect();
 
     let next_cursor = if has_more {
-        Some(encode_cursor(skip_count + page_size as usize))
+        Some(encode_cursor(skip_plus_page))
     } else {
         None
     };
@@ -286,6 +317,34 @@ mod tests {
         }
     }
 
+    /// Regression guard for the self-referential jail bug: asserts the
+    /// `allowlist_root` argument `handle_fs_read_dir` passes to `jail()` is
+    /// the real configured root (`deps.allowlist_root`), never a `JailedPath`
+    /// fabricated from the request path itself (which would make the kernel
+    /// dirfd containment check a no-op).
+    struct AssertRealRootJail {
+        expected_root: std::path::PathBuf,
+    }
+    impl substrate_domain::PathJailPort for AssertRealRootJail {
+        fn jail(
+            &self,
+            allowlist_root: &JailedPath,
+            raw_path: &std::path::Path,
+        ) -> SubstrateResult<JailedPath> {
+            assert_eq!(
+                allowlist_root.as_path(),
+                self.expected_root.as_path(),
+                "jail() must receive the real allowlist root, not a fabricated one"
+            );
+            assert_ne!(
+                allowlist_root.as_path(),
+                raw_path,
+                "allowlist_root must not equal the raw request path (self-referential jail)"
+            );
+            Ok(JailedPath::new_jailed(raw_path.to_path_buf()))
+        }
+    }
+
     fn make_deps() -> FsQueryDeps {
         FsQueryDeps {
             jail: Arc::new(NoopJail),
@@ -293,6 +352,7 @@ mod tests {
             hasher: Arc::new(crate::hash_factory::Blake3Hasher::new()),
             statter: Arc::new(crate::stat_factory::PortableStatter::new()),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(std::env::temp_dir()),
         }
     }
 
@@ -385,5 +445,94 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
+    }
+
+    /// `page_size` above `PageSize::MAX` (10 000) must be rejected outright
+    /// (ADR-0057 / ADR-0060), not silently clamped to `MAX_PAGE_SIZE` (5 000)
+    /// as the pre-fix handler-only bound check would have allowed.
+    #[tokio::test]
+    async fn read_dir_page_size_above_domain_max_returns_invalid_argument() {
+        let tmp = TempDir::new().unwrap();
+        let deps = make_deps();
+        let req = FsReadDirRequest {
+            path: tmp.path().to_string_lossy().into_owned(),
+            page_size: 10_001,
+            page_cursor: None,
+        };
+        let err = handle_fs_read_dir(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
+    }
+
+    /// A `page_size` within the domain range but above the handler-level
+    /// `MAX_PAGE_SIZE` (5 000) is still silently capped (ADR-0008), mirroring
+    /// `fs.find`'s `FS_FIND_PAGE_SIZE_CAP` behavior — this must keep working
+    /// after routing through `PageSize`.
+    #[tokio::test]
+    async fn read_dir_page_size_above_handler_cap_is_silently_capped() {
+        let tmp = TempDir::new().unwrap();
+        let deps = make_deps();
+        let req = FsReadDirRequest {
+            path: tmp.path().to_string_lossy().into_owned(),
+            page_size: 9_000,
+            page_cursor: None,
+        };
+        let resp = handle_fs_read_dir(req, &deps, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(resp.structured_content["entries"].is_array());
+    }
+
+    /// Regression test for the cursor-overflow fix (FIX 3): a decoded
+    /// `page_cursor` close to `usize::MAX` must return `INVALID_ARGUMENT`
+    /// instead of panicking (debug) or wrapping (release) when combined with
+    /// `page_size`.
+    #[tokio::test]
+    async fn read_dir_cursor_overflow_returns_invalid_argument() {
+        let tmp = TempDir::new().unwrap();
+        let deps = make_deps();
+        let malicious_cursor = encode_cursor(usize::MAX - 1);
+        let req = FsReadDirRequest {
+            path: tmp.path().to_string_lossy().into_owned(),
+            page_size: 100,
+            page_cursor: Some(malicious_cursor),
+        };
+        let err = handle_fs_read_dir(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
+    }
+
+    /// Regression test for the self-referential jail bug (FIX 1):
+    /// `handle_fs_read_dir` must jail the requested path against
+    /// `deps.allowlist_root`, not against a `JailedPath` fabricated from the
+    /// path itself.
+    #[tokio::test]
+    async fn read_dir_jails_against_configured_allowlist_root() {
+        let tmp = TempDir::new().unwrap();
+        // List a subdirectory (not the allowlist root itself) so the
+        // assertion genuinely distinguishes "self-referential jail" from the
+        // legitimate case of listing the allowlist root directory itself.
+        let subdir = tmp.path().join("child");
+        std::fs::create_dir(&subdir).unwrap();
+        let deps = FsQueryDeps {
+            jail: Arc::new(AssertRealRootJail {
+                expected_root: tmp.path().to_path_buf(),
+            }),
+            walker: Arc::new(crate::walker::legacy::LegacyWalker::new()),
+            hasher: Arc::new(crate::hash_factory::Blake3Hasher::new()),
+            statter: Arc::new(crate::stat_factory::PortableStatter::new()),
+            capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(tmp.path().to_path_buf()),
+        };
+        let req = FsReadDirRequest {
+            path: subdir.to_string_lossy().into_owned(),
+            page_size: 100,
+            page_cursor: None,
+        };
+        handle_fs_read_dir(req, &deps, CancellationToken::new())
+            .await
+            .unwrap();
     }
 }

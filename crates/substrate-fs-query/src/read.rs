@@ -116,12 +116,15 @@ pub async fn handle_fs_read(
         }
     }
 
-    // Jail the path.
+    // Jail the path against the real allowlist root (never the path itself —
+    // see `FsQueryDeps::allowlist_root` doc comment for why that would make
+    // the kernel dirfd confinement check a no-op).
     let raw = std::path::Path::new(&req.path).to_path_buf();
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
+    let allowlist_root = deps.allowlist_root.clone();
     let jailed: JailedPath = tokio::task::spawn_blocking(move || {
-        jail.jail(&JailedPath::new_jailed(raw_clone.clone()), &raw_clone)
+        jail.jail(&allowlist_root, &raw_clone)
     })
     .await
     .map_err(|e| SubstrateError::InternalError {
@@ -325,6 +328,34 @@ mod tests {
         }
     }
 
+    /// Regression guard for the self-referential jail bug: asserts the
+    /// `allowlist_root` argument `handle_fs_read` passes to `jail()` is the
+    /// real configured root (`deps.allowlist_root`), never a `JailedPath`
+    /// fabricated from the request path itself (which would make the kernel
+    /// dirfd containment check a no-op).
+    struct AssertRealRootJail {
+        expected_root: std::path::PathBuf,
+    }
+    impl substrate_domain::PathJailPort for AssertRealRootJail {
+        fn jail(
+            &self,
+            allowlist_root: &JailedPath,
+            raw_path: &std::path::Path,
+        ) -> SubstrateResult<JailedPath> {
+            assert_eq!(
+                allowlist_root.as_path(),
+                self.expected_root.as_path(),
+                "jail() must receive the real allowlist root, not a fabricated one"
+            );
+            assert_ne!(
+                allowlist_root.as_path(),
+                raw_path,
+                "allowlist_root must not equal the raw request path (self-referential jail)"
+            );
+            Ok(JailedPath::new_jailed(raw_path.to_path_buf()))
+        }
+    }
+
     fn make_deps() -> FsQueryDeps {
         use crate::response::FsQueryDeps;
         FsQueryDeps {
@@ -333,6 +364,7 @@ mod tests {
             hasher: Arc::new(crate::hash_factory::Blake3Hasher::new()),
             statter: Arc::new(crate::stat_factory::PortableStatter::new()),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(std::env::temp_dir()),
         }
     }
 
@@ -409,5 +441,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.structured_content["content"], "cdef");
+    }
+
+    /// Regression test for the self-referential jail bug (FIX 1): `handle_fs_read`
+    /// must jail the requested path against `deps.allowlist_root`, not against a
+    /// `JailedPath` fabricated from the path itself.
+    #[tokio::test]
+    async fn read_jails_against_configured_allowlist_root() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("hello.txt");
+        std::fs::write(&path, b"hello world").unwrap();
+
+        let deps = FsQueryDeps {
+            jail: Arc::new(AssertRealRootJail {
+                expected_root: tmp.path().to_path_buf(),
+            }),
+            walker: Arc::new(crate::walker::legacy::LegacyWalker::new()),
+            hasher: Arc::new(crate::hash_factory::Blake3Hasher::new()),
+            statter: Arc::new(crate::stat_factory::PortableStatter::new()),
+            capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(tmp.path().to_path_buf()),
+        };
+        let req = FsReadRequest {
+            path: path.to_string_lossy().into_owned(),
+            encoding: ReadEncoding::Text,
+            offset_bytes: 0,
+            length_bytes: None,
+        };
+        handle_fs_read(req, &deps, CancellationToken::new())
+            .await
+            .unwrap();
     }
 }

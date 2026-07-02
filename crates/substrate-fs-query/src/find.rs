@@ -197,28 +197,23 @@ pub async fn handle_fs_find(
         }
     }
 
-    // Jail the root path.
+    // Jail the root path against the real allowlist root (never the path
+    // itself — see `FsQueryDeps::allowlist_root` doc comment for why that
+    // would make the kernel dirfd confinement check a no-op).
     let raw_root = std::path::Path::new(&req.root).to_path_buf();
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
 
     // Jail validation must run in spawn_blocking because it may do I/O.
     let jailed_root: JailedPath = {
         let jail_clone = Arc::clone(&jail);
-        // We need a fake "allowlist_root" — in real integration the composition root
-        // supplies the allowlist root. Here we use the path itself as the root
-        // so that the jail contract is satisfiable for any path the caller provides,
-        // with actual enforcement delegated to the policy adapter.
-        //
-        // NOTE: the composition root MUST wire a real allowlist root.
         let raw_clone = raw_root.clone();
-        let jail_result = tokio::task::spawn_blocking(move || {
-            jail_clone.jail(&JailedPath::new_jailed(raw_clone.clone()), &raw_clone)
-        })
-        .await
-        .map_err(|e| SubstrateError::InternalError {
-            reason: format!("spawn_blocking join error: {e}"),
-            correlation_id: None,
-        })?;
+        let allowlist_root = deps.allowlist_root.clone();
+        let jail_result = tokio::task::spawn_blocking(move || jail_clone.jail(&allowlist_root, &raw_clone))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })?;
 
         match jail_result {
             Ok(j) => j,
@@ -231,7 +226,8 @@ pub async fn handle_fs_find(
             // distinguish internal / dangling / genuinely-escaping (mirrors
             // fs.stat's handle_symlink_escape).
             Err(SubstrateError::SymlinkEscape { .. }) => {
-                resolve_root_after_symlink_escape(raw_root.clone(), &jail).await?
+                resolve_root_after_symlink_escape(raw_root.clone(), &jail, &deps.allowlist_root)
+                    .await?
             },
             Err(e) => return Err(e),
         }
@@ -477,9 +473,11 @@ pub async fn handle_fs_find(
 async fn resolve_root_after_symlink_escape(
     raw_root: std::path::PathBuf,
     jail: &Arc<dyn PathJailPort>,
+    allowlist_root: &JailedPath,
 ) -> SubstrateResult<JailedPath> {
     let jail_clone = Arc::clone(jail);
     let raw_clone = raw_root.clone();
+    let allowlist_root_clone = allowlist_root.clone();
     let disposition = tokio::task::spawn_blocking(move || {
         let Ok(lstat) = std::fs::symlink_metadata(&raw_clone) else {
             return SymlinkDisposition::Escape;
@@ -490,7 +488,7 @@ async fn resolve_root_after_symlink_escape(
                 resolved: raw_clone,
             };
         }
-        symlink_chain_disposition(&raw_clone, jail_clone.as_ref(), &lstat, 0)
+        symlink_chain_disposition(&raw_clone, jail_clone.as_ref(), &allowlist_root_clone, &lstat, 0)
     })
     .await
     .map_err(|e| SubstrateError::InternalError {
@@ -506,14 +504,13 @@ async fn resolve_root_after_symlink_escape(
         SymlinkDisposition::Internal { resolved, .. } => {
             let jail_clone = Arc::clone(jail);
             let resolved_clone = resolved.clone();
-            tokio::task::spawn_blocking(move || {
-                jail_clone.jail(&JailedPath::new_jailed(resolved_clone.clone()), &resolved_clone)
-            })
-            .await
-            .map_err(|e| SubstrateError::InternalError {
-                reason: format!("spawn_blocking join error: {e}"),
-                correlation_id: None,
-            })?
+            let allowlist_root_clone = allowlist_root.clone();
+            tokio::task::spawn_blocking(move || jail_clone.jail(&allowlist_root_clone, &resolved_clone))
+                .await
+                .map_err(|e| SubstrateError::InternalError {
+                    reason: format!("spawn_blocking join error: {e}"),
+                    correlation_id: None,
+                })?
         },
         SymlinkDisposition::Escape => Err(SubstrateError::SymlinkEscape {
             path: raw_root.to_string_lossy().into_owned(),
@@ -727,6 +724,7 @@ mod tests {
             hasher: Arc::new(NoopHasher),
             statter: Arc::new(NoopStatter),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(std::env::temp_dir()),
         }
     }
 
@@ -877,6 +875,7 @@ mod tests {
             hasher: Arc::new(NoopHasher),
             statter: Arc::new(NoopStatter),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(tmp.path().to_path_buf()),
         };
         let req = FsFindRequest {
             root: link.to_string_lossy().into_owned(),
@@ -917,6 +916,7 @@ mod tests {
             hasher: Arc::new(NoopHasher),
             statter: Arc::new(NoopStatter),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(allowed.path().to_path_buf()),
         };
         let req = FsFindRequest {
             root: link.to_string_lossy().into_owned(),
@@ -951,6 +951,7 @@ mod tests {
             hasher: Arc::new(NoopHasher),
             statter: Arc::new(NoopStatter),
             capabilities: Arc::new(substrate_domain::Capabilities::default()),
+            allowlist_root: JailedPath::new_jailed(tmp.path().to_path_buf()),
         };
         let req = FsFindRequest {
             root: link.to_string_lossy().into_owned(),
