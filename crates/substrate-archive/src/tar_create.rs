@@ -282,6 +282,12 @@ fn build_tar_blocking(
     match compression {
         TarCompression::None => {
             let mut builder = tar::Builder::new(file);
+            // Preserve symlinks as symlink entries instead of dereferencing them:
+            // the default (`true`) would have `append_dir_all` walk through a
+            // symlink inside the source tree and embed whatever it points at,
+            // including content outside the jailed source (symlink escape on
+            // create).
+            builder.follow_symlinks(false);
             for src in sources {
                 let path = src.as_path();
                 if path.is_dir() {
@@ -313,6 +319,9 @@ fn build_tar_blocking(
         TarCompression::Gzip => {
             let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
             let mut builder = tar::Builder::new(encoder);
+            // See the `TarCompression::None` arm above: never dereference
+            // symlinks found while walking a source directory.
+            builder.follow_symlinks(false);
             for src in sources {
                 let path = src.as_path();
                 if path.is_dir() {
@@ -438,6 +447,49 @@ mod tests {
             .unwrap();
         assert!(archive.exists());
         assert!(resp.structured_content["entry_count"].as_u64().unwrap_or(0) >= 1);
+    }
+
+    /// Regression test for the `follow_symlinks(false)` fix: a symlink inside a
+    /// source directory that points outside the source tree must be archived as
+    /// a symlink entry carrying its original target text, never dereferenced
+    /// into a regular-file entry embedding the target's content.
+    #[tokio::test]
+    async fn tar_create_preserves_symlink_without_dereferencing() {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("real.txt"), b"real-content").unwrap();
+        let outside_target = tmp.path().join("secret.txt");
+        std::fs::write(&outside_target, b"outside-secret").unwrap();
+        std::os::unix::fs::symlink(&outside_target, src_dir.join("link.txt")).unwrap();
+
+        let archive = tmp.path().join("out.tar");
+        let deps = make_deps();
+        let req = TarCreateRequest {
+            sources: vec![src_dir.to_string_lossy().into_owned()],
+            dest: archive.to_string_lossy().into_owned(),
+            compression: TarCompression::None,
+            dry_run: false,
+            confirmed: true,
+        };
+        handle_archive_tar_create(req, &deps, CancellationToken::new())
+            .await
+            .unwrap();
+
+        let file = std::fs::File::open(&archive).unwrap();
+        let mut ar = tar::Archive::new(file);
+        let mut saw_symlink = false;
+        for entry_result in ar.entries().unwrap() {
+            let entry = entry_result.unwrap();
+            let path = entry.path().unwrap().into_owned();
+            if path.file_name().and_then(|n| n.to_str()) == Some("link.txt") {
+                saw_symlink = true;
+                assert_eq!(entry.header().entry_type(), tar::EntryType::Symlink);
+                let link_name = entry.header().link_name().unwrap().unwrap();
+                assert_eq!(link_name.as_ref(), outside_target.as_path());
+            }
+        }
+        assert!(saw_symlink, "expected a preserved symlink entry link.txt");
     }
 
     #[tokio::test]

@@ -335,10 +335,26 @@ fn add_dir_to_zip(
             correlation_id: Some(uuid::Uuid::now_v7()),
         })?;
         let path = entry.path();
+
+        // `Path::is_dir()` / `File::open()` both dereference symlinks, which
+        // would silently embed a symlinked entry's target content (possibly
+        // outside the jailed source tree) into the archive. `symlink_metadata`
+        // inspects the entry itself instead of following it, so a symlinked
+        // entry can be detected and skipped before it is ever opened.
+        let meta = path
+            .symlink_metadata()
+            .map_err(|e| SubstrateError::IoError {
+                path: format!("{}: {e}", path.display()),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            })?;
+        if meta.is_symlink() {
+            continue;
+        }
+
         let relative = path.strip_prefix(base).unwrap_or(&path);
         let name = relative.to_string_lossy().into_owned();
 
-        if path.is_dir() {
+        if meta.is_dir() {
             add_dir_to_zip(writer, base, &path, options, entry_count)?;
         } else {
             stream_file_into_zip(writer, &path, &name, *options)?;
@@ -449,6 +465,50 @@ mod tests {
             .unwrap();
         assert!(archive.exists());
         assert!(resp.structured_content["entry_count"].as_u64().unwrap_or(0) >= 1);
+    }
+
+    /// Regression test for the `add_dir_to_zip` symlink-escape fix: a symlink
+    /// inside a source directory that points outside the source tree must be
+    /// skipped rather than dereferenced into the archive — the ZIP writer has no
+    /// symlink entry type here, so embedding its target's content would leak
+    /// data from outside the jailed source tree.
+    #[tokio::test]
+    async fn zip_create_skips_symlink_without_dereferencing() {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("real.txt"), b"real-content").unwrap();
+        let outside_target = tmp.path().join("secret.txt");
+        std::fs::write(&outside_target, b"outside-secret").unwrap();
+        std::os::unix::fs::symlink(&outside_target, src_dir.join("link.txt")).unwrap();
+
+        let archive = tmp.path().join("out.zip");
+        let deps = make_deps();
+        let req = ZipCreateRequest {
+            sources: vec![src_dir.to_string_lossy().into_owned()],
+            dest: archive.to_string_lossy().into_owned(),
+            dry_run: false,
+            confirmed: true,
+        };
+        let resp = handle_archive_zip_create(req, &deps, CancellationToken::new())
+            .await
+            .unwrap();
+        // Only the regular file was embedded — the symlink was skipped.
+        assert_eq!(
+            resp.structured_content["entry_count"].as_u64().unwrap_or(0),
+            1
+        );
+
+        let file = std::fs::File::open(&archive).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            assert_ne!(
+                entry.name(),
+                "link.txt",
+                "symlink must not be embedded as its own entry"
+            );
+        }
     }
 
     #[tokio::test]

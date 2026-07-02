@@ -391,6 +391,21 @@ fn merge_into(src: &std::path::Path, dst: &std::path::Path) -> SubstrateResult<(
         })?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
+
+        // `Path::exists()`/`Path::is_dir()` below both dereference symlinks, so a
+        // pre-existing symlink at `to` (planted by a prior extraction or crafted
+        // to collide with an incoming member name) would make the branch below
+        // either recurse into, or rename onto, whatever the link points at —
+        // possibly outside the extraction root. `symlink_metadata` never follows
+        // the final component, so it sees the link itself; fail closed instead of
+        // ever touching it.
+        if std::fs::symlink_metadata(&to).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(SubstrateError::PathTraversalBlocked {
+                path: to.to_string_lossy().into_owned(),
+                correlation_id: Some(uuid::Uuid::now_v7()),
+            });
+        }
+
         if from.is_dir() && to.exists() {
             merge_into(&from, &to)?;
         } else {
@@ -666,6 +681,46 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SubstrateError::PathTraversalBlocked { .. }));
         assert!(!tmp.path().join("evil.txt").exists());
+    }
+
+    /// Regression test for the `merge_into` symlink-escape fix: when the
+    /// destination already has entries (forcing the staging-tree promotion to
+    /// fall back to `merge_into` instead of a single top-level rename), a
+    /// pre-existing symlink whose name collides with an incoming archive member
+    /// must be rejected rather than recursed into or renamed onto.
+    #[tokio::test]
+    async fn merge_into_rejects_pre_existing_symlink_collision() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("collide.zip");
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        // A pre-existing entry makes the top-level `rename(staging, dest_root)`
+        // fail (dest_root is non-empty), forcing `commit_staging` into `merge_into`.
+        std::fs::write(dest.join("keep.txt"), b"keep").unwrap();
+        // A symlink outside the extraction root, planted under a name that will
+        // collide with an archive member.
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, dest.join("evil")).unwrap();
+
+        create_test_zip(&archive, &[("evil", b"payload")]);
+
+        let deps = make_deps();
+        let req = ZipExtractRequest {
+            archive: archive.to_string_lossy().into_owned(),
+            dest: dest.to_string_lossy().into_owned(),
+            dry_run: false,
+            confirmed: true,
+        };
+        let err = handle_archive_zip_extract(req, &deps, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SubstrateError::PathTraversalBlocked { .. }));
+        // The pre-existing symlink must remain exactly as planted — neither
+        // replaced nor followed to write into its target.
+        let meta = std::fs::symlink_metadata(dest.join("evil")).unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert!(!outside.join("evil").exists());
     }
 
     #[tokio::test]

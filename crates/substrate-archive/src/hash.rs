@@ -121,7 +121,13 @@ pub async fn handle_archive_hash(
                     Ok((digest.to_hex(), size))
                 },
                 HashAlgorithm::Sha256 => {
-                    let bytes = std::fs::read(jailed.as_path()).map_err(|e| {
+                    use std::io::Read as _;
+
+                    // Streamed in bounded chunks rather than `std::fs::read`-ing the
+                    // whole archive into the heap (fix-3 unbounded-read guard):
+                    // mirrors the chunked pattern used by the BLAKE3 path and by
+                    // `DecompressGuard`-backed extraction elsewhere in this crate.
+                    let mut file = std::fs::File::open(jailed.as_path()).map_err(|e| {
                         use std::io::ErrorKind;
                         match e.kind() {
                             ErrorKind::NotFound => SubstrateError::NotFound {
@@ -138,9 +144,20 @@ pub async fn handle_archive_hash(
                             },
                         }
                     })?;
-                    let size = bytes.len() as u64;
                     let mut h = sha2::Sha256::new();
-                    h.update(&bytes);
+                    let mut buf = vec![0u8; 64 * 1024];
+                    let mut size = 0u64;
+                    loop {
+                        let n = file.read(&mut buf).map_err(|e| SubstrateError::IoError {
+                            path: format!("{jailed}: {e}"),
+                            correlation_id: Some(uuid::Uuid::now_v7()),
+                        })?;
+                        if n == 0 {
+                            break;
+                        }
+                        h.update(&buf[..n]);
+                        size += n as u64;
+                    }
                     let result = h.finalize();
                     let hex = result.iter().fold(String::with_capacity(64), |mut s, b| {
                         use std::fmt::Write as _;
