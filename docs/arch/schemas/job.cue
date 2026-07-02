@@ -10,12 +10,14 @@ package schemas
 // any mapping table between MCP protocol tokens and internal identifiers per ADR-0040.
 #CorrelationId: #JobId
 
+// DDD role: ValueObject
 // #JobProgressToken is the MCP progressToken value for a job submission.
 // It equals the #JobId per ADR-0040 triple-equality invariant.
 // Named #JobProgressToken to avoid collision with #ProgressToken in shared_kernel.cue,
 // which models the incremental-progress tracking token used by streaming tools.
 #JobProgressToken: #JobId
 
+// DDD role: ValueObject
 // #IdempotencyKey is a client-generated UUIDv7 (base32 Crockford, 26 chars).
 // Deduplication key: (client_id, tool_name, idempotency_key, blake3_hash_of_args_json)
 // per ADR-0040. Bounded to result_ttl_secs and evicted by the same GC.
@@ -25,14 +27,17 @@ package schemas
 // Cross-client visibility is forbidden; each client sees only its own jobs per ADR-0040.
 #ClientId: string & =~"^[A-Za-z0-9._-]{1,64}$"
 
+// DDD role: ValueObject
 // #JobState enumerates all valid states of the async job state machine per ADR-0040.
 // Terminal states (succeeded, failed, cancelled, timed_out) never regress.
 #JobState: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out"
 
+// DDD role: ValueObject
 // #PollingEndpoint names the control-plane tools used to poll a job per ADR-0040.
 // "launch.status" added per ADR-0069 for launch-stack bring-up Task polling.
 #PollingEndpoint: "job.status" | "job.result" | "launch.status"
 
+// DDD role: ValueObject
 // #JobBucket classifies every MCP tool into a dispatch bucket per ADR-0040.
 // A: sync inline (snapshot-instant). B: auto-mode (inline if small, job if large).
 // C: always async (job mandatory, no streaming; e.g. archive.tar.create).
@@ -145,6 +150,7 @@ package schemas
 	progress_events_dropped: int & >=0
 }
 
+// DDD role: ValueObject
 // #JobQuotas configures the resource limits for the async job control-plane per ADR-0040.
 // All fields have safe defaults; operators may override via TOML [jobs] section.
 #JobQuotas: {
@@ -179,6 +185,7 @@ package schemas
 	gc_interval_secs: int & >=1 | *60
 }
 
+// DDD role: ValueObject
 // #JobInlineThresholds declares per-tool size thresholds for Bucket B auto-mode.
 // A tool invocation below its threshold returns an inline result; at or above the
 // threshold the tool is promoted to an async job per ADR-0040.
@@ -212,6 +219,7 @@ package schemas
 	...
 }
 
+// DDD role: ValueObject
 // #JobTimeouts configures per-tool execution time limits for async jobs per ADR-0040.
 // Per-tool entries override the default. All values are in seconds.
 #JobTimeouts: {
@@ -231,6 +239,7 @@ package schemas
 	fs_hash_secs: int & >=1 | *600
 }
 
+// DDD role: ValueObject
 // #JobConfig is the top-level configuration aggregate for the async job control-plane.
 // It is embedded in the main RuntimeConfig under the [jobs] TOML section per ADR-0040.
 #JobConfig: {

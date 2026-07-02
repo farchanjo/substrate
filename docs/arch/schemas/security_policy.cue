@@ -1,6 +1,7 @@
 // DDD role: AggregateRoot
 package schemas
 
+// DDD role: ValueObject
 // #Signal enumerates POSIX signals that the proc namespace may deliver.
 // SIGKILL and SIGSTOP are marked destructive; they cannot be caught or ignored.
 #Signal:
@@ -12,6 +13,7 @@ package schemas
 	"SIGKILL" |   // DESTRUCTIVE: force kill, cannot be caught or blocked
 	"SIGSTOP"     // DESTRUCTIVE: force stop, cannot be caught or blocked
 
+// DDD role: ValueObject
 // #Allowlist defines path roots and optional per-tool path overrides.
 #Allowlist: {
 	// roots is the ordered list of absolute directory prefixes that tools may access.

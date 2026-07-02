@@ -1,12 +1,15 @@
 // DDD role: AggregateRoot
 package schemas
 
+// DDD role: ValueObject
 // #LogLevel enumerates the structured log verbosity levels.
 #LogLevel: "trace" | "debug" | "info" | "warn" | "error"
 
+// DDD role: ValueObject
 // #LogTarget identifies where log output is directed.
 #LogTarget: "stderr" | "file"
 
+// DDD role: ValueObject
 // #Timeouts configures execution time limits across tools.
 #Timeouts: {
 	// global_default_seconds applies when no per-tool override is present.
@@ -17,6 +20,7 @@ package schemas
 	per_tool: {[string]: uint & >=1}
 }
 
+// DDD role: ValueObject
 // #SemaphoreCaps limits concurrent execution to prevent resource exhaustion.
 #SemaphoreCaps: {
 	// cpu_bound_max is the maximum concurrent CPU-bound tool executions.
@@ -34,6 +38,7 @@ package schemas
 	zone_b_max?: uint & >=1
 }
 
+// DDD role: ValueObject
 // #LoggingConfig controls structured logging behaviour of the substrate runtime.
 #LoggingConfig: {
 	// level controls the minimum severity emitted.
@@ -61,6 +66,7 @@ package schemas
 	log_write_error_policy: "warn_stderr_fallback" | "abort" | *"warn_stderr_fallback"
 }
 
+// DDD role: ValueObject
 // #ProtocolConfig governs MCP wire-level constraints.
 #ProtocolConfig: {
 	// max_page_size is the handler-level pagination cap (default 500 per ADR-0008,
@@ -103,6 +109,7 @@ package schemas
 	write_timeout_secs: uint & >=1 | *30
 }
 
+// DDD role: ValueObject
 // #SecurityRuntime configures runtime-level security hardening knobs.
 // These mirror fields in #SecurityPolicy; the runtime config takes effect after
 // the policy is loaded and may further restrict behaviour.

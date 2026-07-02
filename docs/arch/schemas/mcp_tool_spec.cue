@@ -3,12 +3,14 @@ package schemas
 
 import "strings"
 
+// DDD role: ValueObject
 // #ToolNamespace enumerates the nine stable tool namespaces.
 // The "job" namespace was added 2026-05-21 per ADR-0040 (async job control-plane).
 // The "subprocess" namespace was added per ADR-0052 and "net" per ADR-0058.
 // The "launch" namespace was added per ADR-0069 (declarative process orchestration).
 #ToolNamespace: "fs" | "proc" | "sys" | "text" | "archive" | "job" | "subprocess" | "net" | "launch"
 
+// DDD role: ValueObject
 // #ToolBucket classifies every tool into a dispatch bucket per ADR-0040.
 // A_sync_inline: snapshot-instant, always synchronous (e.g. sys.uname, sys.info).
 // B_auto_mode: inline if below threshold, promoted to async job if above.
@@ -18,6 +20,7 @@ import "strings"
 // and launch.up) per the ADR-0040 2026-05-24 amendment, ADR-0052/ADR-0054, and ADR-0069.
 #ToolBucket: "A_sync_inline" | "B_auto_mode" | "C_always_async" | "D_sync_side_effect" | "E_always_async_streaming"
 
+// DDD role: ValueObject
 // #ToolAnnotations carries MCP hint booleans that guide client behavior.
 // Defaults represent the safest posture (writable, non-destructive, non-idempotent, closed-world).
 #ToolAnnotations: {

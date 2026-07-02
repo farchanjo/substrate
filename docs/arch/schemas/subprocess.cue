@@ -12,6 +12,7 @@
 // Dependency on shared kernel: #JobId and #PageSize (job.cue / shared_kernel.cue).
 package schemas
 
+// DDD role: ValueObject
 // #SubprocessState enumerates the lifecycle states of a spawned child process.
 // Terminal states (Succeeded, Failed, Cancelled, Killed, TimedOut) never regress.
 // Mirrors JobState from job.cue but with subprocess-specific terminal distinctions.
