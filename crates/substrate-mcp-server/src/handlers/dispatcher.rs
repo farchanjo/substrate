@@ -308,14 +308,14 @@ impl ToolDispatcher {
             "fs_mkdir" => {
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_mkdir(req, &self.fs_mutation, root)
+                substrate_fs_mutation::handle_fs_mkdir(req, &self.fs_mutation, root, cancel)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_write" => {
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_write(req, &self.fs_mutation, root)
+                substrate_fs_mutation::handle_fs_write(req, &self.fs_mutation, root, cancel)
                     .await
                     .map(from_fs_mutation)
             },
@@ -327,7 +327,7 @@ impl ToolDispatcher {
                 pre_validate_field_for_traversal(&args, "src")?;
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_rename(req, &self.fs_mutation, root)
+                substrate_fs_mutation::handle_fs_rename(req, &self.fs_mutation, root, cancel)
                     .await
                     .map(from_fs_mutation)
             },
@@ -336,28 +336,33 @@ impl ToolDispatcher {
                 pre_validate_field_for_traversal(&args, "path")?;
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_remove(req, &self.fs_mutation, root)
+                substrate_fs_mutation::handle_fs_remove(req, &self.fs_mutation, root, cancel)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_set_permissions" => {
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_set_permissions(req, &self.fs_mutation, root)
-                    .await
-                    .map(from_fs_mutation)
+                substrate_fs_mutation::handle_fs_set_permissions(
+                    req,
+                    &self.fs_mutation,
+                    root,
+                    cancel,
+                )
+                .await
+                .map(from_fs_mutation)
             },
             "fs_symlink" => {
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_symlink(req, &self.fs_mutation, root)
+                substrate_fs_mutation::handle_fs_symlink(req, &self.fs_mutation, root, cancel)
                     .await
                     .map(from_fs_mutation)
             },
             "fs_touch" => {
                 let root = self.primary_root()?;
                 let req = parse(&args)?;
-                substrate_fs_mutation::handle_fs_touch(req, &self.fs_mutation, root)
+                substrate_fs_mutation::handle_fs_touch(req, &self.fs_mutation, root, cancel)
                     .await
                     .map(from_fs_mutation)
             },

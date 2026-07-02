@@ -1369,6 +1369,23 @@ impl SubstrateService {
         // respond). The server sends `elicitation/create` requests; it does not
         // need to declare a corresponding `ServerCapabilities.elicitation` field.
         //
+        // Elicitation honesty (design decision — ADR-0013 needs an amendment to
+        // match this reality): this server does NOT actually send
+        // `elicitation/create` requests today, despite the comment above
+        // describing the intended protocol shape. Destructive tools (e.g.
+        // `subprocess.signal` SIGKILL/SIGTERM/SIGSTOP, `subprocess.spawn`,
+        // `fs.remove`, `fs.set_permissions`) instead accept a caller-supplied
+        // `elicitation_confirmed: bool` argument; a request with the flag unset
+        // is rejected with `SUBSTRATE_CONFIRMATION_REQUIRED`, and a request with
+        // the flag set is treated as confirmed with no server-side round-trip to
+        // a human. This means the human-in-the-loop guarantee is delegated
+        // entirely to the MCP client — it surfaces the confirmation to a human
+        // and only retries with the flag set after a real "yes" — and is NOT
+        // enforced by this server. It provides no protection against a
+        // prompt-injected agent that sets `elicitation_confirmed = true` on its
+        // own initiative. A real `elicitation/create` round-trip, where the
+        // server itself blocks on the client's answer, is a future follow-up.
+        //
         // rmcp 1.7 does not expose capability builder methods for
         // `structured_content` or `output_schema` on `ServerCapabilities`.
         // These are result-level fields in `CallToolResult`, not capability

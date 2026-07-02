@@ -150,7 +150,7 @@ fn probe_openat2_stub() -> bool {
 // ---- macOS capability probes -------------------------------------------------
 
 #[cfg(target_os = "macos")]
-const fn detect_macos(caps: &mut Capabilities) {
+fn detect_macos(caps: &mut Capabilities) {
     // FSEvents and kqueue are always available on macOS.
     caps.has_fsevents = true;
     caps.has_kqueue = true;
@@ -163,16 +163,68 @@ const fn detect_macos(caps: &mut Capabilities) {
     caps.has_o_nofollow_any = macos_major_version() >= 12;
 }
 
+/// Maps the running kernel's Darwin major release to a macOS major version.
+///
+/// Darwin release = macOS major + 9 (for macOS >= 11): Darwin 21.x = macOS
+/// 12.x, Darwin 22.x = macOS 13.x, Darwin 23.x = macOS 14.x, etc.
+///
+/// Gates `has_o_nofollow_any` (and therefore `pick_jail_tier`'s choice between
+/// the kernel-enforced `MacosONoFollowAny` tier and the `UserspaceDegraded`
+/// fallback per ADR-0035/ADR-0042): a wrong value on a host older than macOS
+/// 12 would select a tier whose `O_NOFOLLOW_ANY` open flag does not exist on
+/// that kernel, so the underlying release must come from a real probe, not a
+/// literal picked for whichever macOS the binary happened to be built on.
+///
+/// Delegates to [`darwin_release_major`] for the actual probe; see that
+/// function's docs for the fail-safe contract on probe failure.
 #[cfg(target_os = "macos")]
-const fn macos_major_version() -> u64 {
-    // Parse the macOS major version from `sw_vers -productVersion` alternative:
-    // use sysctl kern.osrelease and map Darwin release to macOS version.
-    // Darwin 21.x = macOS 12.x, Darwin 22.x = macOS 13.x, etc.
-    // Darwin release = macOS major + 9 (for macOS >= 11).
-    // TODO Wave D: replace with a proper sysctl probe via nix::sys::sysctl.
-    // Stub: assume macOS 14 (Darwin 23.x) for CI; real probe needed for production.
-    let darwin_major: u64 = 23; // macOS 14 = Darwin 23
-    darwin_major.saturating_sub(9)
+fn macos_major_version() -> u64 {
+    darwin_release_major().unwrap_or(0).saturating_sub(9)
+}
+
+/// Reads the running kernel's Darwin major release number via `uname(2)`.
+///
+/// This is the safe-FFI equivalent of `sysctlbyname("kern.osrelease", ...)` —
+/// both read the identical kernel-reported release string on Darwin — chosen
+/// because `substrate-mcp-server` sets `#![cfg_attr(not(test),
+/// forbid(unsafe_code))]` crate-wide in `main.rs` and, unlike the narrow
+/// syscall-shim crates this workspace uses for such carve-outs (e.g.
+/// `substrate-signal-sys` for `SIGPIPE`), that `forbid` cannot be downgraded
+/// locally to reach for `libc::sysctlbyname` directly in this file.
+/// `substrate_system_info::handle_sys_uname` already wraps the unsafe-free
+/// `nix::sys::utsname::uname()` for exactly this reason (see that crate's
+/// `uname.rs` module doc), so this probe reuses it instead of introducing a
+/// second syscall shim for the same class of problem. The handler performs a
+/// single synchronous `uname(2)` call and never awaits, so driving it with
+/// `futures::executor::block_on` resolves on the very first poll — equivalent
+/// to a direct synchronous call, with no thread-parking or reactor
+/// involvement.
+///
+/// Returns `None` if the handler errors or the release string does not begin
+/// with a parseable integer. The caller ([`macos_major_version`]) treats
+/// `None` as major version `0`, which is always older than the macOS 12
+/// baseline `has_o_nofollow_any` requires — i.e. probe failure fails safe
+/// toward the degraded userspace jail tier, never toward the stronger
+/// kernel-enforced tier.
+#[cfg(target_os = "macos")]
+fn darwin_release_major() -> Option<u64> {
+    let deps = std::sync::Arc::new(substrate_system_info::SystemInfoDeps {
+        capabilities: std::sync::Arc::new(Capabilities::default()),
+    });
+    let Ok(resp) = futures::executor::block_on(substrate_system_info::handle_sys_uname(deps))
+    else {
+        tracing::warn!("uname(2) probe failed; assuming macOS major version 0 (fail-safe)");
+        return None;
+    };
+    let release = resp.structured_content.get("release").and_then(|v| v.as_str());
+    let Some(major) = release.and_then(|r| r.split('.').next()).and_then(|s| s.parse().ok()) else {
+        tracing::warn!(
+            release = ?release,
+            "could not parse Darwin major release from uname(2) output; assuming macOS major version 0 (fail-safe)"
+        );
+        return None;
+    };
+    Some(major)
 }
 
 // ---- Tier selection ----------------------------------------------------------

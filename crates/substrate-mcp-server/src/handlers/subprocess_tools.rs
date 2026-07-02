@@ -562,7 +562,31 @@ pub(crate) struct SubprocessSignalRequest {
     /// Whether to target the process or the entire process group.
     #[serde(default = "default_signal_target")]
     pub(crate) target: SignalTarget,
-    /// Confirmation token required for destructive signals (SIGKILL, SIGTERM, SIGSTOP).
+    /// Confirmation flag required for destructive signals (SIGKILL, SIGTERM, SIGSTOP).
+    ///
+    /// # Elicitation honesty (design decision, see FIX 3 discussion in ADR-0013)
+    ///
+    /// This is a caller-supplied boolean, not the result of a real MCP
+    /// `elicitation/create` round-trip. The server treats `elicitation_confirmed
+    /// == true` as sufficient confirmation and does not itself prompt a human;
+    /// it only reports `SUBSTRATE_CONFIRMATION_REQUIRED` when the flag is
+    /// absent/false and relies on the **client** to interpret that error as "go
+    /// surface a confirmation UI to the human and retry with the flag set".
+    ///
+    /// Consequences:
+    /// - This is NOT a server-enforced guarantee. A client that always retries
+    ///   with `elicitation_confirmed = true` — including a prompt-injected
+    ///   agent that sets the flag on itself without any human in the loop —
+    ///   passes this gate trivially.
+    /// - The human-in-the-loop property, where it holds at all, is delegated
+    ///   entirely to the MCP client surfacing the `SUBSTRATE_CONFIRMATION_REQUIRED`
+    ///   response to a human before retrying.
+    ///
+    /// A real `elicitation/create` flow (server-initiated, client-answered,
+    /// per the MCP spec) is a future follow-up; ADR-0013 currently documents
+    /// elicitation as a capability without describing this gap and needs an
+    /// amendment to match this reality. Do not read the current behavior as a
+    /// server-side safety guarantee.
     #[serde(default)]
     pub(crate) elicitation_confirmed: bool,
 }
@@ -585,6 +609,14 @@ pub(crate) async fn handle_subprocess_signal(
         })?;
 
     // Destructive signals require elicitation confirmation per ADR-0052.
+    //
+    // This must surface as `SUBSTRATE_CONFIRMATION_REQUIRED` (the same code the
+    // sibling `subprocess_err()` mapping above produces for
+    // `SubprocessError::ElicitationRequired`), not `SUBSTRATE_INVALID_ARGUMENT`
+    // — the caller's request shape is valid, it is simply missing the mandatory
+    // confirmation. See the elicitation-honesty note on
+    // `SubprocessSignalRequest::elicitation_confirmed` above for what this flag
+    // does and does not guarantee.
     if matches!(
         req.signal,
         SubprocessSignalName::Sigkill
@@ -592,12 +624,7 @@ pub(crate) async fn handle_subprocess_signal(
             | SubprocessSignalName::Sigstop
     ) && !req.elicitation_confirmed
     {
-        return Err(SubstrateError::InvalidArgument {
-            offending_field: "elicitation_confirmed".to_owned(),
-            reason: format!(
-                "destructive signal {} requires elicitation_confirmed=true per ADR-0052",
-                req.signal
-            ),
+        return Err(SubstrateError::ConfirmationRequired {
             correlation_id: Some(uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext))),
         });
     }

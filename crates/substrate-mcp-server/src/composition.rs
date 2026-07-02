@@ -132,6 +132,19 @@ pub(crate) async fn wire(
         // Roots are guaranteed to satisfy containment — unwrap is safe here.
         .collect::<SubstrateResult<Vec<_>>>()?;
 
+    // Primary allowlist root anchor for adapters that need a single ADR-0035
+    // kernel-jail anchor (e.g. text-processing handlers, ADR-0071 fix).
+    // `Allowlist::new` above already fails closed on an empty `policy.roots`,
+    // so `allowlist_roots` is guaranteed non-empty at this point.
+    let primary_allowlist_root =
+        allowlist_roots
+            .first()
+            .cloned()
+            .ok_or_else(|| substrate_domain::SubstrateError::ConfigInvalid {
+                offending_field: "policy.roots".to_owned(),
+                correlation_id: None,
+            })?;
+
     // ---- PathJail (ADR-0035 / ADR-0042) ------------------------------------
     let jail_factory = PathJailFactory::new(allowlist, config.security.refuse_degraded_jail);
     let jail: Arc<dyn substrate_domain::PathJailPort> = jail_factory.build(caps);
@@ -164,6 +177,11 @@ pub(crate) async fn wire(
         hasher: Arc::clone(&hasher),
         statter: Arc::clone(&statter),
         capabilities: Arc::clone(&caps_arc),
+        // Real allowlist-root anchor for kernel-level path confinement (mirrors
+        // `text_deps.allowlist_root` below and `fs_mutation`'s per-request
+        // `primary_root()`). Cloned because `primary_allowlist_root` is moved
+        // into `text_deps` further down this function.
+        allowlist_root: primary_allowlist_root.clone(),
     };
 
     // FsMutationDeps only includes the fs-index port when the `fs-index` Cargo
@@ -185,6 +203,7 @@ pub(crate) async fn wire(
 
     let text_deps = TextDeps {
         jail: Arc::clone(&jail),
+        allowlist_root: primary_allowlist_root,
         capabilities: Arc::clone(&caps_arc),
     };
 
