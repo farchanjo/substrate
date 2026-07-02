@@ -35,9 +35,12 @@ lcov.info
 # Bench output
 criterion/
 
-# spec framework
+# legacy spec framework
 .spec-cache/
 .spec-reports/
+
+# speckit runtime state — audit log is regenerated; config/policy/features/constitution are tracked
+.specify/guard-audit.jsonl
 
 # mise local overrides
 .mise.local.toml

@@ -1,0 +1,14 @@
+# speckit guard policy (ADR-0010, ADR-0016).
+#
+# The ACTIVE spec scope is the UNION of:
+#   - the static globs below (operator-managed), and
+#   - derived globs computed at startup: docs/arch/sdd/NNN-slug/** for the active
+#     feature, .specify/**, and docs/arch/** (always, not Bridge-gated).
+# Derived globs are added automatically; do NOT list them here.
+[guard]
+mode = "enforce"               # "enforce" | "advisory" | "off"
+overrideFlag = "--allow-out-of-spec"
+specScopeGlobs = [
+  # Add implementation directories the implement phase may write, e.g.:
+  # "src/**",
+]

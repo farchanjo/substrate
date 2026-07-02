@@ -1,0 +1,6 @@
+[bridge]
+enabled = false
+lane = "fast"
+specFrameworkDir = ""
+allowedEnv = ["HOME", "PATH", "SPEC_FRAMEWORK_DIR"]
+projections = []
