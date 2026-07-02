@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use substrate_domain::{Capabilities, Hints, PathJailPort};
+use substrate_domain::{Capabilities, Hints, JailedPath, PathJailPort};
 
 /// Dependency bundle for all text tool handlers.
 ///
@@ -16,6 +16,17 @@ pub struct TextDeps {
     /// Path-jail adapter — validates all caller-supplied paths.
     pub jail: Arc<dyn PathJailPort>,
 
+    /// The real, composition-root-configured allowlist root (ADR-0035).
+    ///
+    /// This is the kernel-jail anchor passed to every `PathJailPort::jail`
+    /// call made by text handlers. It MUST be an actual allowlist root wired
+    /// at startup — never a path derived from the caller-supplied target
+    /// itself (e.g. the target's own parent directory), because a file's
+    /// parent trivially "contains" it and would defeat kernel-level dirfd
+    /// confinement, leaving only the final lexical allowlist check as a
+    /// backstop.
+    pub allowlist_root: JailedPath,
+
     /// Runtime capability snapshot — used to annotate `simd_tier_used` in hints.
     pub capabilities: Arc<Capabilities>,
 }
@@ -23,6 +34,7 @@ pub struct TextDeps {
 impl std::fmt::Debug for TextDeps {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextDeps")
+            .field("allowlist_root", &self.allowlist_root)
             .field("capabilities", &self.capabilities)
             .finish_non_exhaustive()
     }

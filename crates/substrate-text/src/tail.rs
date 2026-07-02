@@ -67,22 +67,19 @@ pub async fn handle_text_tail(
     let n = params.n.unwrap_or(DEFAULT_LINES).min(MAX_LINES);
     let raw_path = PathBuf::from(&params.path);
 
+    // `deps.allowlist_root` is the real, composition-root-configured
+    // allowlist root (ADR-0035) — never a path derived from the caller
+    // target itself, which would defeat kernel-level dirfd confinement.
     let jailed = {
         let jail = Arc::clone(&deps.jail);
+        let allowlist_root = deps.allowlist_root.clone();
         let raw = raw_path.clone();
-        tokio::task::spawn_blocking(move || {
-            jail.jail(
-                &substrate_domain::JailedPath::new_jailed(
-                    raw.parent().unwrap_or(&raw).to_path_buf(),
-                ),
-                &raw,
-            )
-        })
-        .await
-        .map_err(|e| SubstrateError::InternalError {
-            reason: format!("spawn_blocking join error: {e}"),
-            correlation_id: None,
-        })??
+        tokio::task::spawn_blocking(move || jail.jail(&allowlist_root, &raw))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })??
     };
 
     let jailed_path = jailed.into_inner();
@@ -157,7 +154,13 @@ fn last_n_lines_from_bytes(buf: &[u8], n: usize) -> Vec<String> {
     let newline_positions: Vec<usize> = memchr::memchr_iter(b'\n', buf).collect();
 
     // Build line byte ranges: each line is the span between consecutive `\n` bytes.
-    let total_lines = newline_positions.len();
+    //
+    // `newline_positions.len()` alone undercounts by one whenever `buf` lacks
+    // a trailing newline: the final, unterminated segment is a real line but
+    // has no `\n` to be counted. Without the correction below, a file such as
+    // `"a\nb\nc\nd"` (no trailing `\n`) with `n = 2` would compute `skip` one
+    // line too early and return `n + 1` lines instead of `n`.
+    let total_lines = newline_positions.len() + usize::from(!buf.ends_with(b"\n"));
     let skip = total_lines.saturating_sub(n);
 
     let mut lines = Vec::with_capacity(n.min(total_lines));
@@ -314,6 +317,10 @@ mod tests {
     fn make_deps() -> Arc<TextDeps> {
         Arc::new(TextDeps {
             jail: Arc::new(PassthroughJail),
+            // `PassthroughJail::jail` ignores the root argument, so any
+            // syntactically valid `JailedPath` exercises the same code path
+            // as the real composition-root-wired allowlist root.
+            allowlist_root: JailedPath::new_jailed(PathBuf::from("/")),
             capabilities: Arc::new(Capabilities::default()),
         })
     }
@@ -367,6 +374,17 @@ mod tests {
         let buf = b"alpha\nbeta\ngamma\ndelta\n";
         let lines = last_n_lines_from_bytes(buf, 2);
         assert_eq!(lines, vec!["gamma", "delta"]);
+    }
+
+    /// Regression test for the off-by-one when the buffer has no trailing
+    /// newline: without counting the final unterminated segment as a real
+    /// line, `total_lines` undercounts by one and `last_n_lines_from_bytes`
+    /// returns `n + 1` lines instead of `n`.
+    #[test]
+    fn last_n_lines_correct_without_trailing_newline() {
+        let buf = b"a\nb\nc\nd";
+        let lines = last_n_lines_from_bytes(buf, 2);
+        assert_eq!(lines, vec!["c", "d"]);
     }
 
     // Proptest: for any file content and any n, the head+tail counts must

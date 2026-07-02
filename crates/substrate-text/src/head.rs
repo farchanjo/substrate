@@ -113,22 +113,19 @@ pub async fn handle_text_head(
     let n = params.n.unwrap_or(DEFAULT_LINES).min(MAX_LINES);
     let raw_path = PathBuf::from(&params.path);
 
+    // `deps.allowlist_root` is the real, composition-root-configured
+    // allowlist root (ADR-0035) — never a path derived from the caller
+    // target itself, which would defeat kernel-level dirfd confinement.
     let jailed = {
         let jail = Arc::clone(&deps.jail);
+        let allowlist_root = deps.allowlist_root.clone();
         let raw = raw_path.clone();
-        tokio::task::spawn_blocking(move || {
-            jail.jail(
-                &substrate_domain::JailedPath::new_jailed(
-                    raw.parent().unwrap_or(&raw).to_path_buf(),
-                ),
-                &raw,
-            )
-        })
-        .await
-        .map_err(|e| SubstrateError::InternalError {
-            reason: format!("spawn_blocking join error: {e}"),
-            correlation_id: None,
-        })??
+        tokio::task::spawn_blocking(move || jail.jail(&allowlist_root, &raw))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })??
     };
 
     let file = tokio::fs::File::open(jailed.as_path())
@@ -253,6 +250,10 @@ mod tests {
     fn make_deps() -> Arc<TextDeps> {
         Arc::new(TextDeps {
             jail: Arc::new(PassthroughJail),
+            // `PassthroughJail::jail` ignores the root argument, so any
+            // syntactically valid `JailedPath` exercises the same code path
+            // as the real composition-root-wired allowlist root.
+            allowlist_root: JailedPath::new_jailed(PathBuf::from("/")),
             capabilities: Arc::new(Capabilities::default()),
         })
     }
