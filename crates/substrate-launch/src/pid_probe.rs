@@ -43,6 +43,25 @@ pub(crate) fn read_pid_stat(pid: i32) -> Option<PidStat> {
     macos::read_pid_stat(pid)
 }
 
+/// Returns `true` when `pid` is alive **and** its recorded kernel start-time
+/// matches `expected_start_epoch` exactly (the PID-recycle guard, ADR-0068):
+/// a live process at `pid` whose start-time differs is a stranger the kernel
+/// recycled the id onto, not the process this caller expects.
+///
+/// Runs the blocking `/proc` (Linux) / `sysctl` (macOS) read on the blocking
+/// pool (zone B, ADR-0003). Shared by the detach-launch readiness wait
+/// ([`crate::registry`]) and the detached-supervisor command routing seam
+/// ([`crate::registry::DetachedController`]), mirroring the same liveness
+/// test [`crate::reaper::reconcile_sweep`] already applies to a recorded
+/// supervisor.
+pub(crate) async fn is_pid_alive(pid: i32, expected_start_epoch: u64) -> bool {
+    crate::supervisor_registry::run_blocking(move || Ok(read_pid_stat(pid)))
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|stat| stat.start_time == expected_start_epoch)
+}
+
 #[cfg(target_os = "macos")]
 #[allow(
     unsafe_code,
@@ -164,5 +183,29 @@ mod tests {
             first.start_time, second.start_time,
             "a live process's start-time must be stable across reads (the recycle-guard invariant)"
         );
+    }
+
+    #[tokio::test]
+    async fn is_pid_alive_true_for_own_process_with_matching_epoch() {
+        let pid = i32::try_from(std::process::id()).expect("test pid fits in i32");
+        let start = read_pid_stat(pid).expect("own process readable").start_time;
+        assert!(is_pid_alive(pid, start).await, "own live process with matching epoch must be alive");
+    }
+
+    #[tokio::test]
+    async fn is_pid_alive_false_on_epoch_mismatch() {
+        // A live process (this one) whose recorded epoch does not match is the
+        // pid-recycle case: it must read as NOT alive under that identity.
+        let pid = i32::try_from(std::process::id()).expect("test pid fits in i32");
+        let start = read_pid_stat(pid).expect("own process readable").start_time;
+        assert!(
+            !is_pid_alive(pid, start.wrapping_add(1)).await,
+            "a mismatched start_epoch must never read as alive (pid-recycle guard)"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_pid_alive_false_for_gone_pid() {
+        assert!(!is_pid_alive(i32::MAX, 123).await, "a gone pid must never read as alive");
     }
 }

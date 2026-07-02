@@ -111,6 +111,15 @@ pub enum ControlFrame {
         /// to re-read the Profile path already on file.
         profile_path: Option<String>,
     },
+    /// Requests the supervisor restart exactly one Service by name (a fresh
+    /// spawn, not counted against the subprocess crash-loop budget — mirrors
+    /// the in-session `launch.restart` semantics for a detached Stack).
+    Restart {
+        /// The Stack id owning the Service to restart.
+        stack_id: String,
+        /// The Service name to restart.
+        service_name: String,
+    },
 }
 
 /// Creates (if absent) and security-verifies `<stack_dir>/control.fifo`,
@@ -414,6 +423,29 @@ mod tests {
             let sent = ControlFrame::Reload {
                 stack_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
                 profile_path: None,
+            };
+            write_control_frame(&stack_dir, &sent).await.expect("write frame");
+
+            let received = timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("did not time out")
+                .expect("channel not closed");
+            assert_eq!(received, sent);
+        });
+    }
+
+    #[test]
+    fn round_trips_a_restart_frame() {
+        block_on_with_background_shutdown(async {
+            let dir = TempDir::new().expect("tempdir");
+            let stack_dir = dir.path().to_path_buf();
+
+            let mut rx = spawn_control_reader(stack_dir.clone());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            let sent = ControlFrame::Restart {
+                stack_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
+                service_name: "web".to_owned(),
             };
             write_control_frame(&stack_dir, &sent).await.expect("write frame");
 

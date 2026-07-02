@@ -261,12 +261,29 @@ async fn spawn_real_detached_stack(world: &mut SubstrateWorld, ttl_secs: u32) ->
             .expect("supervisor_pid present in launch_up's structuredContent"),
     )
     .expect("supervisor_pid fits i32");
-    let child_pid = i32::try_from(
-        sc["supervisor"]["children"][0]["pid"]
-            .as_i64()
-            .expect("children[0].pid present in launch_up's structuredContent"),
-    )
-    .expect("child pid fits i32");
+
+    // The 2026-07-01 readiness-gating amendment (ADR-0068/ADR-0056) makes the
+    // supervisor publish its durable registry BEFORE `spawn_all` runs, with no
+    // children recorded yet, so `launch_up`'s immediate response can no
+    // longer be assumed to carry `supervisor.children[0]` — only that the
+    // supervisor itself is alive and pinned to the right Profile. Poll the
+    // durable registry directly for the (near-instant, no health probe on
+    // this fixture) `web` Service to actually appear.
+    let stacks_root = launch_stacks_root().expect("XDG_STATE_HOME set above");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let child_pid = loop {
+        let stack_dir = only_stack_dir(&stacks_root);
+        if let Ok(reg) = read_supervisor_registry(&stack_dir).await
+            && let Some(child) = reg.children.first()
+        {
+            break child.pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the web Service must appear in supervisor.json within 10s of launch_up returning"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
 
     RealDetachedStack {
         state_home: state_home_path,

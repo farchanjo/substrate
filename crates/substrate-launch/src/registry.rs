@@ -43,7 +43,7 @@ use substrate_domain::launch::event::{LaunchEvent, LaunchEventKind};
 use substrate_domain::launch::profile::{
     LaunchOperatorConfig, LaunchProfile, LaunchService, ServiceName,
 };
-use substrate_domain::launch::stack::{StackHandle, SupervisorRegistry};
+use substrate_domain::launch::stack::{StackChild, StackHandle, SupervisorRegistry};
 use substrate_domain::launch::state::{DisconnectPolicy, StackState};
 use substrate_domain::launch::trust::TrustRecord;
 use substrate_domain::ports::fs_index::CancelSignal;
@@ -55,7 +55,9 @@ use substrate_domain::subprocess::stream::Stream;
 use substrate_domain::value_objects::stack_id::StackId;
 use substrate_domain::value_objects::{ClientId, JobId};
 
+use crate::control_fifo::{ControlFrame, write_control_frame};
 use crate::dag::{restart_closure, reverse_topo};
+use crate::pid_probe::is_pid_alive;
 use crate::profile_loader::{build_trust_record, load_trusted, load_untrusted, write_scaffold};
 #[cfg(test)]
 use crate::redaction::Redactor;
@@ -193,6 +195,12 @@ pub struct LaunchRegistry {
     /// registry on the `on_client_disconnect = detach` path (ADR-0068). The
     /// production launcher forks the current executable; tests inject a double.
     detach_launcher: Arc<dyn DetachLauncher>,
+    /// Routes `down`/`restart`/`reload` to an already-detached Stack's live
+    /// supervisor via the control FIFO (ADR-0068), and confirms the supervisor
+    /// actually acted before reporting success. The production controller
+    /// talks to the real `<stack_dir>/control.fifo` + `supervisor.json`; tests
+    /// inject a double that never touches the filesystem.
+    detached_controller: Arc<dyn DetachedController>,
 }
 
 impl LaunchRegistry {
@@ -222,6 +230,27 @@ impl LaunchRegistry {
         state_root: PathBuf,
         detach_launcher: Arc<dyn DetachLauncher>,
     ) -> Arc<Self> {
+        Self::with_launcher_and_controller(
+            subprocess,
+            state_root,
+            detach_launcher,
+            Arc::new(ProcessDetachedController),
+        )
+    }
+
+    /// Constructs a `LaunchRegistry` with explicit [`DetachLauncher`] and
+    /// [`DetachedController`] doubles.
+    ///
+    /// [`with_launcher`](Self::with_launcher) wires the production
+    /// [`ProcessDetachedController`]; this seam lets the unit tests exercise
+    /// `down`/`restart`/`reload`/`forget` against an already-detached Stack
+    /// without ever touching the real control FIFO or `supervisor.json`.
+    fn with_launcher_and_controller(
+        subprocess: Arc<dyn SubprocessPort>,
+        state_root: PathBuf,
+        detach_launcher: Arc<dyn DetachLauncher>,
+        detached_controller: Arc<dyn DetachedController>,
+    ) -> Arc<Self> {
         let trust_store = state_root.join(TRUST_STORE_FILE);
         Arc::new(Self {
             stacks: Arc::default(),
@@ -230,6 +259,7 @@ impl LaunchRegistry {
             trust_store,
             op_config: LaunchOperatorConfig::default(),
             detach_launcher,
+            detached_controller,
         })
     }
 
@@ -365,7 +395,7 @@ impl LaunchRegistry {
         let canonical = canonical_path_string(profile_path);
         let registry = self
             .detach_launcher
-            .launch_detached(&stack_id, Path::new(&canonical), &config_hash)
+            .launch_detached(&stack_id, Path::new(&canonical), &self.trust_store, &config_hash)
             .await?;
         let mut entry =
             StackEntry::new(stack_id.clone(), canonical, config_hash, policy, profile);
@@ -383,6 +413,85 @@ impl LaunchRegistry {
         self.stacks.insert(stack_id, entry);
         Ok(handle)
     }
+
+    /// Routes `restart` for a DETACHED Stack to its live supervisor via the
+    /// control FIFO instead of spawning in-session.
+    ///
+    /// A detached Stack's real child processes are owned entirely by the
+    /// supervisor, so this registry's `job_ids` map is empty for it
+    /// (bug fix #2): spawning in-session here would double-spawn the Service
+    /// behind the supervisor's back rather than restarting it. Never a silent
+    /// no-op either — [`DetachedController::send_restart`] confirms the
+    /// supervisor actually re-spawned the Service before this returns success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::InvalidProfile`] when `service_name` is not a
+    /// member of the pinned Profile, or [`LaunchError::SupervisorUnreachable`]
+    /// when the supervisor cannot be reached or does not confirm the restart
+    /// within its budget.
+    async fn restart_detached(
+        &self,
+        stack_id: &StackId,
+        service_name: &str,
+    ) -> Result<StackHandle, LaunchError> {
+        {
+            let entry = self.stacks.get(stack_id).ok_or_else(|| LaunchError::SupervisorUnreachable {
+                stack_id: stack_id.to_crockford(),
+            })?;
+            if !entry.profile.services.contains_key(service_name) {
+                return Err(LaunchError::InvalidProfile {
+                    msg: format!("unknown service '{service_name}'"),
+                });
+            }
+        }
+        self.detached_controller.send_restart(stack_id, service_name).await?;
+        let mut entry = self.stacks.get_mut(stack_id).ok_or_else(|| LaunchError::SupervisorUnreachable {
+            stack_id: stack_id.to_crockford(),
+        })?;
+        entry.emit(
+            LaunchEventKind::Restarting,
+            Some(service_name),
+            format!("restarting service '{service_name}' via detached supervisor"),
+        );
+        // The registry only proves the supervisor re-spawned it (a fresh pid);
+        // that supervisor now owns this Service's own readiness, so `Running`
+        // is the honest, confirmed fact rather than an assumed `Ready`.
+        entry.set_service(service_name, SubprocessState::Running);
+        Ok(entry.handle.clone())
+    }
+
+    /// Applies a detached-supervisor-confirmed `reload`'s diff to the
+    /// in-memory entry.
+    ///
+    /// Unlike [`Self::apply_reload`] there are no `job_ids` to update — the
+    /// supervisor holds those — but the pinned Profile, config hash, and
+    /// per-Service state must still track what the supervisor just confirmed
+    /// applying.
+    fn apply_detached_reload(
+        &self,
+        stack_id: &StackId,
+        new_profile: LaunchProfile,
+        config_hash: String,
+        report: &ReloadReport,
+    ) {
+        let Some(mut entry) = self.stacks.get_mut(stack_id) else {
+            return;
+        };
+        for name in &report.removed {
+            entry.handle.services.remove(name);
+        }
+        for name in report.added.iter().chain(&report.restarted) {
+            entry.set_service(name, SubprocessState::Running);
+        }
+        entry.handle.config_hash = config_hash;
+        entry.profile = new_profile;
+        entry.emit(
+            LaunchEventKind::Restarting,
+            None,
+            "stack reloaded via detached supervisor".to_owned(),
+        );
+    }
 }
 
 // ---- Detached-supervisor launcher (ADR-0068) --------------------------------
@@ -392,8 +501,10 @@ impl LaunchRegistry {
 /// without forking a real OS process.
 #[async_trait]
 trait DetachLauncher: Send + Sync {
-    /// Spawns the detached supervisor for `stack_id` running `profile_path`, then
-    /// blocks until its `supervisor.json` is published carrying `expected_hash`.
+    /// Spawns the detached supervisor for `stack_id` running `profile_path`
+    /// (with `trust_store` threaded through so its own `reload` path can
+    /// re-verify trust, ADR-0064), then blocks until its `supervisor.json` is
+    /// published carrying `expected_hash`.
     ///
     /// # Errors
     ///
@@ -405,6 +516,7 @@ trait DetachLauncher: Send + Sync {
         &self,
         stack_id: &StackId,
         profile_path: &Path,
+        trust_store: &Path,
         expected_hash: &str,
     ) -> Result<SupervisorRegistry, LaunchError>;
 }
@@ -425,10 +537,11 @@ impl DetachLauncher for ProcessDetachLauncher {
         &self,
         stack_id: &StackId,
         profile_path: &Path,
+        trust_store: &Path,
         expected_hash: &str,
     ) -> Result<SupervisorRegistry, LaunchError> {
         let stack_dir = open_stack_registry(stack_id).await?;
-        spawn_supervisor_process(stack_id, profile_path).await?;
+        spawn_supervisor_process(stack_id, profile_path, trust_store).await?;
         await_supervisor_ready(&stack_dir, stack_id, expected_hash).await
     }
 }
@@ -438,7 +551,9 @@ impl DetachLauncher for ProcessDetachLauncher {
 /// The child inherits none of this server's STDIO — the JSON-RPC channel on
 /// `stdout` is sacred (ADR-0005) — and re-establishes its own session via `setsid`
 /// (ADR-0068), so the spawning side detaches the descriptors and never waits on
-/// the child (a dropped handle is reparented to init on this server's exit).
+/// the child for its OWN exit-status collection: reaping is delegated to a
+/// dedicated background task (see [`spawn_zombie_reaper`]) rather than blocking
+/// this call, since the child is meant to run detached and independent.
 ///
 /// This forks the substrate binary itself in `--supervise` mode (ADR-0068 "same
 /// binary"), NOT a managed Service — every managed Service still routes through
@@ -457,28 +572,72 @@ impl DetachLauncher for ProcessDetachLauncher {
 async fn spawn_supervisor_process(
     stack_id: &StackId,
     profile_path: &Path,
+    trust_store: &Path,
 ) -> Result<(), LaunchError> {
     let exe = std::env::current_exe().map_err(|e| LaunchError::SpawnFailed { source: e })?;
     let stack_arg = stack_id.to_crockford();
     let profile_arg = profile_path.to_path_buf();
+    let trust_store_arg = trust_store.to_path_buf();
     run_blocking(move || {
-        std::process::Command::new(exe)
+        let child = std::process::Command::new(exe)
             .arg("--supervise")
             .arg(&stack_arg)
             .arg("--profile")
             .arg(&profile_arg)
+            .arg("--trust-store")
+            .arg(&trust_store_arg)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map(drop)
-            .map_err(|e| LaunchError::SpawnFailed { source: e })
+            .map_err(|e| LaunchError::SpawnFailed { source: e })?;
+        spawn_zombie_reaper(child);
+        Ok(())
     })
     .await
 }
 
-/// Polls `<stack_dir>/supervisor.json` until it is published with `expected_hash`
-/// or [`SUPERVISOR_READY_TIMEOUT`] elapses (then [`LaunchError::SupervisorUnreachable`]).
+/// Spawns a fire-and-forget blocking task that reaps the detached supervisor's
+/// exit status whenever it eventually terminates.
+///
+/// `setsid(2)` (run inside the child itself, per ADR-0068) detaches the child's
+/// controlling session/tty but does **not** reparent it away from this process
+/// while this (long-lived MCP server) process is still alive — a `pid`/`ppid`
+/// fact, not a session one. Without ANY `wait(2)` call, the child's process
+/// table entry would sit as a zombie under this server from the moment the
+/// supervisor exits (a clean `launch.down`/orphan-TTL teardown, or a crash)
+/// until this server itself exits, potentially for the server's entire
+/// lifetime across many detach/down cycles (bug fix #6). The returned
+/// `JoinHandle` is intentionally dropped: this reaper task outlives the
+/// `launch.up` call that started it and keeps running for as long as the
+/// supervisor does — it only ever calls `wait()`, never signals or otherwise
+/// manages a process that is meant to run fully independent of this one.
+#[expect(
+    clippy::disallowed_types,
+    reason = "reaps the exit status of the substrate --supervise sidecar this \
+              module itself forked (ADR-0068 \"same binary\"), not a managed Service."
+)]
+fn spawn_zombie_reaper(mut child: std::process::Child) {
+    drop(tokio::task::spawn_blocking(move || {
+        // A `wait()` failure here means the child was already reaped by
+        // someone else (or never existed) — either way there is nothing left
+        // to do; this task's only job is to prevent a zombie, not to inspect
+        // or act on the exit status itself.
+        let _ = child.wait();
+    }));
+}
+
+/// Polls `<stack_dir>/supervisor.json` until it is published with
+/// `expected_hash` **and** its recorded supervisor pid is genuinely alive
+/// (bug fix #4), or [`SUPERVISOR_READY_TIMEOUT`] elapses (then
+/// [`LaunchError::SupervisorUnreachable`]).
+///
+/// Does NOT wait for every Service to finish bringing up: the supervisor now
+/// publishes this snapshot before `spawn_all` runs (`detached.rs::bootstrap`),
+/// so "`config_hash` matches and the supervisor process is alive" is the
+/// complete readiness contract here — a per-Service health probe can take
+/// minutes (ADR-0056), and that bring-up is the supervisor's own job from this
+/// point on (ADR-0068/ADR-0056 2026-07-01 amendment).
 async fn await_supervisor_ready(
     stack_dir: &Path,
     stack_id: &StackId,
@@ -488,6 +647,7 @@ async fn await_supervisor_ready(
     loop {
         if let Ok(registry) = read_supervisor_registry(stack_dir).await
             && registry.config_hash == expected_hash
+            && is_pid_alive(registry.supervisor_pid, registry.start_epoch).await
         {
             return Ok(registry);
         }
@@ -497,6 +657,197 @@ async fn await_supervisor_ready(
             });
         }
         tokio::time::sleep(SUPERVISOR_POLL_INTERVAL).await;
+    }
+}
+
+// ---- Detached-supervisor command routing (ADR-0068 control FIFO) -----------
+
+/// Seam for routing a `down`/`restart`/`reload` request on an already-DETACHED
+/// Stack to its live supervisor via the control FIFO, and for confirming the
+/// supervisor actually acted before the caller reports success.
+///
+/// A detached Stack's real child processes are owned entirely by the
+/// supervisor, so this registry's `job_ids` map is empty for it; acting on
+/// that empty map (as `down`/`restart`/`reload` used to) is either a silent
+/// no-op or an in-session double-spawn (bug fixes #1/#2). Every method here
+/// either confirms the requested effect within its budget or returns
+/// [`LaunchError::SupervisorUnreachable`] — never a silent lie.
+#[async_trait]
+trait DetachedController: Send + Sync {
+    /// Commands the supervisor to tear the Stack down and blocks until the
+    /// durable registry confirms the supervisor (and, transitively, its
+    /// children) are gone.
+    async fn send_down(&self, stack_id: &StackId) -> Result<(), LaunchError>;
+
+    /// Commands the supervisor to restart exactly one Service and blocks
+    /// until the registry shows it re-spawned (a new pid or start-time).
+    async fn send_restart(&self, stack_id: &StackId, service_name: &str) -> Result<(), LaunchError>;
+
+    /// Commands the supervisor to reload (from `profile_path`, always fully
+    /// resolved by the caller) and blocks until the registry reflects
+    /// `expected_hash`.
+    async fn send_reload(
+        &self,
+        stack_id: &StackId,
+        profile_path: Option<String>,
+        expected_hash: &str,
+    ) -> Result<(), LaunchError>;
+
+    /// Returns `true` while a live supervisor still owns this Stack.
+    async fn is_alive(&self, stack_id: &StackId) -> bool;
+}
+
+/// Cadence of the poll while confirming a detached-supervisor command's effect.
+const CONTROL_CONFIRM_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// Upper bound confirming a `down` command tore the Stack down: generous
+/// because teardown is a reverse-topological SIGTERM-then-drain-then-SIGKILL
+/// cascade across every Service.
+const CONTROL_DOWN_CONFIRM_TIMEOUT: Duration = Duration::from_mins(1);
+/// Upper bound confirming a `restart`/`reload` command's effect took hold.
+const CONTROL_ACK_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Production [`DetachedController`]: talks to the real
+/// `<stack_dir>/control.fifo` + `supervisor.json` (ADR-0068).
+struct ProcessDetachedController;
+
+#[async_trait]
+impl DetachedController for ProcessDetachedController {
+    async fn send_down(&self, stack_id: &StackId) -> Result<(), LaunchError> {
+        let stack_dir = open_stack_registry(stack_id).await?;
+        require_supervisor_alive(&stack_dir, stack_id).await?;
+        let frame = ControlFrame::Down {
+            stack_id: stack_id.to_crockford(),
+        };
+        write_control_frame(&stack_dir, &frame).await?;
+        await_registry_gone(&stack_dir, stack_id).await
+    }
+
+    async fn send_restart(&self, stack_id: &StackId, service_name: &str) -> Result<(), LaunchError> {
+        let stack_dir = open_stack_registry(stack_id).await?;
+        require_supervisor_alive(&stack_dir, stack_id).await?;
+        let before = read_supervisor_registry(&stack_dir)
+            .await
+            .ok()
+            .and_then(|r| r.children.into_iter().find(|c| c.name == service_name));
+        let frame = ControlFrame::Restart {
+            stack_id: stack_id.to_crockford(),
+            service_name: service_name.to_owned(),
+        };
+        write_control_frame(&stack_dir, &frame).await?;
+        await_child_respawned(&stack_dir, stack_id, service_name, before.as_ref()).await
+    }
+
+    async fn send_reload(
+        &self,
+        stack_id: &StackId,
+        profile_path: Option<String>,
+        expected_hash: &str,
+    ) -> Result<(), LaunchError> {
+        let stack_dir = open_stack_registry(stack_id).await?;
+        require_supervisor_alive(&stack_dir, stack_id).await?;
+        let frame = ControlFrame::Reload {
+            stack_id: stack_id.to_crockford(),
+            profile_path,
+        };
+        write_control_frame(&stack_dir, &frame).await?;
+        await_hash_matches(&stack_dir, stack_id, expected_hash).await
+    }
+
+    async fn is_alive(&self, stack_id: &StackId) -> bool {
+        match open_stack_registry(stack_id).await {
+            Ok(dir) => supervisor_reachable(&dir).await,
+            Err(_) => false,
+        }
+    }
+}
+
+/// Returns `true` when `stack_dir`'s recorded supervisor is alive (pid alive
+/// **and** start-time matches, guarding pid reuse) — mirrors
+/// [`crate::reaper::reconcile_sweep`]'s own liveness test.
+async fn supervisor_reachable(stack_dir: &Path) -> bool {
+    let Ok(registry) = read_supervisor_registry(stack_dir).await else {
+        return false;
+    };
+    is_pid_alive(registry.supervisor_pid, registry.start_epoch).await
+}
+
+/// Fails loud with [`LaunchError::SupervisorUnreachable`] instead of silently
+/// blocking on a control-FIFO write nobody will ever read (a dead supervisor
+/// has no reader task left to open the FIFO's other end).
+async fn require_supervisor_alive(stack_dir: &Path, stack_id: &StackId) -> Result<(), LaunchError> {
+    if supervisor_reachable(stack_dir).await {
+        Ok(())
+    } else {
+        Err(LaunchError::SupervisorUnreachable {
+            stack_id: stack_id.to_crockford(),
+        })
+    }
+}
+
+/// Polls until `stack_dir`'s registry disappears (teardown's
+/// `DetachedSupervisor::clear_registry` removes the whole directory) or the
+/// recorded supervisor stops being reachable, confirming a `down` command
+/// actually took effect rather than reporting success on faith.
+async fn await_registry_gone(stack_dir: &Path, stack_id: &StackId) -> Result<(), LaunchError> {
+    let deadline = Instant::now() + CONTROL_DOWN_CONFIRM_TIMEOUT;
+    loop {
+        if read_supervisor_registry(stack_dir).await.is_err() || !supervisor_reachable(stack_dir).await {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(LaunchError::SupervisorUnreachable {
+                stack_id: stack_id.to_crockford(),
+            });
+        }
+        tokio::time::sleep(CONTROL_CONFIRM_POLL_INTERVAL).await;
+    }
+}
+
+/// Polls until `service_name`'s recorded child shows a new pid or start-time
+/// (proof the supervisor actually re-spawned it), or the budget elapses.
+async fn await_child_respawned(
+    stack_dir: &Path,
+    stack_id: &StackId,
+    service_name: &str,
+    before: Option<&StackChild>,
+) -> Result<(), LaunchError> {
+    let deadline = Instant::now() + CONTROL_ACK_CONFIRM_TIMEOUT;
+    loop {
+        if let Ok(registry) = read_supervisor_registry(stack_dir).await
+            && let Some(child) = registry.children.iter().find(|c| c.name == service_name)
+            && before.is_none_or(|b| b.pid != child.pid || b.start_epoch != child.start_epoch)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(LaunchError::SupervisorUnreachable {
+                stack_id: stack_id.to_crockford(),
+            });
+        }
+        tokio::time::sleep(CONTROL_CONFIRM_POLL_INTERVAL).await;
+    }
+}
+
+/// Polls until the registry's `config_hash` matches `expected_hash` (proof the
+/// supervisor applied the reload), or the budget elapses.
+async fn await_hash_matches(
+    stack_dir: &Path,
+    stack_id: &StackId,
+    expected_hash: &str,
+) -> Result<(), LaunchError> {
+    let deadline = Instant::now() + CONTROL_ACK_CONFIRM_TIMEOUT;
+    loop {
+        if let Ok(registry) = read_supervisor_registry(stack_dir).await
+            && registry.config_hash == expected_hash
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(LaunchError::SupervisorUnreachable {
+                stack_id: stack_id.to_crockford(),
+            });
+        }
+        tokio::time::sleep(CONTROL_CONFIRM_POLL_INTERVAL).await;
     }
 }
 
@@ -669,6 +1020,19 @@ impl LaunchPort for LaunchRegistry {
         service_name: &str,
         cancel: &dyn CancelSignal,
     ) -> Result<StackHandle, LaunchError> {
+        let is_detached = {
+            let entry = self.stacks.get(stack_id).ok_or_else(|| LaunchError::SupervisorUnreachable {
+                stack_id: stack_id.to_crockford(),
+            })?;
+            entry.handle.state == StackState::Detached
+        };
+        if is_detached {
+            // The detached supervisor — not this in-session registry — owns
+            // the real child process, so `job_ids` is empty here by design;
+            // route through the control FIFO instead of double-spawning.
+            return self.restart_detached(stack_id, service_name).await;
+        }
+
         let (service, old_job, client_id, stored_path) = {
             let entry = self.stacks.get(stack_id).ok_or_else(|| {
                 LaunchError::SupervisorUnreachable {
@@ -732,7 +1096,7 @@ impl LaunchPort for LaunchRegistry {
         profile_path: Option<&str>,
         cancel: &dyn CancelSignal,
     ) -> Result<ReloadReport, LaunchError> {
-        let (old_profile, stored_path, job_ids) = {
+        let (old_profile, stored_path, job_ids, is_detached) = {
             let entry = self.stacks.get(stack_id).ok_or_else(|| {
                 LaunchError::SupervisorUnreachable {
                     stack_id: stack_id.to_crockford(),
@@ -742,6 +1106,7 @@ impl LaunchPort for LaunchRegistry {
                 entry.profile.clone(),
                 entry.handle.profile_path.clone(),
                 entry.job_ids.clone(),
+                entry.handle.state == StackState::Detached,
             )
         };
         let path = profile_path.map_or(stored_path, ToOwned::to_owned);
@@ -752,6 +1117,18 @@ impl LaunchPort for LaunchRegistry {
         let _order = new_profile.topological_order()?;
 
         let report = compute_reload_report(&old_profile, &new_profile);
+
+        if is_detached {
+            // The detached supervisor owns every Service's real process, so
+            // routing through the control FIFO — never an in-session
+            // spawn_set — is the only way to apply this reload without
+            // double-spawning behind the supervisor's back.
+            self.detached_controller
+                .send_reload(stack_id, Some(path.clone()), &loaded.config_hash)
+                .await?;
+            self.apply_detached_reload(stack_id, new_profile, loaded.config_hash, &report);
+            return Ok(report);
+        }
 
         // Stop removed + the restart closure, dependents-first (reverse topo).
         let stop_set: BTreeSet<ServiceName> = report
@@ -788,14 +1165,42 @@ impl LaunchPort for LaunchRegistry {
         stack_id: &StackId,
         _cancel: &dyn CancelSignal,
     ) -> Result<StackState, LaunchError> {
-        let (profile, job_ids) = {
+        let (profile, job_ids, is_detached) = {
             let entry = self.stacks.get(stack_id).ok_or_else(|| {
                 LaunchError::SupervisorUnreachable {
                     stack_id: stack_id.to_crockford(),
                 }
             })?;
-            (entry.profile.clone(), entry.job_ids.clone())
+            (
+                entry.profile.clone(),
+                entry.job_ids.clone(),
+                entry.handle.state == StackState::Detached,
+            )
         };
+
+        if is_detached {
+            // The detached supervisor — not this in-session registry — owns
+            // every Service's real process, so `job_ids` is empty here by
+            // design (bug fix #1): route the teardown through the control
+            // FIFO and confirm it before ever reporting `Down`, instead of
+            // iterating the empty map and lying about the outcome.
+            self.detached_controller.send_down(stack_id).await?;
+            if let Some(mut entry) = self.stacks.get_mut(stack_id) {
+                entry.handle.state = StackState::Draining;
+                let names: Vec<ServiceName> = entry.handle.services.keys().cloned().collect();
+                for name in &names {
+                    entry.set_service(name, SubprocessState::Cancelled);
+                }
+                entry.emit(
+                    LaunchEventKind::Exited,
+                    None,
+                    "detached supervisor confirmed stack teardown".to_owned(),
+                );
+                entry.handle.state = StackState::Down;
+            }
+            return Ok(StackState::Down);
+        }
+
         let order = reverse_topo(&profile)?;
         for name in &order {
             if let Some(job) = job_ids.get(name) {
@@ -818,19 +1223,29 @@ impl LaunchPort for LaunchRegistry {
     }
 
     async fn forget(&self, stack_id: &StackId) -> Result<(), LaunchError> {
-        let state = {
+        let (state, is_detached) = {
             let entry = self.stacks.get(stack_id).ok_or_else(|| {
                 LaunchError::SupervisorUnreachable {
                     stack_id: stack_id.to_crockford(),
                 }
             })?;
-            entry.handle.state
+            (entry.handle.state, entry.handle.state == StackState::Detached)
         };
         if state != StackState::Down {
-            return Err(LaunchError::StackNotTerminal {
-                stack_id: stack_id.to_crockford(),
-                state: state.to_string(),
-            });
+            // A detached Stack whose supervisor has already exited on its own
+            // (TTL expiry, crash, external kill) without this session
+            // observing it leaves a stale in-memory entry; there is nothing
+            // left to silently drop, so forgetting it is safe (bug fix #5).
+            // A supervisor that is genuinely still live, by contrast, must
+            // never be silently dropped — it keeps falling through to the
+            // same `StackNotTerminal` rejection an in-session Stack gets.
+            let stale_detached = is_detached && !self.detached_controller.is_alive(stack_id).await;
+            if !stale_detached {
+                return Err(LaunchError::StackNotTerminal {
+                    stack_id: stack_id.to_crockford(),
+                    state: state.to_string(),
+                });
+            }
         }
         self.stacks.remove(stack_id);
         Ok(())
@@ -1214,6 +1629,7 @@ mod tests {
             &self,
             stack_id: &StackId,
             _profile_path: &Path,
+            _trust_store: &Path,
             expected_hash: &str,
         ) -> Result<SupervisorRegistry, LaunchError> {
             self.calls
@@ -1254,6 +1670,136 @@ mod tests {
         launcher: Arc<dyn DetachLauncher>,
     ) -> Arc<LaunchRegistry> {
         LaunchRegistry::with_launcher(fake as Arc<dyn SubprocessPort>, dir.to_path_buf(), launcher)
+    }
+
+    /// The verdict a [`FakeDetachedController`] returns for a given method call.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ControllerVerdict {
+        /// Confirms the command's effect (mirrors a live, cooperative supervisor).
+        Succeed,
+        /// Fails with `SupervisorUnreachable` (mirrors a dead/unreachable supervisor).
+        Unreachable,
+    }
+
+    /// A scripted [`DetachedController`] double: records every call and returns a
+    /// pre-configured [`ControllerVerdict`] per method, without ever touching the
+    /// filesystem or a real control FIFO.
+    struct FakeDetachedController {
+        alive: Mutex<bool>,
+        down_verdict: Mutex<ControllerVerdict>,
+        restart_verdict: Mutex<ControllerVerdict>,
+        reload_verdict: Mutex<ControllerVerdict>,
+        down_calls: Mutex<Vec<String>>,
+        restart_calls: Mutex<Vec<(String, String)>>,
+        reload_calls: Mutex<Vec<(String, Option<String>, String)>>,
+    }
+
+    impl FakeDetachedController {
+        /// A controller behind a live, fully cooperative supervisor.
+        fn alive() -> Arc<Self> {
+            Arc::new(Self {
+                alive: Mutex::new(true),
+                down_verdict: Mutex::new(ControllerVerdict::Succeed),
+                restart_verdict: Mutex::new(ControllerVerdict::Succeed),
+                reload_verdict: Mutex::new(ControllerVerdict::Succeed),
+                down_calls: Mutex::new(Vec::new()),
+                restart_calls: Mutex::new(Vec::new()),
+                reload_calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// A controller behind a supervisor that is already gone: every command
+        /// fails with `SupervisorUnreachable` and `is_alive` reports `false`.
+        fn dead() -> Arc<Self> {
+            let ctl = Self::alive();
+            *ctl.alive.lock().unwrap() = false;
+            *ctl.down_verdict.lock().unwrap() = ControllerVerdict::Unreachable;
+            *ctl.restart_verdict.lock().unwrap() = ControllerVerdict::Unreachable;
+            *ctl.reload_verdict.lock().unwrap() = ControllerVerdict::Unreachable;
+            ctl
+        }
+
+        fn down_calls(&self) -> Vec<String> {
+            self.down_calls.lock().unwrap().clone()
+        }
+
+        fn restart_calls(&self) -> Vec<(String, String)> {
+            self.restart_calls.lock().unwrap().clone()
+        }
+
+        fn reload_calls(&self) -> Vec<(String, Option<String>, String)> {
+            self.reload_calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl DetachedController for FakeDetachedController {
+        async fn send_down(&self, stack_id: &StackId) -> Result<(), LaunchError> {
+            self.down_calls.lock().unwrap().push(stack_id.to_crockford());
+            let verdict = *self.down_verdict.lock().unwrap();
+            match verdict {
+                ControllerVerdict::Succeed => Ok(()),
+                ControllerVerdict::Unreachable => Err(LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                }),
+            }
+        }
+
+        async fn send_restart(&self, stack_id: &StackId, service_name: &str) -> Result<(), LaunchError> {
+            self.restart_calls
+                .lock()
+                .unwrap()
+                .push((stack_id.to_crockford(), service_name.to_owned()));
+            let verdict = *self.restart_verdict.lock().unwrap();
+            match verdict {
+                ControllerVerdict::Succeed => Ok(()),
+                ControllerVerdict::Unreachable => Err(LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                }),
+            }
+        }
+
+        async fn send_reload(
+            &self,
+            stack_id: &StackId,
+            profile_path: Option<String>,
+            expected_hash: &str,
+        ) -> Result<(), LaunchError> {
+            self.reload_calls.lock().unwrap().push((
+                stack_id.to_crockford(),
+                profile_path,
+                expected_hash.to_owned(),
+            ));
+            let verdict = *self.reload_verdict.lock().unwrap();
+            match verdict {
+                ControllerVerdict::Succeed => Ok(()),
+                ControllerVerdict::Unreachable => Err(LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                }),
+            }
+        }
+
+        async fn is_alive(&self, _stack_id: &StackId) -> bool {
+            *self.alive.lock().unwrap()
+        }
+    }
+
+    /// Builds a `LaunchRegistry` with both a succeeding [`FakeDetachLauncher`]
+    /// (so `up(detach)` succeeds) and an explicit [`FakeDetachedController`], so
+    /// `down`/`restart`/`reload`/`forget` on the resulting detached Stack can be
+    /// driven and asserted without any real control FIFO or `supervisor.json`.
+    fn registry_detached(
+        fake: Arc<FakeSubprocessPort>,
+        dir: &Path,
+        children: &[&str],
+        controller: Arc<FakeDetachedController>,
+    ) -> Arc<LaunchRegistry> {
+        LaunchRegistry::with_launcher_and_controller(
+            fake as Arc<dyn SubprocessPort>,
+            dir.to_path_buf(),
+            FakeDetachLauncher::succeeding(children),
+            controller,
+        )
     }
 
     const THREE_TIER: &str = "version = 1\n\n[services.db]\ncommand = [\"db\"]\n\n[services.api]\ncommand = [\"api\"]\ndepends_on = [\"db\"]\n\n[services.web]\ncommand = [\"web\"]\ndepends_on = [\"api\"]\n";
@@ -1430,6 +1976,278 @@ mod tests {
             .expect_err("a supervisor that never comes up is unreachable");
         assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
         assert!(fake.spawns().is_empty());
+    }
+
+    // ---- Detached-supervisor command routing (bug fixes #1, #2, #5) --------
+
+    #[tokio::test]
+    async fn detached_down_routes_through_control_fifo_and_confirms() {
+        // bug fix #1: `down` on a DETACHED stack must route to the supervisor
+        // via the control FIFO and confirm it, not iterate the (empty)
+        // job_ids map — which used to make it a silent no-op.
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::alive();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let state = reg
+            .down(&handle.stack_id, &NeverCancel)
+            .await
+            .expect("down routes to the supervisor and confirms teardown");
+
+        assert_eq!(state, StackState::Down);
+        assert_eq!(controller.down_calls(), vec![handle.stack_id.to_crockford()]);
+        assert!(
+            fake.cancels().is_empty(),
+            "the detached supervisor owns teardown; the in-session port must never be told to cancel"
+        );
+        let after = reg
+            .status(Some(&handle.stack_id))
+            .await
+            .expect("status")
+            .pop()
+            .expect("stack present");
+        assert_eq!(after.state, StackState::Down);
+    }
+
+    #[tokio::test]
+    async fn detached_down_supervisor_unreachable_is_not_silently_marked_down() {
+        // bug fix #1 corollary: never lie — an unreachable supervisor must
+        // fail `down` loudly, not silently report `Down`.
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::dead();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller);
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let err = reg
+            .down(&handle.stack_id, &NeverCancel)
+            .await
+            .expect_err("an unreachable supervisor must not be silently reported as torn down");
+        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
+
+        let after = reg
+            .status(Some(&handle.stack_id))
+            .await
+            .expect("status")
+            .pop()
+            .expect("stack present");
+        assert_eq!(after.state, StackState::Detached, "state must be untouched on a failed down");
+    }
+
+    #[tokio::test]
+    async fn detached_restart_routes_through_control_fifo_and_confirms() {
+        // bug fix #2: `restart` on a DETACHED stack must route to the
+        // supervisor, never spawn in-session (which used to double-spawn the
+        // Service behind the supervisor's back).
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::alive();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let updated = reg
+            .restart(&handle.stack_id, "api", &NeverCancel)
+            .await
+            .expect("restart routes to the supervisor");
+
+        assert_eq!(
+            controller.restart_calls(),
+            vec![(handle.stack_id.to_crockford(), "api".to_owned())]
+        );
+        assert!(fake.spawns().is_empty(), "restart must never spawn in-session for a detached stack");
+        assert_eq!(updated.services.get("api"), Some(&SubprocessState::Running));
+    }
+
+    #[tokio::test]
+    async fn detached_restart_supervisor_unreachable_returns_error_not_double_spawn() {
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::dead();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller);
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let err = reg
+            .restart(&handle.stack_id, "api", &NeverCancel)
+            .await
+            .expect_err("an unreachable supervisor must fail restart, not double-spawn");
+        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
+        assert!(fake.spawns().is_empty(), "an unreachable supervisor must never trigger an in-session spawn");
+    }
+
+    #[tokio::test]
+    async fn detached_restart_rejects_unknown_service_without_calling_supervisor() {
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::alive();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let err = reg
+            .restart(&handle.stack_id, "ghost", &NeverCancel)
+            .await
+            .expect_err("unknown service rejected");
+        assert!(matches!(err, LaunchError::InvalidProfile { .. }), "got {err:?}");
+        assert!(controller.restart_calls().is_empty(), "an unknown service must never reach the supervisor");
+    }
+
+    #[tokio::test]
+    async fn detached_reload_routes_through_control_fifo_and_confirms() {
+        // bug fix #2: `reload` on a DETACHED stack must route to the
+        // supervisor, never spawn_set in-session (which used to double-spawn
+        // the changed/added Services behind the supervisor's back).
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::alive();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let edited = "version = 1\n\n[services.db]\ncommand = [\"db\"]\n\n[services.api]\ncommand = [\"api\"]\nargs = [\"--v2\"]\ndepends_on = [\"db\"]\n\n[services.web]\ncommand = [\"web\"]\ndepends_on = [\"api\"]\n";
+        write_profile(dir.path(), edited).await;
+        reg.trust(&profile).await.expect("re-trust edited profile");
+
+        let report = reg
+            .reload(&handle.stack_id, None, &NeverCancel)
+            .await
+            .expect("reload routes to the supervisor");
+
+        assert!(report.restarted.contains(&"api".to_owned()));
+        assert!(report.restarted.contains(&"web".to_owned()));
+        assert_eq!(controller.reload_calls().len(), 1, "the supervisor is commanded exactly once");
+        assert!(fake.spawns().is_empty(), "reload must never spawn in-session for a detached stack");
+
+        let after = reg
+            .status(Some(&handle.stack_id))
+            .await
+            .expect("status")
+            .pop()
+            .expect("stack present");
+        assert_eq!(after.services.get("api"), Some(&SubprocessState::Running));
+    }
+
+    #[tokio::test]
+    async fn detached_reload_supervisor_unreachable_returns_error_not_double_spawn() {
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::dead();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller);
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let edited = "version = 1\n\n[services.db]\ncommand = [\"db\"]\n\n[services.api]\ncommand = [\"api\"]\nargs = [\"--v2\"]\ndepends_on = [\"db\"]\n\n[services.web]\ncommand = [\"web\"]\ndepends_on = [\"api\"]\n";
+        write_profile(dir.path(), edited).await;
+        reg.trust(&profile).await.expect("re-trust edited profile");
+
+        let err = reg
+            .reload(&handle.stack_id, None, &NeverCancel)
+            .await
+            .expect_err("an unreachable supervisor must fail reload, not double-spawn");
+        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
+        assert!(fake.spawns().is_empty(), "an unreachable supervisor must never trigger an in-session spawn");
+    }
+
+    #[tokio::test]
+    async fn forget_rejects_live_detached_supervisor_even_if_state_stale() {
+        // bug fix #5: `forget` must never silently drop a stack whose
+        // supervisor is still live, even though the Stack's own in-memory
+        // state is `Detached` (not `Down`) — a live detached Stack is exactly
+        // this shape, so the old `state != Down` check alone was not enough.
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::alive();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller);
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        let err = reg
+            .forget(&handle.stack_id)
+            .await
+            .expect_err("a live detached supervisor must never be silently forgotten");
+        assert!(matches!(err, LaunchError::StackNotTerminal { .. }), "got {err:?}");
+
+        let after = reg
+            .status(Some(&handle.stack_id))
+            .await
+            .expect("status")
+            .pop()
+            .expect("stack must still be present");
+        assert_eq!(after.state, StackState::Detached, "stack must be untouched");
+    }
+
+    #[tokio::test]
+    async fn forget_allows_dead_detached_supervisor_despite_stale_state() {
+        // A supervisor that exited on its own (TTL expiry, crash) without
+        // this session ever observing it leaves a stale `Detached` in-memory
+        // entry; forgetting it drops nothing real, so it must be allowed.
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let controller = FakeDetachedController::alive();
+        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
+            .await
+            .expect("detached up succeeds");
+
+        // The supervisor dies on its own, out of band, without a `down` ever
+        // running against this session.
+        *controller.alive.lock().unwrap() = false;
+
+        reg.forget(&handle.stack_id)
+            .await
+            .expect("a genuinely-dead detached supervisor's stale entry may be forgotten");
+
+        let after = reg.status(Some(&handle.stack_id)).await.expect("status");
+        assert!(after.is_empty(), "forgotten stack must not appear in status");
     }
 
     #[tokio::test]

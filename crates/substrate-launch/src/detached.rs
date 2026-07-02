@@ -53,7 +53,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use substrate_domain::launch::errors::LaunchError;
-use substrate_domain::launch::profile::{LaunchProfile, ServiceName};
+use substrate_domain::launch::profile::{LaunchOperatorConfig, LaunchProfile, ServiceName};
 use substrate_domain::launch::stack::{StackChild, SupervisorRegistry};
 use substrate_domain::launch::state::DisconnectPolicy;
 use substrate_domain::ports::fs_index::CancelSignal;
@@ -67,7 +67,7 @@ use substrate_domain::value_objects::{ClientId, StackId};
 use crate::control_fifo::{ControlFrame, spawn_control_reader};
 use crate::dag::reverse_topo;
 use crate::pid_probe::read_pid_stat;
-use crate::profile_loader::{LoadedProfile, load_untrusted};
+use crate::profile_loader::{LoadedProfile, load_trusted, load_untrusted};
 use crate::reaper;
 use crate::registry::compute_reload_report;
 use crate::supervisor::{
@@ -98,13 +98,20 @@ const RECONCILE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 // ---- CLI parsing -------------------------------------------------------------
 
-/// A parsed `--supervise <stack_id> --profile <path>` invocation.
+/// A parsed `--supervise <stack_id> --profile <path> --trust-store <path>`
+/// invocation.
 #[derive(Debug, Clone)]
 pub struct SuperviseArgs {
     /// The Stack the detached supervisor owns.
     pub stack_id: StackId,
     /// The `.substrate.toml` Profile pinned for this Stack.
     pub profile_path: PathBuf,
+    /// The user-scope TOFU trust store the spawning `LaunchRegistry` uses
+    /// (`<state_root>/launch-trust.toml`), passed through so a `reload`
+    /// routed to this supervisor can re-verify trust against the SAME store
+    /// (ADR-0064) rather than silently trusting whatever now sits at the
+    /// Profile path.
+    pub trust_store_path: PathBuf,
 }
 
 /// Detects and parses the `--supervise` invocation from a raw argv slice.
@@ -115,8 +122,9 @@ pub struct SuperviseArgs {
 ///
 /// # Errors
 ///
-/// Returns [`LaunchError::InvalidProfile`] when `--supervise` is present without
-/// a valid `<stack_id>` operand or without a `--profile <path>` operand.
+/// Returns [`LaunchError::InvalidProfile`] when `--supervise` is present
+/// without a valid `<stack_id>` operand, without a `--profile <path>`
+/// operand, or without a `--trust-store <path>` operand.
 pub fn parse_supervise_args(args: &[String]) -> Result<Option<SuperviseArgs>, LaunchError> {
     let Some(idx) = args.iter().position(|a| a == "--supervise") else {
         return Ok(None);
@@ -132,9 +140,14 @@ pub fn parse_supervise_args(args: &[String]) -> Result<Option<SuperviseArgs>, La
     let profile_path = flag_value(args, "--profile").ok_or_else(|| LaunchError::InvalidProfile {
         msg: "--supervise requires a --profile <path> argument".to_owned(),
     })?;
+    let trust_store_path =
+        flag_value(args, "--trust-store").ok_or_else(|| LaunchError::InvalidProfile {
+            msg: "--supervise requires a --trust-store <path> argument".to_owned(),
+        })?;
     Ok(Some(SuperviseArgs {
         stack_id,
         profile_path: PathBuf::from(profile_path),
+        trust_store_path: PathBuf::from(trust_store_path),
     }))
 }
 
@@ -226,6 +239,18 @@ struct ChildRecord {
 struct DetachedSupervisor {
     stack_id: StackId,
     profile_path: PathBuf,
+    /// The user-scope TOFU trust store passed through from the spawning
+    /// `LaunchRegistry` (`--trust-store`), re-consulted on every `reload` so a
+    /// swapped Profile is hash-re-verified (ADR-0064), matching the in-session
+    /// `LaunchRegistry::reload`'s own trust gate.
+    trust_store: PathBuf,
+    /// Operator auto-bless policy applied to a detached `reload`. Always the
+    /// default (no auto-bless paths): the spawning `LaunchRegistry` does not
+    /// yet plumb its own `op_config` across the `--supervise` boundary, so
+    /// this is at least as strict as (never looser than) the parent's own
+    /// configuration in current production use, where `op_config` is itself
+    /// always constructed as `LaunchOperatorConfig::default()`.
+    op_config: LaunchOperatorConfig,
     default_cwd: PathBuf,
     profile: LaunchProfile,
     config_hash: String,
@@ -257,9 +282,20 @@ impl DetachedSupervisor {
         loaded.profile.validate()?;
         let mut supervisor = Self::assemble(args, subprocess, stack_dir.clone(), loaded)?;
         supervisor.start_epoch = probe_start_time(supervisor.supervisor_pid).await;
+        // Publish the initial registry snapshot (supervisor pid + start_epoch
+        // + config_hash, no children yet) BEFORE spawn_all: a per-Service
+        // health probe can take minutes (ADR-0056), so the detach-launching
+        // parent must be able to confirm this supervisor is alive and pinned
+        // to the right Profile without waiting for every Service to finish
+        // bringing up (ADR-0068/ADR-0056 2026-07-01 amendment). Every
+        // Service's own readiness is this supervisor's job from here on.
+        supervisor.flush_registry().await;
+        // Opened before spawn_all so a control-FIFO write issued while a slow
+        // Service is still coming up does not itself block on `open()`
+        // waiting for this reader (it queues in the bounded channel instead).
+        let control_rx = spawn_control_reader(stack_dir);
         supervisor.spawn_all().await?;
         supervisor.flush_registry().await;
-        let control_rx = spawn_control_reader(stack_dir);
         Ok((supervisor, control_rx))
     }
 
@@ -278,6 +314,8 @@ impl DetachedSupervisor {
         Ok(Self {
             stack_id: args.stack_id,
             profile_path: args.profile_path,
+            trust_store: args.trust_store_path,
+            op_config: LaunchOperatorConfig::default(),
             default_cwd,
             profile: loaded.profile,
             config_hash: loaded.config_hash,
@@ -408,6 +446,11 @@ impl DetachedSupervisor {
                 self.handle_reload(profile_path).await;
                 false
             },
+            Some(ControlFrame::Restart { service_name, .. }) => {
+                self.last_activity_epoch = now_epoch_secs();
+                self.handle_restart(service_name).await;
+                false
+            },
             None => {
                 *control_open = false;
                 false
@@ -470,9 +513,15 @@ impl DetachedSupervisor {
     }
 
     /// Computes the reload diff and applies the minimal stop/start closure.
+    ///
+    /// Re-verifies trust against [`Self::trust_store`] via [`load_trusted`]
+    /// (not [`load_untrusted`]): a `reload` swaps in a new Profile exactly
+    /// like `launch.up` does, so a Profile swapped in place between bring-up
+    /// and this reload must be hash-re-verified before it is trusted, matching
+    /// the in-session `LaunchRegistry::reload`'s own trust gate.
     async fn reload_inner(&mut self, profile_path: Option<String>) -> Result<(), LaunchError> {
         let path = profile_path.map_or_else(|| self.profile_path.clone(), PathBuf::from);
-        let loaded = load_untrusted(&path).await?;
+        let loaded = load_trusted(&path, &self.trust_store, &self.op_config).await?;
         loaded.profile.validate()?;
         let new_profile = loaded.profile;
         new_profile.topological_order()?;
@@ -482,6 +531,52 @@ impl DetachedSupervisor {
         self.profile = new_profile;
         self.profile_path = path;
         self.config_hash = loaded.config_hash;
+        self.flush_registry().await;
+        Ok(())
+    }
+
+    /// Applies a `ControlFrame::Restart`, logging (not propagating) a failure:
+    /// a malformed or unknown Service name must never crash the reactor.
+    async fn handle_restart(&mut self, service_name: String) {
+        if let Err(error) = self.restart_inner(&service_name).await {
+            tracing::warn!(%error, service = %service_name, "supervise: restart failed");
+        }
+    }
+
+    /// Stops (if currently recorded) and re-spawns exactly one Service, gating
+    /// on its own readiness, then flushes the updated registry snapshot — the
+    /// detached-supervisor counterpart of `registry.rs`'s in-session
+    /// `LaunchRegistry::restart`.
+    async fn restart_inner(&mut self, service_name: &str) -> Result<(), LaunchError> {
+        let Some(service) = self.profile.services.get(service_name).cloned() else {
+            return Err(LaunchError::InvalidProfile {
+                msg: format!("unknown service '{service_name}'"),
+            });
+        };
+        if let Some(old) = self.children.remove(service_name) {
+            stop_service(self.subprocess.as_ref(), &old.job_id).await;
+        }
+        let cancel = TokenCancel(self.cancel.clone());
+        let mut request = build_request(service_name, &service, &self.default_cwd)?;
+        request.parent_death_signal = Some(PARENT_DEATH_SIGKILL);
+        let dir = self.env_file_dir();
+        let handle = spawn_service(
+            self.subprocess.as_ref(),
+            request,
+            &cancel,
+            &service.env_file,
+            &dir,
+        )
+        .await?;
+        let outcome = wait_ready(
+            self.subprocess.as_ref(),
+            &self.client_id,
+            &handle.job_id,
+            &cancel,
+            service.health_probe.as_ref(),
+        )
+        .await?;
+        self.record_child(service_name.to_owned(), &handle, outcome).await;
         self.flush_registry().await;
         Ok(())
     }
@@ -928,6 +1023,8 @@ mod tests {
         DetachedSupervisor {
             stack_id: StackId::now_v7(),
             profile_path: stack_dir.join(".substrate.toml"),
+            trust_store: stack_dir.join("launch-trust.toml"),
+            op_config: LaunchOperatorConfig::default(),
             default_cwd: stack_dir.to_path_buf(),
             profile: two_tier_profile(),
             config_hash: "blake3:test".to_owned(),
@@ -958,16 +1055,35 @@ mod tests {
             id.clone(),
             "--profile".to_owned(),
             "/proj/.substrate.toml".to_owned(),
+            "--trust-store".to_owned(),
+            "/state/launch-trust.toml".to_owned(),
         ];
         let parsed = parse_supervise_args(&args).expect("parse").expect("present");
         assert_eq!(parsed.stack_id.to_crockford(), id);
         assert_eq!(parsed.profile_path, PathBuf::from("/proj/.substrate.toml"));
+        assert_eq!(parsed.trust_store_path, PathBuf::from("/state/launch-trust.toml"));
     }
 
     #[test]
     fn parse_rejects_missing_profile() {
         let id = StackId::now_v7().to_crockford();
         let args = vec!["substrate".to_owned(), "--supervise".to_owned(), id];
+        assert!(matches!(
+            parse_supervise_args(&args),
+            Err(LaunchError::InvalidProfile { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_missing_trust_store() {
+        let id = StackId::now_v7().to_crockford();
+        let args = vec![
+            "substrate".to_owned(),
+            "--supervise".to_owned(),
+            id,
+            "--profile".to_owned(),
+            "/p".to_owned(),
+        ];
         assert!(matches!(
             parse_supervise_args(&args),
             Err(LaunchError::InvalidProfile { .. })
@@ -982,6 +1098,8 @@ mod tests {
             "not-a-stack-id".to_owned(),
             "--profile".to_owned(),
             "/p".to_owned(),
+            "--trust-store".to_owned(),
+            "/state/launch-trust.toml".to_owned(),
         ];
         assert!(matches!(
             parse_supervise_args(&args),
@@ -1114,5 +1232,102 @@ mod tests {
         assert_eq!(snapshot.config_hash, "blake3:test");
         assert_eq!(snapshot.children.len(), 2);
         assert!(snapshot.children.iter().all(|c| c.pid >= 2 && c.pgid >= 2));
+    }
+
+    // ---- ControlFrame::Restart handling (registry.rs bug fix #2) -----------
+
+    #[tokio::test]
+    async fn restart_inner_respawns_only_the_named_service() {
+        let dir = TempDir::new().expect("tempdir");
+        let port = FakePort::new();
+        let mut sup = supervisor(port.clone(), dir.path());
+        sup.spawn_all().await.expect("spawn_all");
+
+        let db_job_before = sup.children.get("db").expect("db child").job_id.clone();
+        let api_job_before = sup.children.get("api").expect("api child").job_id.clone();
+
+        sup.restart_inner("api").await.expect("restart api");
+
+        assert_eq!(
+            sup.children.get("db").expect("db child").job_id,
+            db_job_before,
+            "restarting api must never touch db"
+        );
+        assert_ne!(
+            sup.children.get("api").expect("api child").job_id,
+            api_job_before,
+            "restart must re-spawn api with a fresh job id, never double-spawn under the old one"
+        );
+        assert_eq!(
+            port.cancels(),
+            vec![api_job_before.to_crockford()],
+            "exactly the old api job (and only it) is cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_inner_rejects_unknown_service() {
+        let dir = TempDir::new().expect("tempdir");
+        let port = FakePort::new();
+        let mut sup = supervisor(port.clone(), dir.path());
+        sup.spawn_all().await.expect("spawn_all");
+
+        let err = sup.restart_inner("ghost").await.expect_err("unknown service rejected");
+        assert!(matches!(err, LaunchError::InvalidProfile { .. }), "got {err:?}");
+        assert!(port.cancels().is_empty(), "an unknown-service restart must not touch any live child");
+    }
+
+    // ---- reload_inner trust re-verification (registry.rs bug fix #3) -------
+
+    #[tokio::test]
+    async fn reload_inner_rejects_an_unblessed_profile_swap() {
+        let dir = TempDir::new().expect("tempdir");
+        let port = FakePort::new();
+        let mut sup = supervisor(port.clone(), dir.path());
+        sup.spawn_all().await.expect("spawn_all");
+
+        // A profile at a fresh path with no bless record in `sup.trust_store`
+        // at all: `reload_inner` must hash-re-verify it via `load_trusted`,
+        // not blindly trust it via `load_untrusted` as it did before this fix.
+        let swapped = dir.path().join("swapped.substrate.toml");
+        tokio::fs::write(&swapped, "version = 1\n\n[services.db]\ncommand = [\"db\"]\n")
+            .await
+            .expect("write swapped profile");
+
+        let err = sup
+            .reload_inner(Some(swapped.display().to_string()))
+            .await
+            .expect_err("an unblessed profile swap must be rejected, not silently trusted");
+        assert!(matches!(err, LaunchError::ProfileNotTrusted { .. }), "got {err:?}");
+        assert_eq!(
+            sup.children.len(),
+            2,
+            "a rejected reload must leave the running children untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_inner_applies_an_operator_blessed_profile_swap() {
+        let dir = TempDir::new().expect("tempdir");
+        let port = FakePort::new();
+        let mut sup = supervisor(port.clone(), dir.path());
+        sup.spawn_all().await.expect("spawn_all");
+
+        let swapped = dir.path().join("swapped.substrate.toml");
+        tokio::fs::write(&swapped, "version = 1\n\n[services.db]\ncommand = [\"db\"]\n")
+            .await
+            .expect("write swapped profile");
+        let canonical = tokio::fs::canonicalize(&swapped).await.expect("canonicalize");
+        // Mirrors an operator-scope auto-bless (`LaunchOperatorConfig::auto_bless_paths`):
+        // the trust gate genuinely runs and genuinely passes here, rather than
+        // being bypassed.
+        sup.op_config.auto_bless_paths = vec![canonical.display().to_string()];
+
+        sup.reload_inner(Some(swapped.display().to_string()))
+            .await
+            .expect("an operator-blessed profile swap must be applied");
+
+        assert_eq!(sup.children.len(), 1, "api dropped from the new profile must be stopped");
+        assert!(sup.children.contains_key("db"), "db (kept in the new profile) survives");
     }
 }
