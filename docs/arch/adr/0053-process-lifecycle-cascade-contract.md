@@ -217,9 +217,9 @@ Mitigation:
 - `SUBSTRATE_SUBPROCESS_PID_RECYCLED` — emitted when PID reuse is detected
   during a kill attempt. Payload: `{pgid, stored_start_time, current_start_time}`.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Process group leadership ensures that grandchildren receive signals;
   a child that forks internally does not produce orphans when the cascade kills
@@ -230,7 +230,7 @@ Mitigation:
   expressed as sequential async steps, not scattered across Drop impls.
 - `pidfd_open` on Linux >= 5.3 eliminates PID reuse races entirely.
 
-### Negative
+#### Negative
 
 - The watchdog pipe on macOS is cooperative; arbitrary binaries that do not
   read the fd become orphans when substrate is SIGKILL'd. The orphan reaper
@@ -245,7 +245,7 @@ Mitigation:
   subprocess delays the server shutdown by up to 5 s per active subprocess
   (bounded by `subprocess.max_concurrent = 8` from ADR-0052).
 
-### Risks
+#### Risks
 
 - A subprocess that ignores SIGTERM and survives SIGKILL (possible if the
   child is in a kernel-uninterruptible state, such as waiting on a hung NFS

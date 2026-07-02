@@ -244,9 +244,9 @@ chain):
 - `SUBSTRATE_STREAM_CHUNK_DROPPED` — emitted when backpressure causes a chunk
   to be discarded. Payload: `{job_id, stream, dropped_bytes, seq, timestamp}`.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Child process writes are never blocked by MCP client slowness; the pipe
   buffer between child and substrate remains unconsumed only when the reader
@@ -258,7 +258,7 @@ chain):
 - `stream_chunks_dropped` in the result gives agents an explicit signal that
   the stream was lossy and the aggregate may be incomplete.
 
-### Negative
+#### Negative
 
 - Two additional tokio tasks per subprocess (reader stdout, reader stderr) plus
   one dispatcher task bring the total overhead per subprocess to three tasks.
@@ -272,7 +272,7 @@ chain):
   stdout/stderr is lost. Operators can increase `aggregate_buffer_bytes` to
   retain more history.
 
-### Risks
+#### Risks
 
 - If the dispatcher task panics (which causes process abort under `panic = "abort"`,
   per [ADR-0014](0014-build-system-and-toolchain.md)), all in-flight subprocess

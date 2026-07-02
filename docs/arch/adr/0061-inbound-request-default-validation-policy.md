@@ -228,9 +228,9 @@ The input data for the new policy (struct metadata with `derive_default` and
 JSON to stdout for `conftest`). This keeps the pipeline as a pure OPA
 evaluation without a custom clippy lint.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - The `derive(Default)` / `serde(default = "fn")` mismatch is caught at PR
   time by the CI Rego gate before it reaches production.
@@ -240,7 +240,7 @@ evaluation without a custom clippy lint.
 - The policy and its test vectors serve as executable documentation of the rule
   for future contributors.
 
-### Negative
+#### Negative
 
 - `scripts/extract_request_structs.py` is a new maintenance surface: it must
   be updated when request struct naming conventions change.
@@ -253,7 +253,7 @@ evaluation without a custom clippy lint.
   `Default` impl. A handler that adds the shortcut against a newly introduced
   struct without a manual `Default` is caught only on the next CI run.
 
-### Migration order
+#### Migration order
 
 1. Author `docs/arch/policies/request_default_invariants.rego` and companion
    `_test.rego`.

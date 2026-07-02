@@ -148,9 +148,9 @@ spec content MUST follow the Mandatory-use rule above. When an
 existing ASCII diagram is touched for unrelated reasons, the
 maintainer SHOULD replace it with a Mermaid equivalent.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Spec markdown reads visually in every modern renderer.
 - Eleven diagram families cover every architectural shape substrate
@@ -158,7 +158,7 @@ maintainer SHOULD replace it with a Mermaid equivalent.
 - Mermaid source diffs cleanly in pull-request review.
 - No additional toolchain or renderer service required.
 
-### Negative
+#### Negative
 
 - Plain-text terminals still render the Mermaid source as code rather
   than as a diagram. ASCII art retains an edge in pure-terminal
@@ -167,7 +167,7 @@ maintainer SHOULD replace it with a Mermaid equivalent.
   of the common families (flowchart, sequenceDiagram, stateDiagram-v2)
   and by the `glfm` skill which covers the syntax.
 
-### Risks
+#### Risks
 
 - Renderer divergence: Mermaid evolves; older renderers may not
   support newer diagram types (e.g. recent C4 family). Mitigation:

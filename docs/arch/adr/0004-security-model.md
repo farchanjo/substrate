@@ -55,19 +55,19 @@ TOML schema sketch:
 
 ```toml
 [security]
-# Empty list = default deny. At least one entry required for fs tools.
+## Empty list = default deny. At least one entry required for fs tools.
 allowed_paths = [
   "/home/user/projects",
   "/tmp/substrate-workspace",
 ]
 
-# Explicit deny overrides allowed_paths (evaluated first).
+## Explicit deny overrides allowed_paths (evaluated first).
 denied_paths = [
   "/home/user/.ssh",
   "/home/user/.aws",
 ]
 
-# Feature flags
+## Feature flags
 outbound_network = false   # Cargo feature outbound-net; false by default
 ```
 

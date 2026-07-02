@@ -205,9 +205,9 @@ pattern established in [ADR-0042](0042-capability-adapter-factory.md). The
   `"check container policy or system configuration for read access to /proc"`.
   This code extends the taxonomy from [ADR-0010](0010-error-taxonomy.md).
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Agents can make informed scheduling decisions using memory pressure and CPU
   utilization without external tooling.
@@ -216,7 +216,7 @@ pattern established in [ADR-0042](0042-capability-adapter-factory.md). The
 - Bucket A classification keeps response latency under 1 ms in the common case.
 - Zero subprocess dependency; both tools comply fully with ADR-0044.
 
-### Negative
+#### Negative
 
 - Per-core CPU load requires a prior sample; the first call always returns
   zero-load values. The `cold_start` hint flag in `structuredContent.hints`
@@ -228,7 +228,7 @@ pattern established in [ADR-0042](0042-capability-adapter-factory.md). The
   `cargo-deny` auditing. Its inclusion is gated behind the
   `sys-sysinfo-fallback` feature and documented in the supply-chain allowlist.
 
-### Risks
+#### Risks
 
 - Linux thermal zone paths (`/sys/class/thermal/thermal_zone0/temp`) are not
   standardized across all kernels and hardware; the adapter logs at

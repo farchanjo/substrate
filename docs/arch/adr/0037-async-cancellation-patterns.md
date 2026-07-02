@@ -34,6 +34,8 @@ For each concern, the accepted option is documented in the Decision Outcome. Rej
 
 ## Decision Outcome
 
+Chosen option: biased `select!` with the work arm listed first; `Semaphore` permits acquired via `acquire_owned()` and held in async scope, never moved into `spawn_blocking` closures; `tokio::task::JoinSet` for every internally spawned task instead of bare `JoinHandle`s; cancellation cleanup written as `select!` arms rather than `Drop` impls; the Mutex-type policy table below; and a mandatory `Send` bound on every `#[async_trait]` tool implementation — because each pattern is the minimal-complexity, cancel-safe mitigation for its corresponding hazard identified in Context and Problem Statement, and together they compose cleanly under both the `panic = "abort"` build profile and the multi-thread tokio scheduler's `Send` requirement.
+
 ```mermaid
 sequenceDiagram
     participant C as Client

@@ -146,6 +146,33 @@ mindmap
       zip
 ```
 
+### Consequences
+
+#### Positive
+
+- Each bounded context owns its own crate, ubiquitous language, and risk
+  profile, so security policy (allowlist, dry-run, elicitation) is tuned per
+  context instead of applied uniformly across an undifferentiated tool set.
+- Contexts are independently testable and checkable (`cargo check -p <crate>`
+  per context, per the Validation section below), so a change to one context
+  cannot silently break another at compile time.
+- The shared kernel (`substrate-domain`) is the only permitted cross-context
+  dependency, so `cargo deny` can mechanically enforce the boundary.
+- The partition scales: four further bounded contexts (job, subprocess,
+  network-info, launch) have since been layered on via amendments without
+  renegotiating the original six.
+
+#### Negative
+
+- More crates and `Cargo.toml` manifests to maintain than a single-crate
+  design (Option A) or a two-context split (Option B).
+- Contributors must learn which of the now-ten bounded contexts a given
+  capability belongs to before making a change.
+- A capability that legitimately spans two contexts (for example, a
+  filesystem index consumed by both filesystem-query and filesystem-mutation)
+  requires an explicit port on the shared kernel rather than a direct
+  cross-context call.
+
 ## Validation
 
 - Each bounded context crate (`substrate-fs-query`, `substrate-fs-mutation`,

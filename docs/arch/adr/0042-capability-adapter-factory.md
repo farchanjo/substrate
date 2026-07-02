@@ -372,9 +372,9 @@ This preserves the layering rule from [ADR-0022](0022-project-layout.md):
 `substrate-domain` imports only std + serde + thiserror + async-trait +
 futures + uuid + tracing.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Capability detection runs exactly once; zero per-call overhead.
 - Tier selection logic is co-located with the probe result; no scattered
@@ -389,7 +389,7 @@ futures + uuid + tracing.
   spans uniformly without requiring each adapter to implement them.
 - Integration tests can force any tier via TOML override without kernel hacks.
 
-### Negative
+#### Negative
 
 - `PortFactory<P>` adds an abstract layer; contributors must trace factory ->
   tier -> adapter to understand the active code path.
@@ -451,3 +451,49 @@ futures + uuid + tracing.
 - [ADR-0038](0038-audit-event-semantics.md) — audit event shape;
   `SUBSTRATE_CAPABILITY_TIERS_SELECTED` correlation
 - [ADR-0039](0039-sli-definitions.md) — startup SLI; probe latency budget
+
+## Amendments
+
+### 2026-07-01 — FsIndexFactory becomes a dual-port factory per ADR-0072
+
+[ADR-0072](0072-search-relevance-content-index-and-event-pubsub.md) adds a
+content-side inverted index and BM25 relevance ranking layered onto the
+filesystem index this ADR's `PortFactory<P>` pattern already builds
+(`FsIndexFactory`, a concrete `PortFactory<dyn FsIndexPort>` implementation in
+`substrate-fs-index`, instantiated once by `substrate-mcp-server`'s
+composition root). This amendment clarifies how that new capability fits the
+Abstract Factory / Strategy / Decorator / Null Object shape this ADR
+established, without introducing a new pattern:
+
+- **One factory, two ports.** `FsIndexFactory` now builds *both* `Arc<dyn
+  FsIndexPort>` (unchanged: `lookup`, `invalidate`, `rebuild_root`) and a new
+  `Arc<dyn ContentSearchPort>` (`search`) from the *same* underlying
+  `IndexerActor` instance — one shared single-writer engine, two narrow port
+  interfaces, matching this ADR's existing precedent of five separate ports
+  (`DirWalker`, `FsWatcher`, `PathJail`, `Hash`, `Stat`) rather than widening
+  any existing port's surface. `ContentSearchPort` is declared in
+  `substrate-domain` alongside `FsIndexPort`, with zero infrastructure
+  dependencies, per the layering rule this ADR already enforces for every port
+  trait.
+- **No new capability tier.** Content indexing introduces no new
+  `Capabilities` field and no new `SimdTier` variant: `content_hash`
+  computation reuses the exact `HashFactory`/`SimdTier`-selected blake3 backend
+  this ADR already selects at startup (`Avx512`/`Avx2`/`Sse42`/`Sse2`/`Neon`/
+  `Portable`), and the `fst`-backed term dictionary is a data-structure choice
+  internal to `substrate-fs-index`, not a runtime-probed OS capability — there
+  is nothing for `probe_capabilities()` to detect.
+- **Decorator coverage extended.** `InstrumentedAdapter<A>` wraps the new
+  `ContentSearchPort` implementation exactly as it wraps every other concrete
+  adapter this ADR's composition-root sequence produces: a `tracing
+  ::info_span!` per delegated `search` call and `CancellationToken`
+  propagation, with no special-casing required — the decorator's blanket
+  delegation already covers any port trait, including one introduced after
+  this ADR was accepted.
+- **Operator override surface unchanged.** `capabilities.override.<port>`
+  continues to apply only to ports whose implementation is tier-selected from
+  probed `Capabilities` (`DirWalker`, `FsWatcher`, `PathJail`, `Hash`,
+  `Stat`). `ContentSearchPort` has no override entry because it has no
+  competing tiers to override between — its only on/off axis is the
+  `fs-index-content` Cargo feature and `index.content_index_enabled` runtime
+  flag defined by ADR-0072, which are build- and config-time switches, not
+  capability-probe outcomes.

@@ -162,9 +162,9 @@ flowchart TD
     S2 -.->|cannot sequence| Deg[degrade: down/up affected subgraph]
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - A one-field edit restarts at most the affected Service and its cascade, not the
   whole Stack.
@@ -173,14 +173,14 @@ flowchart TD
 - Topology changes are handled by an explicit reconciler with a documented
   degradation path rather than undefined behaviour.
 
-### Negative
+#### Negative
 
 - The reconciler is the most complex single component of the launch BC; the
   field-classification and closure logic must be carefully tested.
 - Non-atomic reload means a partially applied state is observable and must be
   surfaced honestly in `launch.status`.
 
-### Risks
+#### Risks
 
 - A reload that degrades to subgraph `down`/`up` is more disruptive than the
   operator may expect. Mitigation: report the degradation explicitly in the

@@ -211,7 +211,7 @@ stdin as `/dev/null` via `Command::stdin(Stdio::null())`.
 `tokio` workspace dependency gains the `process` feature:
 
 ```toml
-# workspace Cargo.toml
+## workspace Cargo.toml
 [workspace.dependencies]
 tokio = { version = "1.4x", features = ["rt-multi-thread", "macros", "sync",
            "time", "io-util", "fs", "process"] }
@@ -266,9 +266,9 @@ The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonom
   subprocess state machine was attempted. Recovery hint: `"report the
   correlation_id; this is an internal state machine violation"`.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Substrate can now serve as a full execution environment for LLM agents that
   need to run binaries, not just introspect the OS.
@@ -282,7 +282,7 @@ The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonom
   same cancellation, TTL, pagination, and audit trail as archive and filesystem
   jobs.
 
-### Negative
+#### Negative
 
 - The `subprocess` feature must be explicitly enabled at compile time; operators
   who want subprocess execution must rebuild the binary.
@@ -291,7 +291,7 @@ The following codes extend the error taxonomy from [ADR-0010](0010-error-taxonom
 - The binary allowlist must be manually maintained by the operator; there is no
   auto-discovery of safe binaries.
 
-### Risks
+#### Risks
 
 - Subprocess execution fundamentally expands the attack surface regardless of
   sandboxing. The sandbox mitigates the risk but does not eliminate it. The

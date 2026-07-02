@@ -155,9 +155,9 @@ flowchart LR
     PULL[launch.status / launch.logs / tasks-get] --> CLI
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - The model receives compact, high-signal events when the client supports
   subscriptions, and the full raw output remains one drill-down away.
@@ -165,14 +165,14 @@ flowchart LR
   direction: the cursor-pull model and Task polling are the durable substrate.
 - Redaction at the source closes the secret-exfiltration-to-context surface.
 
-### Negative
+#### Negative
 
 - The cursor-in-URI convention for resource reads is an application-level
   contract that must be documented and kept opaque.
 - Maintaining both an event-log and per-Service raw logs is two retention
   surfaces to bound and rotate.
 
-### Risks
+#### Risks
 
 - A client may receive `resources/updated` pokes faster than it reads; the
   coalescing and cursor design absorb this, but a pathologically chatty Service

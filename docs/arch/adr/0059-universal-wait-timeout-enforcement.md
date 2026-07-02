@@ -175,9 +175,9 @@ file documents the requirement for human reviewers.
   Agents that respect this hint converge on the push-channel pattern even
   without explicitly opening a subscription.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - LLM agents that omit `wait_ms` automatically get long-poll semantics,
   collapsing the 48-minute polling failure mode to at most one polling
@@ -192,7 +192,7 @@ file documents the requirement for human reviewers.
   events at the configured throttle rate and bypass the long-poll path
   entirely.
 
-### Negative
+#### Negative
 
 - A misconfigured client that legitimately wants fast-return now must pass
   `wait_ms = 0` explicitly. This is a deliberate trade-off: the failure

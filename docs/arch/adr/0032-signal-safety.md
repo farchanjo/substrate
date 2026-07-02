@@ -55,7 +55,7 @@ The `blake3` crate exposes `Hasher::update_mmap` and `Hasher::update_mmap_rayon`
 Mitigation: disable the `mmap` Cargo feature of `blake3`:
 
 ```toml
-# Cargo.toml
+## Cargo.toml
 [dependencies]
 blake3 = { version = "1", default-features = false, features = [] }
 ```

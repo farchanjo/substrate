@@ -63,8 +63,10 @@ hijack.
 
 ## Decision Outcome
 
-Chosen: **option 3** — PATH-aware resolution in the launch layer, gated by the
-unchanged subprocess allowlist.
+Chosen option: "Resolve in the launch layer only, then pass an absolute path to
+subprocess" (option 3), because it covers every launch spawn path while leaving
+the subprocess contract and the binary allowlist — the actual security boundary
+— completely unchanged.
 
 `supervisor::spawn_service` resolves `request.binary_path` immediately before handing
 the request to the injected `SubprocessPort`, so it covers every launch spawn path
@@ -90,7 +92,7 @@ anchor. Resolution is performed live at each `launch.up` rather than pinned at b
 time, precisely because the allowlist is the boundary and the resolution is only a
 convenience.
 
-## Consequences
+### Consequences
 
 - **Positive.** Profiles become portable: `command = ["node", "server.js"]`,
   `["java", "-jar", "app.jar"]`, or `["./gradlew", "bootRun"]` all work, matching

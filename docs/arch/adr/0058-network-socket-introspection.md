@@ -399,9 +399,9 @@ Both codes extend the taxonomy from [ADR-0010](0010-error-taxonomy.md).
   is emitted. This prevents a slow PID enumeration from blocking an MCP call
   indefinitely.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Agents can answer dev-server debug questions ("what is listening on 8080",
   "which process holds this connection") without shelling out.
@@ -412,7 +412,7 @@ Both codes extend the taxonomy from [ADR-0010](0010-error-taxonomy.md).
 - Independent BC and crate allow the `network-info` feature to be compiled out
   entirely on platforms where it is unsupported.
 
-### Negative
+#### Negative
 
 - PID resolution (`resolve_pid: true`) is O(processes × fds); expensive on
   busy hosts. Default is false; agents must opt in explicitly.
@@ -426,7 +426,7 @@ Both codes extend the taxonomy from [ADR-0010](0010-error-taxonomy.md).
   probe), IPv6 zone-id support, per-socket timestamp ordering, and the
   `LinuxProcNet` v2 implementation.
 
-### Risks
+#### Risks
 
 - macOS entitlement changes in future OS versions may restrict
   `sysctlbyname("net.inet.tcp.pcblist_n")` further. The `SUBSTRATE_RESOURCE_UNAVAILABLE`

@@ -138,9 +138,9 @@ client-breaking migration plan documented in a dedicated ADR. Spec artifacts
 that currently use wire-name style (underscore in prose) are not required to be
 retroactively updated; however, all new spec text SHOULD use the logical form.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - The ambiguity between `fs.find` and `fs_find` is resolved: they are the same
   tool, related by a deterministic rule.
@@ -150,7 +150,7 @@ retroactively updated; however, all new spec text SHOULD use the logical form.
 - Automated tooling can validate cross-references without a manually maintained
   lookup table.
 
-### Negative
+#### Negative
 
 - Contributors must learn that `fs.find` (spec) and `fs_find` (wire) are the
   same tool. A brief note in `CONTRIBUTING.md` is sufficient mitigation.

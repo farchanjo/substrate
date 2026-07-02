@@ -108,15 +108,15 @@ distinguishes crate name from binary name; the binary artefact under
 A `justfile` at the repository root provides three targets:
 
 ```just
-# Build the release binary.
+## Build the release binary.
 build-release:
     cargo build --workspace --release --bin substrate
 
-# Install to /usr/local/bin with codesign on macOS, plain install on Linux.
+## Install to /usr/local/bin with codesign on macOS, plain install on Linux.
 install: build-release
     @if [ "$(uname -s)" = "Darwin" ]; then just _install-macos; else just _install-linux; fi
 
-# Sign source, install, sign destination.
+## Sign source, install, sign destination.
 _install-macos: build-release
     codesign --options runtime --timestamp -f -s "${SUBSTRATE_SIGN_IDENTITY:--}" target/release/substrate
     sudo install -m 0755 target/release/substrate /usr/local/bin/substrate
@@ -170,9 +170,9 @@ spctl --assess --type execute --verbose /usr/local/bin/substrate || true
 non-notarised builds; this is expected for local dev. Notarisation is
 out of scope for this ADR (see "Out of scope" below).
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Reproducible local install with one command (`just install`).
 - Binary on the default PATH as `substrate`.
@@ -180,7 +180,7 @@ out of scope for this ADR (see "Out of scope" below).
 - Ad-hoc signing fallback for contributors without a Developer ID.
 - No CI infrastructure required.
 
-### Negative
+#### Negative
 
 - Operator must have `just` and `codesign` available (macOS ships
   `codesign`; `just` is a one-line install).
@@ -190,7 +190,7 @@ out of scope for this ADR (see "Out of scope" below).
 - Ad-hoc signing (`-`) does NOT pass `spctl --assess`; for distribution,
   a Developer ID is required.
 
-### Risks
+#### Risks
 
 - If the operator uses `SUBSTRATE_SIGN_IDENTITY` with a revoked
   certificate, Gatekeeper will reject the binary. The verification step

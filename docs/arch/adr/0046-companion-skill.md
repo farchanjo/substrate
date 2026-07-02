@@ -213,9 +213,9 @@ as deferred tools (schema is not loaded until `ToolSearch` resolves it
 on demand). Calling a deferred tool without the preload yields an
 `InputValidationError`.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - LLM client has a stable, condensed reference for substrate without
   re-fetching `tools/list` on every turn.
@@ -225,7 +225,7 @@ on demand). Calling a deferred tool without the preload yields an
 - The skill is portable across compatible clients that adopt the same
   `~/.claude/skills/` convention.
 
-### Negative
+#### Negative
 
 - The SKILL.md must be kept in lockstep with the server's tool surface.
   Drift between SKILL.md and `tools/list` is a soft contract break.
@@ -235,7 +235,7 @@ on demand). Calling a deferred tool without the preload yields an
   publishing a server-only release (e.g. via Homebrew) cannot ship the
   skill automatically.
 
-### Risks
+#### Risks
 
 - If a future server release adds a tool without updating SKILL.md,
   clients still discover the tool via `tools/list` but lose the

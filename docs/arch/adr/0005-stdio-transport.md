@@ -68,7 +68,7 @@ The `ServiceExt::serve` call wires the transport to the JSON-RPC dispatcher. No 
 `println!` and `print!` macros write to stdout and corrupt MCP framing. A Clippy deny rule is enforced project-wide:
 
 ```toml
-# .cargo/config.toml
+## .cargo/config.toml
 [build]
 rustflags = ["-D", "clippy::print_stdout"]
 ```
@@ -80,7 +80,7 @@ All diagnostic output uses `tracing::info!` / `tracing::warn!` / `tracing::error
 Certain tools (e.g., future `net.fetch`) need to make outbound HTTP requests. These are gated behind the `outbound-net` Cargo feature:
 
 ```toml
-# Cargo.toml
+## Cargo.toml
 [features]
 default = []
 outbound-net = ["reqwest"]

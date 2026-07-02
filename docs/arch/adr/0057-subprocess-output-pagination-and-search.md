@@ -209,9 +209,9 @@ sequenceDiagram
     MCPServer-->>Client: {stdout_lines: page, stdout_total_lines: n, stdout_next_offset: 5}
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - LLM callers retrieve targeted log windows without decoding a 1 MiB base64 blob;
   a typical 100-line page is under 5 KiB of wire data.
@@ -223,7 +223,7 @@ sequenceDiagram
   layer is introduced.
 - The `regex` crate is already in the workspace; no new dependency is added.
 
-### Negative
+#### Negative
 
 - Pattern compilation is repeated on every `subprocess.search` call; there is no
   cross-request regex cache. Mitigation: compilation of a 1024-byte pattern takes
@@ -232,7 +232,7 @@ sequenceDiagram
   slicing. For a 1 MiB ring buffer this allocates approximately 1 MiB of
   contiguous string data plus pointer overhead. This is bounded and short-lived.
 
-### Risks
+#### Risks
 
 - Catastrophic regex patterns (exponential backtracking) are mitigated by the
   `regex` crate's NFA/DFA engine, which guarantees linear-time matching. The

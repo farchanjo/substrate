@@ -134,9 +134,10 @@ experimental status of the primitive means its interface may still change before
 graduation. This decision is formally time-boxed: the reevaluation triggers in
 the section below define objective conditions that reopen it.
 
-## Consequences
+### Consequences
 
-Positive:
+#### Positive
+
 - v0.1 ships without carrying migration debt for an unproven experimental
   primitive.
 - The ADR-0040 surface remains stable; no CUE schema, Gherkin spec, or crate
@@ -145,13 +146,15 @@ Positive:
   documented here; no adoption action is taken until the stability window and
   checklist are satisfied.
 
-Negative:
+#### Negative
+
 - If SEP-1686 becomes the de facto standard before v0.1 ships to users, a
   catch-up migration will be needed after release rather than before.
 - Clients that implement only `tasks/*` and not `notifications/progress`-based
   polling cannot use the async job paths without a translation shim.
 
-Neutral:
+#### Neutral
+
 - This ADR does not change any existing behaviour, interface, or schema.
 - The `capabilities.experimental.substrate.jobs` flag introduced by ADR-0013
   Amendment 2026-05-21 continues to advertise the ADR-0040 control-plane.

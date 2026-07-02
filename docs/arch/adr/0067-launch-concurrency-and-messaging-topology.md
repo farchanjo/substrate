@@ -127,9 +127,9 @@ flowchart TD
     MB --> CHspawn[spawn / restart via subprocess BC]
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Lock-free by construction: restart counters and the subscriber set have a
   single owner, so there is no race and no mutex.
@@ -137,7 +137,7 @@ flowchart TD
   `subscribe()` and couples to no producer.
 - State reads never poll; the pipe is never blocked; backpressure is explicit.
 
-### Negative
+#### Negative
 
 - The actor mailbox is a single point through which all commands flow; a slow
   command handler serialises subsequent commands. Mitigation: handlers are
@@ -145,7 +145,7 @@ flowchart TD
 - Bounded channels mean overflow drops data; the drop-with-count surfacing must
   be honest in `launch.logs` and `launch.status`.
 
-### Risks
+#### Risks
 
 - Misconfigured small bounds could drop events under load. Mitigation:
   conservative defaults and explicit surfacing of elision counts.

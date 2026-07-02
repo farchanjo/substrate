@@ -252,9 +252,9 @@ When a new tool requires a capability that appears to need an external binary:
   under `~/dev/fapp/spec-framework/`). The policy governs only substrate's
   shipped Rust code under `crates/`.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - The binary attack surface is bounded: no path injection, no environment
   leakage, no shell-injection vector originating from a subprocess.
@@ -264,7 +264,7 @@ When a new tool requires a capability that appears to need an external binary:
 - Portability is guaranteed: Linux and macOS paths diverge only in which
   platform API is called, not in whether an external binary is present.
 
-### Negative
+#### Negative
 
 - Some capabilities require writing thin FFI wrappers instead of delegating to
   well-tested CLI tools (e.g., `procfs` for Linux process metadata instead of
@@ -272,6 +272,10 @@ When a new tool requires a capability that appears to need an external binary:
 - Integration tests that verify real-system behavior (e.g., "does proc.signal
   actually deliver SIGTERM") must use `#[cfg(test)]` subprocess harnesses,
   which are an exception to the rule and must be carefully scoped.
+- The blanket prohibition was later narrowed rather than lifted: see the
+  2026-05-24 Amendment below, where ADR-0052 carves a single, auditable
+  exception (`crates/substrate-subprocess/`) while every rationale recorded
+  here remains in force for the rest of the workspace.
 
 ## Validation
 

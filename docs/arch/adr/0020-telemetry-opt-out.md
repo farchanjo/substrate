@@ -42,7 +42,7 @@ This behavior is unconditional in the default binary. No environment variable, c
 When a telemetry subsystem is warranted (e.g., for hosted deployments where operators have explicitly consented), it will be implemented as a separate crate, `substrate-telemetry`, gated behind the `telemetry` Cargo feature:
 
 ```toml
-# Cargo.toml (future)
+## Cargo.toml (future)
 [features]
 default = []
 telemetry = ["dep:substrate-telemetry"]

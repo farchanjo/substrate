@@ -209,9 +209,9 @@ flowchart TD
     PARSE --> SPAWN[per-Service subprocess.spawn through Layer 5]
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - A blessed Profile runs without a per-run prompt, yet a hostile cloned
   repository cannot execute anything: it is untrusted until a human blesses it,
@@ -221,14 +221,14 @@ flowchart TD
 - The strict open-hash-compare-then-parse ordering structurally prevents the
   trust-order-confusion class.
 
-### Negative
+#### Negative
 
 - The user-scope trust store is new persistent state with its own permission and
   ownership invariants to enforce.
 - Operators must perform an explicit bless ceremony the first time and after each
   intentional edit, unless they list the path in the user-scope `auto_bless_paths`.
 
-### Risks
+#### Risks
 
 - A shared host where multiple users invoke substrate could see one user's bless
   store referenced by another. Mitigation: the store is per-user under

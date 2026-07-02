@@ -256,9 +256,9 @@ The supervisor-hardening codes below occupy `-32054` through `-32056` (see the
   child's pid was recycled to another process; the stale entry was cleared with no
   signal sent; re-run launch.up"`.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - A detached Stack survives the MCP client and is re-attachable, while the
   five-layer guarantee (default shutdown, parent-death binding, orphan TTL,
@@ -268,14 +268,14 @@ The supervisor-hardening codes below occupy `-32054` through `-32056` (see the
 - The lock-free reactor serialises multi-session commands without a controller
   election or advisory lock.
 
-### Negative
+#### Negative
 
 - A detached supervisor is a second long-lived process for the duration of a
   detached Stack, with its own registry state to reconcile.
 - Three platform-specific parent-death and child-exit implementations must each
   be validated.
 
-### Risks
+#### Risks
 
 - A supervisor killed by `SIGKILL` before the kernel delivers parent-death could,
   in a narrow window, leave a child briefly orphaned. Mitigation: reaper-on-boot

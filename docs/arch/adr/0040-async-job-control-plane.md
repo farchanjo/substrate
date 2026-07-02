@@ -353,9 +353,9 @@ Decorator   — ProgressThrottler wraps the mpsc::Sender; applies 250 ms / 1% de
 Null Object — NoopProgressNotifier used when client provides no progressToken
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Long-running tools no longer timeout at the MCP client; agents receive a job receipt and can
   poll or receive push notifications.
@@ -365,7 +365,7 @@ Null Object — NoopProgressNotifier used when client provides no progressToken
   single code path with no duplication.
 - Idempotency keys make retry-safe submission possible for Bucket B/C tools.
 
-### Negative
+#### Negative
 
 - Bucket B auto-mode requires a size preflight for some tools (for example, `fs.find` must
   count entries before deciding). If the preflight itself is slow, it delays the inline/job

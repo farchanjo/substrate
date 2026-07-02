@@ -330,9 +330,9 @@ the allowlist tree as of the last rebuild or write-through update. Callers that
 require a guaranteed-fresh result should issue a `fs.stat` call for each path
 of interest after `fs.find` returns.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Repeated glob queries against large trees resolve in microseconds from the
   snapshot rather than milliseconds from a full walk.
@@ -345,7 +345,7 @@ of interest after `fs.find` returns.
 - Native tier-based walk (getdents64/statx, getattrlistbulk) reduces syscall
   count per directory batch versus the `ignore`-crate readdir loop.
 
-### Negative
+#### Negative
 
 - `substrate-fs-index` adds a new crate with platform-gated code that must be
   compiled and tested on both Linux and macOS CI targets.
@@ -357,7 +357,7 @@ of interest after `fs.find` returns.
   may not reflect mutations made by external processes between rebuilds and
   watcher events.
 
-### Risks
+#### Risks
 
 - inotify queue overflow (`IN_Q_OVERFLOW`) on high-churn directories triggers a
   full rebuild, temporarily degrading to full-walk latency until the rebuild
@@ -409,3 +409,66 @@ of interest after `fs.find` returns.
 - Related: [ADR-0037](0037-async-cancellation-patterns.md) — CancellationToken patterns
 - Depends on: ADR-0042 — Capability-Based Adapter Factory (tier selection machinery)
 - Informs: ADR-0044 — No Subprocess Policy (no-subprocess invariant cited above)
+
+## Amendments
+
+### 2026-07-01 — Read side wired, O(n) write path retired, watcher and native-tier cancellation fixed; content index layered on top per ADR-0072
+
+An implementation audit found that this ADR's own invariants were only
+partially delivered: `IndexSnapshot::lookup_by_name`/`lookup_by_root` existed
+but `fs.find` never called `FsIndexPort::lookup` (the index built a snapshot no
+query ever read); `WriteThroughHandle::apply` deep-cloned the entire snapshot
+— O(n) in total indexed entries — on every single-path mutation;
+write-through invalidation was a bare fire-and-forget `tokio::task::spawn`
+with no ordering guarantee; `FsIndexWatcher` (Layer 2) was fully implemented
+but never constructed by the composition root; Layer 0's mandatory lazy lstat
+had no real callsite because nothing called `lookup`; and both native rebuild
+tiers (`linux/mod.rs`, `macos/mod.rs`) captured `cancel.is_cancelled()` once
+before entering `spawn_blocking` and closed over that frozen boolean for the
+whole walk, so a native-tier rebuild could not actually be cancelled mid-walk
+despite `fs-find-index-cancellation-mid-rebuild.feature` asserting that it
+could — `polling.rs` had already fixed the equivalent bug for the
+`PollingWatcher` tier via a live-shared `Arc<AtomicBool>`, but the fix was
+never backported to the two native tiers.
+
+[ADR-0072](0072-search-relevance-content-index-and-event-pubsub.md) is the
+single implementation wave that closes all of the above and, in the same
+pass, layers a content-side inverted index and BM25 relevance ranking onto
+this ADR's index for `text.search`. Summary of what changes here as a result
+(full design in ADR-0072):
+
+- `fs.find` (`substrate-fs-query/src/find.rs`) now actually calls
+  `FsIndexPort::lookup` before falling back to the `ignore`-crate walk — the
+  index accelerates real queries for the first time.
+- The flat `IndexSnapshot`/`SnapshotSlot` gives way to a segmented-immutable
+  structure (a small, bounded, frequently-rebuilt "hot" shard plus a list of
+  untouched `Arc`-shared immutable shards, merged by a background compaction
+  task) published via the same `ArcSwap` mechanism this ADR already chose.
+  Publish cost drops from O(total indexed entries) to O(hot-shard-size).
+- `WriteThroughHandle` and `substrate-fs-mutation`'s write-through helpers no
+  longer `tokio::task::spawn` a fire-and-forget invalidation; they send an
+  ordered `IndexCommand` (with an optional `oneshot` ack) onto a bounded
+  single-writer `mpsc<IndexCommand>` queue consumed by one new `IndexerActor`
+  task, closing the read-your-writes race that the old spawn could leave open.
+- `FsIndexWatcher` is constructed by the composition root whenever
+  `fs-index-watch` is compiled in; Layer 2 runs in a deployed build for the
+  first time.
+- Layer 0 (mandatory lazy lstat) gains its first real callsite as a direct
+  consequence of `fs.find` now calling `lookup`, and is extended — for content
+  hits only — with a cheap `mtime`/`size` fast-path check before trusting a
+  cached `content_hash`, falling back to a live re-read on mismatch.
+- The native-tier rebuild cancellation bug is fixed by backporting
+  `polling.rs`'s live `Arc<AtomicBool>` pattern to both `linux/mod.rs` and
+  `macos/mod.rs`; `rebuild::walk_root`'s existing per-256-entry boundary check
+  is unchanged, only the liveness of the flag it reads.
+- `[index]` TOML configuration (`schemas/index_config.cue`) gains new fields
+  for the content index, BM25 parameters, the command/event channel
+  capacities, and the write-through ack bound — see ADR-0072 and the amended
+  `#IndexConfig` schema.
+- A new Cargo feature `fs-index-content = ["fs-index", "dep:fst"]` gates the
+  content-index capability; the metadata-only index this ADR describes
+  continues to work unchanged when that feature is off.
+
+None of this ADR's Decision Drivers, Freshness Layer Stack, or Stale-Hit
+Policy are superseded — they are the invariants ADR-0072 was written to
+finally deliver on, not to relax.

@@ -366,9 +366,9 @@ The structured content hints map (ADR-0007 / ADR-0040) gains:
 `"idempotent_by_name": true` when `name` is set and the response is a re-use
 of an existing job.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Long-running services (Spring Boot, pnpm dev, Node.js) can be managed with a
   single `subprocess.spawn` call and a named handle; the agent does not need to
@@ -381,7 +381,7 @@ of an existing job.
 - All existing one-shot subprocess jobs work without modification; the new fields
   are purely additive.
 
-### Negative
+#### Negative
 
 - The supervisor task adds one persistent tokio task per supervised job. With
   `subprocess.max_concurrent = 8` (ADR-0052), this is at most 8 additional tasks
@@ -395,7 +395,7 @@ of an existing job.
   `SubprocessRegistry`. Its size is bounded by `subprocess.max_per_client *
   active_clients`, which is small in practice but must be monitored.
 
-### Risks
+#### Risks
 
 - A `restart_policy = Always` job with a zero-duration process (e.g., `true`)
   will restart in a tight loop bounded only by `backoff_ms`. Operators MUST set

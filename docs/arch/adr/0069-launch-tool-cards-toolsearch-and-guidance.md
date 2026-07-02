@@ -207,9 +207,9 @@ orchestration prompt. The mechanisms that make this hold are the single
 spawn, and the `resource_link` that points the model at live events instead of
 requiring it to invent a polling cadence.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - The launch workflow is self-driving for a small model: discovery via
   ToolSearch, advancement via a single next-tool hint, observation via a linked
@@ -219,14 +219,14 @@ requiring it to invent a polling cadence.
 - The notification contract turns a running stack into a development feedback
   loop the model reads directly.
 
-### Negative
+#### Negative
 
 - The next-tool graph is cross-tool state that must be kept correct as launch
   tools evolve (the same maintenance cost ADR-0007 already noted).
 - Two new optional hint keys and an extended `polling_endpoint` enum widen the
   shared hints schema.
 
-### Risks
+#### Risks
 
 - A ToolSearch query that is purely generic ("run", "start") could rank
   `launch.up` against `subprocess.spawn`. Mitigation: the domain nouns (stack,

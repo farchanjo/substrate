@@ -136,7 +136,7 @@ truth for job state regardless of which namespace the client uses. The `job.*`
 namespace is not removed; it enters a deprecation window that closes when the
 conditions in the Migration section below are met.
 
-## Consequences
+### Consequences
 
 Positive:
 

@@ -203,9 +203,9 @@ active. When `subprocess` is not enabled, only the tmp file reaper runs.
 The tmp file reaper is always active (tmp files may be created by the
 transactional write pattern even without the subprocess feature).
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Orphan tmp files from crashed writes are cleaned up automatically without
   operator intervention.
@@ -217,7 +217,7 @@ transactional write pattern even without the subprocess feature).
 - All reaper actions are recorded in the audit trail, providing forensic
   visibility into what was cleaned up and why.
 
-### Negative
+#### Negative
 
 - Scanning process environments on macOS via `proc_pidinfo(PROC_PIDENVNAME)` is
   a privileged operation; it may return `EPERM` for processes owned by other
@@ -229,7 +229,7 @@ transactional write pattern even without the subprocess feature).
   minutes are not reaped on the next startup. This is intentional to avoid
   interfering with concurrent instances.
 
-### Risks
+#### Risks
 
 - The parent PID reuse race: if a substrate process exits and its PID is reused
   by an unrelated process before the reaper runs, the reaper may incorrectly

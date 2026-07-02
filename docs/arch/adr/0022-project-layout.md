@@ -206,13 +206,13 @@ MCP JSON-RPC surface against a spawned server process.
 **Cargo feature gating.** The crate is a workspace member and is compiled as part of the workspace build. However, `substrate-mcp-server` declares it as an optional dependency:
 
 ```toml
-# crates/substrate-mcp-server/Cargo.toml
+## crates/substrate-mcp-server/Cargo.toml
 [dependencies]
 substrate-subprocess = { path = "../substrate-subprocess", optional = true }
 
 [features]
 subprocess = ["substrate-subprocess"]
-# default does not include subprocess
+## default does not include subprocess
 default = []
 ```
 
@@ -289,7 +289,7 @@ composition root. `substrate-launch` is now a member of `_adapter_crates` in
 **Cargo feature gating.** `substrate-mcp-server` declares it optional:
 
 ```toml
-# crates/substrate-mcp-server/Cargo.toml
+## crates/substrate-mcp-server/Cargo.toml
 [dependencies]
 substrate-launch = { path = "../substrate-launch", optional = true }
 

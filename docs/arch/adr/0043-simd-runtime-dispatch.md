@@ -417,9 +417,9 @@ Cross-reference [ADR-0038](0038-audit-event-semantics.md):
 - The `SUBSTRATE_CAPABILITY_TIERS_SELECTED` event defined in ADR-0042 already
   includes `simd_tier`; no duplicate event is emitted.
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Inner-loop latency for hashing, text scanning, and line counting drops by
   2x to 10x on AVX2 and NEON hosts with no operator action required.
@@ -431,7 +431,7 @@ Cross-reference [ADR-0038](0038-audit-event-semantics.md):
 - AVX-512 throttling risk is contained by default-off feature and secondary
   CPU model gate.
 
-### Negative
+#### Negative
 
 - `simd_impl` modules in adapter crates contain `unsafe` blocks; review
   burden increases. Narrow scope and debug assertions mitigate but do not
@@ -444,7 +444,7 @@ Cross-reference [ADR-0038](0038-audit-event-semantics.md):
 - Minimum tier thresholds may not be achievable on CI runners without AVX2
   support; the matrix must include an AVX2-capable runner or use QEMU.
 
-### Risks
+#### Risks
 
 - A CPUID spoof in a virtualized environment could report AVX-512 falsely,
   triggering a tier that causes an illegal-instruction fault. Mitigation: the

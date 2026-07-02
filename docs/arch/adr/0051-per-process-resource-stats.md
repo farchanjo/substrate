@@ -178,9 +178,9 @@ signaling such processes.
 - `process.stats_cache_max_pids` — maximum PID entries retained in the CPU
   delta cache (default: 4096; LRU eviction when full).
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Agents can identify top memory-consuming and top CPU-consuming processes
   without shell access, supporting automated remediation workflows.
@@ -189,7 +189,7 @@ signaling such processes.
 - The LRU delta cache enables accurate CPU utilization tracking across
   repeated calls without retaining unbounded state.
 
-### Negative
+#### Negative
 
 - The `fds` field returns null on macOS for cross-user processes; agents
   must handle null without treating it as an error.
@@ -199,7 +199,7 @@ signaling such processes.
   enumeration may be blocked; the adapter falls back to null for `fds` with a
   `tracing::debug!` log rather than returning an error for the whole call.
 
-### Risks
+#### Risks
 
 - The LRU delta cache retains a reference to a PID until eviction. If a PID
   is reused by the OS for a new process, the first `proc.stats` call for the

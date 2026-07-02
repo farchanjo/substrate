@@ -35,7 +35,35 @@ an arbitrary-file-read primitive or a way to smuggle banned variables
 - **No new dependency.** The dotenv format is trivial; adding a crate is not worth the
   supply-chain surface (`cargo deny`/`vet`).
 
+## Considered Options
+
+1. **Keep requiring every variable inline in `env`.** Status quo; adds no new
+   surface, but forces config/secrets that developers already keep in `.env`
+   files to be duplicated into `.substrate.toml`, contrary to the Compose-style
+   `env_file` convention operators asked for; rejected.
+2. **Depend on a `dotenv`/`dotenvy` crate to parse `.env` files.** Gives a
+   battle-tested parser for free — rejected: the format is small enough to parse
+   inline, and a new dependency is not worth the added `cargo deny`/`cargo vet`
+   supply-chain surface for that little logic.
+3. **Load `.env` files inside the subprocess BC instead of the launch layer.**
+   Would let `subprocess.spawn` accept file-based environment input directly —
+   rejected: it broadens a security-sensitive tool's input contract beyond the
+   reported need, the same reasoning [ADR-0070](0070-launch-path-binary-resolution.md)
+   applied when it rejected resolving `$PATH` bare names inside the subprocess
+   adapter rather than the launch layer.
+4. **Add `env_file` to `#LaunchService`, parsed inline in the launch BC, and
+   merged into `env_override` before handoff to the unchanged subprocess BC
+   (selected).** Matches the Compose `env_file` convention operators expect,
+   keeps parsing and file containment inside the already-trusted launch/profile
+   boundary, and adds no new dependency.
+
 ## Decision Outcome
+
+Chosen option: "Add `env_file` to `#LaunchService`, parsed inline in the launch
+BC, merged into `env_override` before handoff to the unchanged subprocess BC"
+(option 4), because it matches the Compose `env_file` convention operators
+expect, keeps parsing and file containment inside the already-trusted
+launch/profile boundary, and adds no new dependency.
 
 Add an optional `env_file: [...string]` field to `#LaunchService`. At bring-up the
 launch BC loads each file, merges the results into the child `env_override`, and
@@ -63,7 +91,7 @@ hands that to the subprocess BC unchanged.
   failure fails the Service with `SUBSTRATE_LAUNCH_*` (`InvalidProfile`), surfacing the
   bad file rather than silently starting with a partial environment.
 
-## Consequences
+### Consequences
 
 - **Positive.** Profiles stay small; config/secrets live in `.env` files as
   developers expect. No new dependency. Uniform across every launch path.

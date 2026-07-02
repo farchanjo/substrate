@@ -233,9 +233,9 @@ sequenceDiagram
     end
 ```
 
-## Consequences
+### Consequences
 
-### Positive
+#### Positive
 
 - Multi-process dev stacks are declared once and managed through a single named
   handle, composing the tested subprocess supervisor rather than duplicating it.
@@ -246,7 +246,7 @@ sequenceDiagram
 - The lock-free reactor removes controller-election complexity and the only
   mutex the earlier design introduced.
 
-### Negative
+#### Negative
 
 - The detached mode is a scoped exception to three accepted ADRs and requires
   amendment notes plus a dedicated decision record for the detached supervisor
@@ -256,7 +256,7 @@ sequenceDiagram
 - Composition across BC boundaries (launch → subprocess) adds an integration
   surface that must be covered by Gherkin features.
 
-### Risks
+#### Risks
 
 - A misconfigured `detach` policy with a long `orphan_ttl_secs` could keep a
   Stack alive longer than intended. Mitigation: conservative default (1 hour)
