@@ -18,3 +18,17 @@ Feature: launch.forget removes a terminal stack's registry entry
     When launch.forget is invoked for that stack_id
     Then the forget call fails with SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL
     And launch.status still lists that stack_id
+
+  # ADR-0068 cross-ref (2026-07-01 amendment): a detached stack's supervisor
+  # may have already exited on its own without this session observing it
+  Scenario: forgetting a detached stack whose supervisor has already exited succeeds
+    Given a detached Stack whose supervisor process has already exited without this session observing it
+    When launch.forget is invoked for that stack_id
+    Then the forget call succeeds
+    And launch.status no longer lists that stack_id
+
+  Scenario: forgetting a detached stack whose supervisor is still live is rejected
+    Given a detached Stack whose supervisor process is still alive
+    When launch.forget is invoked for that stack_id
+    Then the forget call fails with SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL
+    And launch.status still lists that stack_id

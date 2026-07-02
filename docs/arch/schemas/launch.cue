@@ -8,7 +8,9 @@
 //   ADR-0065 — dependency graph and reconciler reload (depends_on, required)
 //   ADR-0066 — event stream and notification model (#LaunchEvent)
 //   ADR-0067 — concurrency and messaging topology (#LaunchChannelBounds)
-//   ADR-0068 — detached supervisor and orphan governance (#SupervisorRegistry, #DisconnectPolicy)
+//   ADR-0068 — detached supervisor and orphan governance (#SupervisorRegistry,
+//     #DisconnectPolicy, #ControlFrame); 2026-07-01 amendment — control FIFO
+//     wired into production, #ControlFrame gains the "restart" variant
 //
 // Composition: each #LaunchService materializes to exactly one subprocess.spawn;
 // #RestartPolicy, #HealthProbe, #SubprocessState, and #Stream are reused verbatim
@@ -181,8 +183,42 @@ package schemas
 	// config_hash pins the Profile content the supervisor is running.
 	config_hash: string & =~"^(blake3|sha256):"
 
-	// children are the supervised processes owned by this supervisor.
+	// children are the supervised processes owned by this supervisor. Empty is
+	// a valid, expected value in the narrow window between the supervisor's
+	// initial publish (supervisor_pid + config_hash, before any Service is
+	// spawned) and its first post-spawn flush: a fresh MCP server treats "the
+	// registry exists with a matching config_hash and a live supervisor_pid"
+	// as the complete up(detach) readiness contract, never waiting for
+	// children to be populated (ADR-0068/ADR-0056 2026-07-01 amendment).
 	children: [...#StackChild]
+}
+
+// DDD role: ValueObject
+// #ControlFrame is one newline-delimited JSON command written to a detached
+// Stack's control.fifo (ADR-0068 "Lock-free multiplexed IPC"). Serialized with
+// an internally tagged `type` discriminator; each write(2) call is exactly one
+// frame, bounded to MAX_COMMAND_FRAME_SIZE (PIPE_BUF - 1) bytes before the
+// trailing newline delimiter that a reader splits on. Added the "restart"
+// variant in the 2026-07-01 amendment, alongside wiring `down`/`restart`/
+// `reload` on a detached Stack to actually write these frames in production.
+#ControlFrame: {
+	// "down" requests a graceful teardown of the named Stack.
+	type:     "down"
+	stack_id: string & =~"^[0-9A-HJKMNP-TV-Z]{26}$"
+} | {
+	// "reload" requests the supervisor reload the Stack from (optionally) a new
+	// Profile path, restarting the dependency-closure of changed Services
+	// (ADR-0065). profile_path absent re-reads the pinned path on file.
+	type:          "reload"
+	stack_id:      string & =~"^[0-9A-HJKMNP-TV-Z]{26}$"
+	profile_path?: string
+} | {
+	// "restart" requests the supervisor restart exactly one named Service: a
+	// fresh spawn, not counted against the subprocess crash-loop budget,
+	// mirroring the in-session launch.restart semantics for a detached Stack.
+	type:         "restart"
+	stack_id:     string & =~"^[0-9A-HJKMNP-TV-Z]{26}$"
+	service_name: #ServiceName
 }
 
 // DDD role: ValueObject
