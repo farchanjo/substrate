@@ -116,9 +116,9 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
             continue; // skip unmountable or inaccessible entries
         };
         let block_size = stat.block_size();
-        let total_bytes = stat.blocks() * block_size;
-        let avail_bytes = stat.blocks_available() * block_size;
-        let used_bytes = total_bytes.saturating_sub(stat.blocks_free() * block_size);
+        let total_bytes = stat.blocks().saturating_mul(block_size);
+        let avail_bytes = stat.blocks_available().saturating_mul(block_size);
+        let used_bytes = total_bytes.saturating_sub(stat.blocks_free().saturating_mul(block_size));
         let use_pct = MountPoint::usage_pct(used_bytes, total_bytes);
 
         result.push(MountPoint {
@@ -262,13 +262,24 @@ fn read_mounts() -> SubstrateResult<Vec<MountPoint>> {
 
 /// Handles a `sys.df` tool call.
 ///
+/// `read_mounts()` performs synchronous, potentially slow syscalls
+/// (`statvfs(2)` per mount on Linux, `getmntinfo(3)` on macOS). A stale
+/// NFS/FUSE mount can block `statvfs(2)` indefinitely, so the work runs on
+/// the blocking thread pool via `spawn_blocking` to keep the reactor free
+/// (mirrors `sys.mem`/`sys.cpu` Zone B handling in this crate).
+///
 /// # Errors
 ///
 /// Returns `SubstrateError::InternalError` if the mount table cannot be read.
 #[instrument(skip(deps))]
 pub async fn handle_sys_df(deps: Arc<SystemInfoDeps>) -> SubstrateResult<ToolResponse> {
     let _ = deps;
-    let mounts = read_mounts()?;
+    let mounts = tokio::task::spawn_blocking(read_mounts)
+        .await
+        .map_err(|e| substrate_domain::SubstrateError::InternalError {
+            reason: format!("spawn_blocking join error in sys.df: {e}"),
+            correlation_id: None,
+        })??;
     let count = mounts.len();
     let content = format!("sys.df: {count} filesystem(s) mounted.");
     let hints = build_info_hints(Some("sys.info"), None);
