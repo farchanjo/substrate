@@ -226,3 +226,18 @@ replay-on-reconnect has no meaning until a Stack can survive a client
 disconnect to reconnect to. Until then, clients observe launch events by
 polling `launch.logs` / `launch.status`, exactly the degrade-to-pull path
 this ADR already specifies for clients without `resources.subscribe`.
+
+### 2026-07-01 — `Restarting`/`Exited` events for a detached Stack now reflect a confirmed action
+
+`LaunchRegistry::down`, `.restart`, and `.reload` against an already-detached
+Stack previously emitted (or, for `restart`, never reliably emitted) their
+`Restarting`/`Exited` lifecycle events without the underlying supervisor
+action having actually happened — `down`/`reload` were silent no-ops and
+`restart` double-spawned in-session behind the supervisor's back. These
+three paths now route through `control.fifo` and only emit their event after
+the detached supervisor's durable registry confirms the effect (teardown
+complete, the named child re-spawned, or the config hash matches), so a
+detached Stack's lifecycle events carry the same authoritative, not merely
+advisory, guarantee this ADR requires of the lifecycle plane. See
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)'s
+2026-07-01 amendment.

@@ -259,3 +259,21 @@ wiring now landed, the launch side is corrected to match this ADR:
 
 The **subgraph degradation** and a **config-tunable readiness budget** (the budget is
 currently a compile-time constant, not a `RuntimeConfig` knob) remain deferred.
+
+## Amendment — 2026-07-01 — Detached `reload` now enforces this ADR's trust gate; routing is real, not a no-op
+
+`DetachedSupervisor::reload_inner` (`crates/substrate-launch/src/detached.rs`)
+previously loaded a reload target with `load_untrusted`, silently trusting
+whatever content sat at the swapped path; it now calls `load_trusted` against
+the same user-scope TOFU trust store the spawning `LaunchRegistry` uses, so a
+detached Stack's reload re-verifies content identity exactly like the
+in-session `LaunchRegistry::reload` documented above — an unblessed Profile
+swap is rejected with `SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED` before the
+reconciler's diff ever runs. Separately, `launch.reload` (and `.down` /
+`.restart`) issued against an already-detached Stack now genuinely reach the
+supervisor via the control FIFO and are confirmed against the durable
+registry before returning success — previously a silent no-op (or, for
+`restart`, an in-session double-spawn) whenever this reconciler's own
+algorithm targeted a detached Stack. See
+[ADR-0068](0068-launch-detached-supervisor-and-orphan-governance.md)'s
+2026-07-01 amendment for the full routing and confirmation mechanism.

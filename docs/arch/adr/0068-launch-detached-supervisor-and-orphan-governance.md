@@ -428,3 +428,112 @@ warnings|test --workspace --all-features`) is clean on macOS; the
 macOS development machine, not executed — a Linux CI/Docker run is the
 remaining verification gap before calling Linux support fully proven, not
 just compiled.
+
+### 2026-07-01 — Control FIFO wired into production; `ControlFrame::Restart`; six lifecycle bugs fixed
+
+The prior amendment landed the control-FIFO transport
+(`crates/substrate-launch/src/control_fifo.rs`) and the reactor
+(`detached.rs`), but `LaunchRegistry::down` / `restart` / `reload` never
+actually wrote to it: for an already-DETACHED Stack these methods fell
+through to the in-session code path, which iterates an empty `job_ids` map
+(the detached supervisor, not this registry, owns every real child) — a
+silent no-op for `down`/`reload` and an in-session double-spawn behind the
+supervisor's back for `restart`. This pass wires the control FIFO into
+production and fixes five more bugs found alongside it, entirely in
+`crates/substrate-launch/src/{control_fifo,detached,registry}.rs`:
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP client
+    participant Server as Live MCP server (LaunchRegistry)
+    participant Fifo as control.fifo
+    participant Supervisor as Detached supervisor
+    participant Registry as durable registry (supervisor.json)
+
+    Client->>Server: launch.down / launch.restart / launch.reload
+    Server->>Registry: require_supervisor_alive (read + liveness check)
+    Server->>Fifo: write_control_frame (Down / Restart / Reload)
+    Fifo->>Supervisor: spawn_control_reader dispatches the frame
+    Supervisor->>Supervisor: teardown / restart_inner / reload_inner
+    Supervisor->>Registry: flush_registry (atomic temp-plus-rename)
+    loop poll every 200ms, up to the per-command budget
+        Server->>Registry: read_supervisor_registry
+    end
+    Registry-->>Server: confirmed effect (gone / respawned / hash matches)
+    Server-->>Client: success, or SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE
+```
+
+1. **`down`/`restart`/`reload` on a DETACHED Stack now route through
+   `control.fifo`, with real confirmation.** A new `DetachedController` trait
+   (production impl `ProcessDetachedController`) writes the matching
+   `ControlFrame`, then polls the durable registry until the effect is
+   observable: `send_down` waits for the registry directory to disappear
+   (teardown's `clear_registry`) or the supervisor to stop being reachable
+   (`await_registry_gone`, 200ms poll, 1-minute budget — generous because
+   teardown is a reverse-topological SIGTERM-then-drain-then-SIGKILL cascade);
+   `send_restart` waits for the named child's recorded `(pid, start_epoch)` to
+   change (`await_child_respawned`, 30s budget); `send_reload` waits for
+   `config_hash` to match the newly loaded Profile's hash (`await_hash_matches`,
+   30s budget). Every path fails loud with
+   `SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` — via `require_supervisor_alive`
+   before the write, or the confirmation timeout after it — rather than
+   reporting success on faith.
+2. **`ControlFrame::Restart { stack_id, service_name }`** is a new frame
+   variant (`control_fifo.rs`), the detached-supervisor counterpart of the
+   in-session `launch.restart`: the supervisor's `handle_restart`/
+   `restart_inner` (`detached.rs`) stops the named child (if currently
+   recorded), re-spawns it, gates on its own readiness, and flushes the
+   updated registry snapshot — a fresh spawn, exactly like the in-session
+   restart, never counted against the subprocess crash-loop budget.
+3. **Detached `reload` re-verifies trust via `load_trusted`, not
+   `load_untrusted`.** `DetachedSupervisor::reload_inner` previously trusted
+   whatever Profile content sat at the (possibly attacker-swapped) path
+   unconditionally; it now hash-re-verifies against the same user-scope TOFU
+   trust store (`launch-trust.toml`) the spawning `LaunchRegistry` uses,
+   matching the in-session `LaunchRegistry::reload`'s own trust gate
+   ([ADR-0064](0064-launch-profile-trust-model.md)). This requires the
+   detached supervisor to know that store's path, so a new
+   `--trust-store <path>` CLI argument is plumbed end to end:
+   `SuperviseArgs.trust_store_path` (`detached.rs::parse_supervise_args`),
+   threaded from `LaunchRegistry::up`'s detach path through
+   `spawn_supervisor_process` (`registry.rs`) into the child's argv.
+4. **`up (detach)` publishes an initial durable-registry snapshot —
+   supervisor pid, `start_epoch`, `config_hash`, empty `children` — BEFORE
+   `spawn_all` runs**, and the parent now treats "the registry is present with
+   a matching `config_hash` and a live pid" as the complete readiness
+   contract (`await_supervisor_ready`, `registry.rs`), rather than waiting for
+   every Service to finish bringing up. A per-Service health probe can take
+   minutes ([ADR-0056](0056-subprocess-supervisor-semantics.md)); waiting for
+   `spawn_all` to finish before the first registry write made
+   `launch.up(detach)` spuriously fail with
+   `SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE` past the 10-second poll budget on
+   any Stack with a slow probe, even though the supervisor process itself was
+   alive and correctly pinned to the right Profile the whole time. Each
+   Service's own readiness is the supervisor's job from that point on; the
+   caller only needs proof the right supervisor exists.
+5. **`forget` rejects a Stack whose supervisor is still live.** A detached
+   Stack's supervisor can exit on its own (TTL expiry, crash, an external
+   kill) without this session ever observing it, leaving a stale in-memory
+   entry that is safe to drop; `LaunchRegistry::forget` now calls
+   `DetachedController::is_alive` to distinguish that case from a supervisor
+   that is genuinely still running, which continues to fall through to
+   `SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL` exactly as an in-session Stack does.
+   Forgetting a live detached Stack has never been safe and still is not.
+6. **The forked supervisor process is reaped.** `spawn_supervisor_process`
+   previously left the child's process-table entry to rot: `setsid(2)` (run
+   inside the child, per this ADR) detaches its session but does not reparent
+   it away from the spawning MCP server, so without any `wait(2)` call the
+   child sat as a zombie under that server from the moment the supervisor
+   exited until the server itself exited — potentially the server's entire
+   lifetime across many detach/down cycles. A fire-and-forget
+   `spawn_zombie_reaper` task now calls `child.wait()` on the blocking pool
+   for as long as the supervisor runs, with no other effect on a process
+   meant to run fully independent of the one that forked it.
+
+None of this changes the wire format or security posture already recorded
+above — a `ControlFrame` is still one newline-delimited JSON document per
+`write(2)` call bounded to `MAX_COMMAND_FRAME_SIZE`, and `control.fifo` is
+still verified `0600`/owner-owned before every open. It closes the gap
+between "the control FIFO exists and is tested in isolation" (the prior
+amendment) and "the control FIFO is what `launch.down`/`restart`/`reload`
+actually use for a detached Stack" (this one).
