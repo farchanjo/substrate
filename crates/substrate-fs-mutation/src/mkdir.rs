@@ -14,10 +14,18 @@
 //!
 //! When `dry_run = true` (the default), the handler returns a preview without
 //! touching disk. The preview reports the path that would be created.
+//!
+//! # Cancellation (ADR-0037)
+//!
+//! The directory-creation future races the caller's [`CancellationToken`] via
+//! a biased `tokio::select!` with the work future listed first, so a
+//! `parents=true` tree creation over many missing intermediate directories can
+//! be interrupted by `notifications/cancelled`.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -142,11 +150,14 @@ const fn default_true() -> bool {
 /// # Errors
 ///
 /// Propagates any [`SubstrateError`] from jail validation or `tokio::fs`.
-#[instrument(skip(deps), fields(path = %req.path, dry_run = req.dry_run))]
+/// Returns [`SubstrateError::Cancelled`] when `cancel` fires before directory
+/// creation completes.
+#[instrument(skip(deps, cancel), fields(path = %req.path, dry_run = req.dry_run))]
 pub async fn handle_fs_mkdir(
     req: FsMkdirRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Layer 1+2: allowlist + path jail.
     // The target directory may not yet exist, so we use the parent-jail
@@ -162,13 +173,27 @@ pub async fn handle_fs_mkdir(
     // callers are guided to review the dry-run plan before committing.
     elicitation::require_dry_run_acknowledged(req.elicitation_confirmed)?;
 
-    // Zone A: async-native directory creation.
-    if req.parents {
-        tokio::fs::create_dir_all(jailed.as_path()).await
-    } else {
-        tokio::fs::create_dir(jailed.as_path()).await
+    // Deterministic pre-cancellation gate (ADR-0037): an already-cancelled
+    // token must not dispatch any directory-creation syscall. The `biased`
+    // select! below races the work future first, so without this check an
+    // already-cancelled token could still start `create_dir` before the cancel
+    // arm is polled. The select! below still handles mid-flight cancellation.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
     }
-    .map_err(|e| map_io_error(e, jailed.as_path()))?;
+
+    // Zone A: async-native directory creation, raced against cancellation
+    // (ADR-0037). `biased` keeps the work future as the first arm so an
+    // already-ready creation result is preferred over a same-poll cancellation.
+    tokio::select! {
+        biased;
+        res = create_dir(req.parents, jailed.as_path()) => {
+            res.map_err(|e| map_io_error(e, jailed.as_path()))?;
+        }
+        () = cancel.cancelled() => {
+            return Err(SubstrateError::Cancelled { correlation_id: None });
+        }
+    }
 
     #[cfg(feature = "fs-index")]
     crate::write_through::on_upsert(&deps.index, &jailed);
@@ -183,6 +208,18 @@ pub async fn handle_fs_mkdir(
 }
 
 // ---- Helpers -----------------------------------------------------------------
+
+/// Creates `path`, either as a single directory or a full parent chain.
+///
+/// Factored out so the caller can race this future against cancellation via
+/// `tokio::select!` without borrowing `req` across the select arms.
+async fn create_dir(parents: bool, path: &Path) -> std::io::Result<()> {
+    if parents {
+        tokio::fs::create_dir_all(path).await
+    } else {
+        tokio::fs::create_dir(path).await
+    }
+}
 
 fn dry_run_response(jailed: &JailedPath) -> ToolResponse {
     let content = format!("Dry run: would create directory {jailed}");
@@ -257,7 +294,7 @@ mod tests {
             dry_run: true,
             elicitation_confirmed: false,
         };
-        let resp = handle_fs_mkdir(req, &deps, &root).await.expect("dry run");
+        let resp = handle_fs_mkdir(req, &deps, &root, CancellationToken::new()).await.expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
         assert!(!target.exists(), "dir must not exist after dry run");
     }
@@ -272,8 +309,29 @@ mod tests {
             dry_run: false,
             elicitation_confirmed: true,
         };
-        handle_fs_mkdir(req, &deps, &root).await.expect("mkdir");
+        handle_fs_mkdir(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("mkdir");
         assert!(target.is_dir(), "directory must be created");
+    }
+
+    /// A pre-cancelled token must abort directory creation before it happens
+    /// (ADR-0037).
+    #[tokio::test]
+    async fn cancelled_token_aborts_mkdir() {
+        let (dir, root, deps) = make_test_env();
+        let target = dir.path().join("never_created");
+        let req = FsMkdirRequest {
+            path: target.display().to_string(),
+            parents: true,
+            dry_run: false,
+            elicitation_confirmed: true,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_mkdir(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(!target.exists(), "directory must not be created when cancelled");
     }
 
     #[tokio::test]
@@ -285,7 +343,7 @@ mod tests {
             dry_run: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_mkdir(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_mkdir(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
         assert!(
             err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || err.code() == "SUBSTRATE_NOT_FOUND",
             "unexpected code: {}",

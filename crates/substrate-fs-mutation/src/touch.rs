@@ -14,10 +14,17 @@
 //! The target path is validated through the path jail. `fs.touch` on a
 //! non-existent file is considered low-risk; no dry-run gate is enforced.
 //! Updating timestamps on an existing file is also non-destructive.
+//!
+//! # Cancellation (ADR-0037)
+//!
+//! Both code paths are a single fast syscall dispatched via `spawn_blocking`;
+//! the handler checks `cancel.is_cancelled()` once, right before dispatch, as
+//! a fast entry-check tier rather than racing the syscall.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -41,12 +48,15 @@ pub struct FsTouchRequest {
 ///
 /// # Errors
 ///
-/// Propagates any [`SubstrateError`] from jail validation or I/O.
-#[instrument(skip(deps), fields(path = %req.path))]
+/// Propagates any [`SubstrateError`] from jail validation or I/O. Returns
+/// [`SubstrateError::Cancelled`] when `cancel` fires before the blocking call
+/// is dispatched.
+#[instrument(skip(deps, cancel), fields(path = %req.path))]
 pub async fn handle_fs_touch(
     req: FsTouchRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Determine whether the file exists to choose the jailing strategy.
     let file_exists = Path::new(&req.path).exists();
@@ -56,6 +66,12 @@ pub async fn handle_fs_touch(
     } else {
         jail_new_path(&req.path, deps, allowlist_root)?
     };
+
+    // Entry-check tier (ADR-0037): both branches below are a single fast
+    // syscall, so a pre-dispatch cancellation check is sufficient.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
+    }
 
     let path = jailed.as_path().to_path_buf();
     if file_exists {
@@ -235,7 +251,7 @@ mod tests {
         let req = FsTouchRequest {
             path: f.display().to_string(),
         };
-        handle_fs_touch(req, &deps, &root).await.expect("touch");
+        handle_fs_touch(req, &deps, &root, CancellationToken::new()).await.expect("touch");
         assert!(f.exists());
         assert_eq!(std::fs::read(&f).expect("read"), b"");
     }
@@ -256,7 +272,7 @@ mod tests {
         let req = FsTouchRequest {
             path: f.display().to_string(),
         };
-        handle_fs_touch(req, &deps, &root).await.expect("touch");
+        handle_fs_touch(req, &deps, &root, CancellationToken::new()).await.expect("touch");
 
         let after_mtime = std::fs::metadata(&f)
             .expect("meta")
@@ -266,5 +282,48 @@ mod tests {
         assert_eq!(std::fs::read(&f).expect("read"), b"data");
         // mtime should be >= before (resolution may be coarse on some FS).
         assert!(after_mtime >= before_mtime);
+    }
+
+    /// A pre-cancelled token must abort before the blocking syscall is
+    /// dispatched, for both the create and the update-timestamps paths
+    /// (ADR-0037 entry-check tier for fast metadata ops).
+    #[tokio::test]
+    async fn cancelled_token_aborts_create() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("never_created.txt");
+        let req = FsTouchRequest {
+            path: f.display().to_string(),
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_touch(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(!f.exists(), "file must not be created when cancelled");
+    }
+
+    #[tokio::test]
+    async fn cancelled_token_aborts_timestamp_update() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("existing.txt");
+        std::fs::write(&f, b"data").expect("seed");
+        let before_mtime = std::fs::metadata(&f)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        let req = FsTouchRequest {
+            path: f.display().to_string(),
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_touch(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        let after_mtime = std::fs::metadata(&f)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        assert_eq!(
+            after_mtime, before_mtime,
+            "mtime must be unchanged when cancelled"
+        );
     }
 }

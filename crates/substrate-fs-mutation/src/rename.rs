@@ -16,10 +16,16 @@
 //! 2. **Elicitation gate** — `confirmed` must be `true`. A `false` value
 //!    returns [`SubstrateError::ConfirmationRequired`] so the composition root
 //!    emits an MCP elicitation request to the human operator.
+//!
+//! # Cancellation (ADR-0037)
+//!
+//! The `tokio::fs::rename` future races the caller's [`CancellationToken`] via
+//! a biased `tokio::select!` with the work future listed first.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -78,11 +84,13 @@ pub struct FsRenameRequest {
 /// - [`SubstrateError::InvalidArgument`] — `dst` already exists and `overwrite`
 ///   is `false`.
 /// - Other [`SubstrateError`] variants from jail validation or `tokio::fs::rename`.
-#[instrument(skip(deps), fields(src = %req.src, dst = %req.dst))]
+/// - [`SubstrateError::Cancelled`] — `cancel` fires before the rename completes.
+#[instrument(skip(deps, cancel), fields(src = %req.src, dst = %req.dst))]
 pub async fn handle_fs_rename(
     req: FsRenameRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Layer 1+2: jail both paths.
     let jailed_src = deps.jail.jail(allowlist_root, Path::new(&req.src))?;
@@ -107,10 +115,27 @@ pub async fn handle_fs_rename(
         });
     }
 
-    // Zone A: atomic rename.
-    tokio::fs::rename(jailed_src.as_path(), jailed_dst.as_path())
-        .await
-        .map_err(|e| map_io_error(e, jailed_src.as_path()))?;
+    // Deterministic pre-cancellation gate (ADR-0037): an already-cancelled
+    // token must not dispatch the rename syscall. The `biased` select! below
+    // races the work future first, so without this check an already-cancelled
+    // token could still start the rename before the cancel arm is polled. The
+    // select! below still handles mid-flight cancellation.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
+    }
+
+    // Zone A: atomic rename, raced against cancellation (ADR-0037). `biased`
+    // keeps the work future as the first arm so an already-ready rename result
+    // is preferred over a same-poll cancellation.
+    tokio::select! {
+        biased;
+        res = tokio::fs::rename(jailed_src.as_path(), jailed_dst.as_path()) => {
+            res.map_err(|e| map_io_error(e, jailed_src.as_path()))?;
+        }
+        () = cancel.cancelled() => {
+            return Err(SubstrateError::Cancelled { correlation_id: None });
+        }
+    }
 
     #[cfg(feature = "fs-index")]
     crate::write_through::on_rename(&deps.index, &jailed_src, &jailed_dst);
@@ -227,7 +252,9 @@ mod tests {
             confirmed: true,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_rename(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
         assert!(src.exists(), "source must still exist");
     }
@@ -245,7 +272,9 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_rename(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
         assert!(src.exists(), "source must still exist");
     }
@@ -264,7 +293,9 @@ mod tests {
             confirmed: true,
             elicitation_confirmed: false,
         };
-        handle_fs_rename(req, &deps, &root).await.expect("rename");
+        handle_fs_rename(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("rename");
         assert!(!src.exists());
         assert!(dst.exists());
     }
@@ -282,7 +313,9 @@ mod tests {
             confirmed: true,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_rename(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_rename(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert!(
             err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || err.code() == "SUBSTRATE_NOT_FOUND",
             "unexpected code: {}",
@@ -306,11 +339,34 @@ mod tests {
             confirmed: true,
             elicitation_confirmed: false,
         };
-        handle_fs_rename(req, &deps, &root)
+        handle_fs_rename(req, &deps, &root, CancellationToken::new())
             .await
             .expect("rename with overwrite");
         assert!(!src.exists());
         let content = std::fs::read_to_string(&dst).expect("read dst");
         assert_eq!(content, "new content");
+    }
+
+    /// A pre-cancelled token must abort the rename before it happens (ADR-0037).
+    #[tokio::test]
+    async fn cancelled_token_aborts_rename() {
+        let (dir, root, deps) = make_test_env();
+        let src = dir.path().join("a.txt");
+        std::fs::write(&src, b"data").expect("seed");
+        let dst = dir.path().join("b.txt");
+        let req = FsRenameRequest {
+            src: src.display().to_string(),
+            dst: dst.display().to_string(),
+            overwrite: false,
+            dry_run_acknowledged: true,
+            confirmed: true,
+            elicitation_confirmed: false,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_rename(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(src.exists(), "source must still exist when cancelled");
+        assert!(!dst.exists(), "destination must not be created when cancelled");
     }
 }

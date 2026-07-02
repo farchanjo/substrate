@@ -27,10 +27,20 @@
 //!
 //! When `recursive: false` (default), a non-empty directory returns
 //! `SUBSTRATE_INVALID_ARGUMENT`.
+//!
+//! # Cancellation (ADR-0037)
+//!
+//! `std::fs::remove_dir_all` and its siblings run inside `spawn_blocking` and
+//! cannot be interrupted mid-syscall. The handler instead checks
+//! `cancel.is_cancelled()` between each top-level step (before dispatching the
+//! blocking removal, and between the empty-directory check and the actual
+//! `remove_dir` call), which is the accepted degradation for Zone B work per
+//! ADR-0037's `spawn_blocking` guidance.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -87,11 +97,14 @@ pub struct FsRemoveRequest {
 /// - [`SubstrateError::InvalidArgument`] — path is a non-empty directory and
 ///   `recursive` is `false`.
 /// - Other [`SubstrateError`] variants from jail validation or I/O.
-#[instrument(skip(deps), fields(path = %req.path, recursive = req.recursive))]
+/// - [`SubstrateError::Cancelled`] — `cancel` fires before a blocking removal
+///   step is dispatched (checked between top-level steps; see module docs).
+#[instrument(skip(deps, cancel), fields(path = %req.path, recursive = req.recursive))]
 pub async fn handle_fs_remove(
     req: FsRemoveRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Layer 1+2: allowlist + path jail.
     let jailed = deps.jail.jail(allowlist_root, Path::new(&req.path))?;
@@ -108,10 +121,22 @@ pub async fn handle_fs_remove(
 
     let is_dir = jailed.as_path().is_dir();
 
+    // Entry-check tier (ADR-0037): each branch below dispatches its first
+    // blocking syscall right after this point, so the check is hoisted above
+    // the `if`/`else` chain instead of being duplicated in every arm (all
+    // three previously repeated the identical call, which clippy's
+    // `branches_sharing_code` flags as duplicated branch prefix code).
+    check_not_cancelled(&cancel)?;
+
     if is_dir && req.recursive {
         // Recursive removal: remove the entire directory tree.
         // The jailed path was already validated above; `remove_dir_all` cannot
         // escape the root because it only descends into subdirectories of `jailed`.
+        //
+        // `remove_dir_all` runs inside `spawn_blocking` and cannot be
+        // interrupted mid-syscall (ADR-0037), so cancellation is checked once
+        // right before dispatch — the accepted degradation for a recursive
+        // Zone B walk.
         let jailed_path = jailed.as_path().to_path_buf();
         tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&jailed_path))
             .await
@@ -142,6 +167,9 @@ pub async fn handle_fs_remove(
             });
         }
 
+        // Re-check between the empty-directory probe and the actual removal:
+        // both are separate top-level steps per the module docs.
+        check_not_cancelled(&cancel)?;
         let jailed_path = jailed.as_path().to_path_buf();
         tokio::task::spawn_blocking(move || std::fs::remove_dir(&jailed_path))
             .await
@@ -175,6 +203,18 @@ pub async fn handle_fs_remove(
 }
 
 // ---- Helpers -----------------------------------------------------------------
+
+/// Returns [`SubstrateError::Cancelled`] if `cancel` has already fired.
+///
+/// Used between the top-level steps of `fs.remove` as the accepted
+/// cancellation degradation for Zone B work that cannot be interrupted
+/// mid-syscall (ADR-0037).
+fn check_not_cancelled(cancel: &CancellationToken) -> SubstrateResult<()> {
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
+    }
+    Ok(())
+}
 
 #[expect(
     clippy::needless_pass_by_value,
@@ -244,7 +284,7 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_remove(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
         assert!(f.exists());
     }
@@ -261,7 +301,7 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_remove(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
         assert!(f.exists());
     }
@@ -278,7 +318,7 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        handle_fs_remove(req, &deps, &root).await.expect("remove");
+        handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.expect("remove");
         assert!(!f.exists());
     }
 
@@ -295,7 +335,7 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_remove(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
         assert!(sub.exists());
     }
@@ -316,7 +356,7 @@ mod tests {
             recursive: true,
             elicitation_confirmed: false,
         };
-        handle_fs_remove(req, &deps, &root)
+        handle_fs_remove(req, &deps, &root, CancellationToken::new())
             .await
             .expect("recursive remove must succeed");
         assert!(!sub.exists(), "directory tree must be fully removed");
@@ -335,9 +375,52 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        handle_fs_remove(req, &deps, &root)
+        handle_fs_remove(req, &deps, &root, CancellationToken::new())
             .await
             .expect("empty dir remove must succeed");
         assert!(!sub.exists());
+    }
+
+    /// A pre-cancelled token must abort removal before the blocking syscall is
+    /// dispatched (ADR-0037 entry-check degradation for Zone B work).
+    #[tokio::test]
+    async fn cancelled_token_aborts_file_remove() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("victim.txt");
+        std::fs::write(&f, b"data").expect("seed");
+        let req = FsRemoveRequest {
+            path: f.display().to_string(),
+            dry_run_acknowledged: true,
+            confirmed: true,
+            recursive: false,
+            elicitation_confirmed: false,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_remove(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(f.exists(), "file must not be removed when cancelled");
+    }
+
+    /// A pre-cancelled token must abort a recursive tree removal before
+    /// `remove_dir_all` is dispatched.
+    #[tokio::test]
+    async fn cancelled_token_aborts_recursive_remove() {
+        let (dir, root, deps) = make_test_env();
+        let sub = dir.path().join("tree");
+        std::fs::create_dir_all(sub.join("nested")).expect("mkdir -p");
+        std::fs::write(sub.join("nested").join("file.txt"), b"data").expect("seed");
+        let req = FsRemoveRequest {
+            path: sub.display().to_string(),
+            dry_run_acknowledged: true,
+            confirmed: true,
+            recursive: true,
+            elicitation_confirmed: false,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_remove(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(sub.exists(), "directory tree must not be removed when cancelled");
     }
 }

@@ -17,6 +17,15 @@
 //! target path. A cancelled or panicked handler removes the temp file via the
 //! [`TmpPath`] Drop impl.
 //!
+//! # Cancellation (ADR-0033 Step 3, ADR-0037)
+//!
+//! The transactional write races `tokio::fs::write` against the caller's
+//! [`CancellationToken`] via a biased `tokio::select!` with the write future
+//! listed first, so an already-completed write is never discarded in favor of
+//! a cancellation that arrived a moment later. When cancellation wins the
+//! race, the [`TmpPath`] guard is dropped (removing the partial temp file) and
+//! [`SubstrateError::Cancelled`] is returned before the atomic rename runs.
+//!
 //! # Dry-run
 //!
 //! When `dry_run = true`, returns a preview including byte count without
@@ -25,6 +34,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -83,12 +93,14 @@ const fn default_true() -> bool {
 /// # Errors
 ///
 /// Propagates any [`SubstrateError`] from jail validation, encoding, preflight,
-/// or `tokio::fs` operations.
-#[instrument(skip(deps), fields(path = %req.path, encoding = ?req.encoding, dry_run = req.dry_run))]
+/// or `tokio::fs` operations. Returns [`SubstrateError::Cancelled`] when
+/// `cancel` fires before the write completes.
+#[instrument(skip(deps, cancel), fields(path = %req.path, encoding = ?req.encoding, dry_run = req.dry_run))]
 pub async fn handle_fs_write(
     req: FsWriteRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Layer 1+2: allowlist + path jail.
     // For write to a non-existent file, we jail the parent and treat the
@@ -121,11 +133,41 @@ pub async fn handle_fs_write(
     let parent = jailed.as_path().parent().unwrap_or_else(|| Path::new("."));
     preflight::check_disk_space(parent, byte_count as u64).await?;
 
-    // Transactional write: tmp → rename.
+    // Deterministic pre-cancellation gate (ADR-0037): a token that is already
+    // cancelled on entry must never touch disk. The `biased` select! below
+    // races the write future first, so on an already-cancelled token it could
+    // still dispatch `tokio::fs::write` — whose inner blocking op is NOT
+    // cancelled by dropping the future — and leak a partial `.tmp.<uuid7>`
+    // file before the cancel arm is polled. This up-front check makes the
+    // pre-cancelled path deterministic (no tmp file is ever created); the
+    // select! below still handles cancellation that arrives mid-flight.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
+    }
+
+    // Transactional write: tmp → rename, raced against cancellation (ADR-0033
+    // Step 3 / ADR-0037). `biased` keeps the write future as the first arm so
+    // an already-ready write result is preferred over a cancellation that
+    // lands in the same poll.
     let tmp = TmpPath::new_for(jailed.as_path());
-    tokio::fs::write(tmp.tmp_path(), &bytes)
-        .await
-        .map_err(|e| map_io_error(e, tmp.tmp_path()))?;
+    tokio::select! {
+        biased;
+        res = tokio::fs::write(tmp.tmp_path(), &bytes) => {
+            res.map_err(|e| map_io_error(e, tmp.tmp_path()))?;
+        }
+        () = cancel.cancelled() => {
+            // `tmp` drops here, removing the partial temp file (TmpPath::drop).
+            return Err(SubstrateError::Cancelled { correlation_id: None });
+        }
+    }
+
+    // Narrow-window re-check: cancellation may have fired between the write
+    // completing and this point. Catching it here avoids renaming a file the
+    // caller no longer wants committed.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
+    }
+
     tmp.commit()
         .await
         .map_err(|e| map_io_error(e, jailed.as_path()))?;
@@ -291,7 +333,7 @@ mod tests {
             fail_if_exists: false,
             dry_run: false,
         };
-        handle_fs_write(req, &deps, &root).await.expect("write");
+        handle_fs_write(req, &deps, &root, CancellationToken::new()).await.expect("write");
         let written = std::fs::read_to_string(&target).expect("read back");
         assert_eq!(written, "hello world");
     }
@@ -307,7 +349,7 @@ mod tests {
             fail_if_exists: false,
             dry_run: false,
         };
-        handle_fs_write(req, &deps, &root)
+        handle_fs_write(req, &deps, &root, CancellationToken::new())
             .await
             .expect("write base64");
         let written = std::fs::read(&target).expect("read back");
@@ -325,7 +367,7 @@ mod tests {
             fail_if_exists: false,
             dry_run: true,
         };
-        let resp = handle_fs_write(req, &deps, &root).await.expect("dry run");
+        let resp = handle_fs_write(req, &deps, &root, CancellationToken::new()).await.expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
         assert!(!target.exists());
     }
@@ -342,7 +384,7 @@ mod tests {
             fail_if_exists: true,
             dry_run: false,
         };
-        let err = handle_fs_write(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_write(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
         // Original content preserved.
         let still_old = std::fs::read_to_string(&target).expect("read");
@@ -362,7 +404,7 @@ mod tests {
             fail_if_exists: false,
             dry_run: false,
         };
-        handle_fs_write(req, &deps, &root).await.expect("write");
+        handle_fs_write(req, &deps, &root, CancellationToken::new()).await.expect("write");
         // The parent directory must contain only the target file, no temp files.
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .expect("read dir")
@@ -398,13 +440,44 @@ mod tests {
             fail_if_exists: false,
             dry_run: false,
         };
-        let err = handle_fs_write(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_write(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert!(
             err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST"
                 || err.code() == "SUBSTRATE_NOT_FOUND"
                 || err.code() == "SUBSTRATE_PERMISSION_DENIED",
             "unexpected code: {}",
             err.code()
+        );
+    }
+
+    /// A pre-cancelled token must abort the write before any bytes land on
+    /// disk and must not leave a residual `.tmp.<uuid>` file behind (ADR-0033
+    /// Step 3 / ADR-0037).
+    #[tokio::test]
+    async fn cancelled_token_aborts_write_and_leaves_no_temp_file() {
+        let (dir, root, deps) = make_test_env();
+        let target = dir.path().join("cancelled.txt");
+        let req = FsWriteRequest {
+            path: target.display().to_string(),
+            content: "should not land".into(),
+            encoding: WriteEncoding::Text,
+            fail_if_exists: false,
+            dry_run: false,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_write(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(!target.exists(), "target must not be created when cancelled");
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(std::result::Result::ok)
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "no temp file must remain after cancellation: {entries:?}"
         );
     }
 }

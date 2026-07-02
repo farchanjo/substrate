@@ -16,10 +16,17 @@
 //! `tokio::fs::symlink` is a POSIX-only function. On Windows this crate is not
 //! supported. The workspace `rust-version = "1.95"` and `edition = "2024"`
 //! targets are POSIX-only for this BC.
+//!
+//! # Cancellation (ADR-0037)
+//!
+//! `symlink(2)` is a single fast syscall; the handler checks
+//! `cancel.is_cancelled()` once, right before dispatch, as a fast entry-check
+//! tier rather than racing the syscall via `tokio::select!`.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -55,11 +62,14 @@ const fn default_true() -> bool {
 /// # Errors
 ///
 /// Propagates any [`SubstrateError`] from jail validation or `tokio::fs`.
-#[instrument(skip(deps), fields(link_path = %req.link_path, link_target = %req.link_target))]
+/// Returns [`SubstrateError::Cancelled`] when `cancel` fires before the
+/// symlink is created.
+#[instrument(skip(deps, cancel), fields(link_path = %req.link_path, link_target = %req.link_target))]
 pub async fn handle_fs_symlink(
     req: FsSymlinkRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Layer 1+2: validate both paths.
     // link_target must exist and be within the allowlist.
@@ -73,6 +83,12 @@ pub async fn handle_fs_symlink(
 
     if req.dry_run {
         return Ok(dry_run_response(&jailed_link, &jailed_target));
+    }
+
+    // Entry-check tier (ADR-0037): symlink(2) is a single fast syscall, so a
+    // pre-dispatch cancellation check is sufficient.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
     }
 
     // Zone A: symlink creation.
@@ -210,7 +226,7 @@ mod tests {
             link_target: target_file.display().to_string(),
             dry_run: false,
         };
-        handle_fs_symlink(req, &deps, &root).await.expect("symlink");
+        handle_fs_symlink(req, &deps, &root, CancellationToken::new()).await.expect("symlink");
         assert!(link.exists());
         assert!(link.is_symlink());
     }
@@ -227,7 +243,7 @@ mod tests {
             link_target: target_file.display().to_string(),
             dry_run: true,
         };
-        let resp = handle_fs_symlink(req, &deps, &root).await.expect("dry run");
+        let resp = handle_fs_symlink(req, &deps, &root, CancellationToken::new()).await.expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
         assert!(!link.exists());
     }
@@ -241,11 +257,34 @@ mod tests {
             link_target: "/etc/passwd".into(),
             dry_run: false,
         };
-        let err = handle_fs_symlink(req, &deps, &root).await.unwrap_err();
+        let err = handle_fs_symlink(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert!(
             err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || err.code() == "SUBSTRATE_NOT_FOUND",
             "unexpected code: {}",
             err.code()
         );
+    }
+
+    /// A pre-cancelled token must abort before `symlink(2)` is dispatched
+    /// (ADR-0037 entry-check tier for fast metadata ops).
+    #[tokio::test]
+    async fn cancelled_token_aborts_symlink() {
+        let (dir, root, deps) = make_test_env();
+        let target_file = dir.path().join("real.txt");
+        std::fs::write(&target_file, b"data").expect("seed");
+        let link = dir.path().join("link.txt");
+
+        let req = FsSymlinkRequest {
+            link_path: link.display().to_string(),
+            link_target: target_file.display().to_string(),
+            dry_run: false,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_symlink(req, &deps, &root, cancel).await.unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        assert!(!link.exists(), "symlink must not be created when cancelled");
     }
 }

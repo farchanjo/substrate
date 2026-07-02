@@ -17,10 +17,18 @@
 //! would create an unconfirmed privilege-escalation path.
 //!
 //! Dry-run gate is enforced for all invocations per ADR-0004 Layer 3.
+//!
+//! # Cancellation (ADR-0037)
+//!
+//! `chmod`/`fchmodat` is a single fast syscall dispatched via
+//! `spawn_blocking`; racing it with `tokio::select!` would add no value. The
+//! handler instead checks `cancel.is_cancelled()` once, right before
+//! dispatching the blocking call, as a fast entry-check tier.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use substrate_domain::{JailedPath, SubstrateError, SubstrateResult};
@@ -126,11 +134,14 @@ pub struct FsSetPermissionsRequest {
 ///   (`0o4000`), setgid (`0o2000`), or world-writable (`0o002`) bits and
 ///   `confirmed` is `false`.
 /// - Other [`SubstrateError`] variants from jail validation or `nix`.
-#[instrument(skip(deps), fields(path = %req.path, mode = req.mode))]
+/// - [`SubstrateError::Cancelled`] — `cancel` fires before the `chmod` call is
+///   dispatched.
+#[instrument(skip(deps, cancel), fields(path = %req.path, mode = req.mode))]
 pub async fn handle_fs_set_permissions(
     req: FsSetPermissionsRequest,
     deps: &FsMutationDeps,
     allowlist_root: &JailedPath,
+    cancel: CancellationToken,
 ) -> SubstrateResult<ToolResponse> {
     // Pre-jail traversal guard — reject any `..` segment before the kernel-level
     // path-jail resolves the path, so the operator receives a precise
@@ -159,6 +170,13 @@ pub async fn handle_fs_set_permissions(
     let confirmed_ok = req.confirmed || req.elicitation_confirmed;
     if req.mode & ELICITATION_MASK != 0 {
         elicitation::require_confirmation(confirmed_ok)?;
+    }
+
+    // Entry-check tier (ADR-0037): chmod is a single fast syscall, so a
+    // pre-dispatch cancellation check is sufficient — racing it via
+    // `tokio::select!` would add no value.
+    if cancel.is_cancelled() {
+        return Err(SubstrateError::Cancelled { correlation_id: None });
     }
 
     // Zone B: blocking chmod via nix.
@@ -258,7 +276,7 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_set_permissions(req, &deps, &root)
+        let err = handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
@@ -276,7 +294,7 @@ mod tests {
             confirmed: false, // missing confirmation for world-writable
             elicitation_confirmed: false,
         };
-        let err = handle_fs_set_permissions(req, &deps, &root)
+        let err = handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
@@ -294,7 +312,7 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        handle_fs_set_permissions(req, &deps, &root)
+        handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .expect("chmod 0o644");
     }
@@ -319,7 +337,7 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        handle_fs_set_permissions(req, &deps, &root)
+        handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .expect("chmod on symlink via fchmodat must succeed");
 
@@ -351,7 +369,7 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_set_permissions(req, &deps, &root)
+        let err = handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
@@ -369,7 +387,7 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_set_permissions(req, &deps, &root)
+        let err = handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
@@ -387,7 +405,7 @@ mod tests {
             confirmed: true,
             elicitation_confirmed: false,
         };
-        handle_fs_set_permissions(req, &deps, &root)
+        handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .expect("chmod 0o4755 with confirmation");
     }
@@ -402,7 +420,7 @@ mod tests {
             confirmed: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_set_permissions(req, &deps, &root)
+        let err = handle_fs_set_permissions(req, &deps, &root, CancellationToken::new())
             .await
             .unwrap_err();
         assert!(
@@ -411,6 +429,34 @@ mod tests {
                 || err.code() == "SUBSTRATE_PERMISSION_DENIED",
             "unexpected code: {}",
             err.code()
+        );
+    }
+
+    /// A pre-cancelled token must abort before `chmod` is dispatched
+    /// (ADR-0037 entry-check tier for fast metadata ops).
+    #[tokio::test]
+    async fn cancelled_token_aborts_chmod() {
+        let (dir, root, deps) = make_test_env();
+        let f = dir.path().join("target.txt");
+        std::fs::write(&f, b"data").expect("seed");
+        let original_mode = std::fs::metadata(&f).expect("meta").permissions();
+        let req = FsSetPermissionsRequest {
+            path: f.display().to_string(),
+            mode: 0o600,
+            dry_run_acknowledged: true,
+            confirmed: true,
+            elicitation_confirmed: false,
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let err = handle_fs_set_permissions(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
+        let mode_after = std::fs::metadata(&f).expect("meta").permissions();
+        assert_eq!(
+            mode_after, original_mode,
+            "mode must be unchanged when cancelled"
         );
     }
 }
