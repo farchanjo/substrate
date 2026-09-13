@@ -130,12 +130,16 @@ jobs:
   speckit-validate-deep:
     name: speckit validate --deep (doc/arch/)
     runs-on: ubuntu-latest
+    # The `secrets` context is not available to a step-level `if:`, so the token
+    # is mapped to a job-level env var and the conditions read that instead.
+    env:
+      SPECKIT_REPO_TOKEN: ${{ secrets.SPECKIT_REPO_TOKEN }}
     steps:
       - name: Checkout substrate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Checkout speckit source
-        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        if: env.SPECKIT_REPO_TOKEN != ''
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: farchanjo/speckit
@@ -144,26 +148,26 @@ jobs:
           path: .speckit-src
 
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
-        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        if: env.SPECKIT_REPO_TOKEN != ''
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
 
       - name: Cache cargo registry/build artifacts
-        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        if: env.SPECKIT_REPO_TOKEN != ''
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: .speckit-src
           shared-key: speckit-build
 
       - name: Build and install speckit
-        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        if: env.SPECKIT_REPO_TOKEN != ''
         run: cargo install --locked --path .speckit-src
 
       - name: speckit validate --deep
-        if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
+        if: env.SPECKIT_REPO_TOKEN != ''
         run: speckit validate --deep
 
       - name: Skip (SPECKIT_REPO_TOKEN not configured)
-        if: ${{ secrets.SPECKIT_REPO_TOKEN == '' }}
+        if: env.SPECKIT_REPO_TOKEN == ''
         run: |
           echo "::warning::SPECKIT_REPO_TOKEN not set — skipping speckit validate --deep."
           echo "Run it manually before merging any doc/arch/ change: speckit validate --deep"
