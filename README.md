@@ -1,11 +1,23 @@
 # substrate
 
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey.svg)](#validation)
+
 Model Context Protocol (MCP) server in Rust 1.95 exposing POSIX baseutils-equivalent
 OS management to LLM agents over STDIO. Ten bounded contexts: filesystem-query,
 filesystem-mutation, process, system-info, text-processing, archive, job,
 subprocess, network-info, launch (declarative process orchestration, feature-gated).
 61 tools with the `launch` feature enabled (51 without). Built and verified on both
 macOS and Linux.
+
+## Table of contents
+
+- [Quick Start](#quick-start) — prerequisites, build, run, and a smoke test
+- [System Overview](#system-overview) — actors at the boundary and the call sequence
+- [Architecture](#architecture) — where the spec lives and the order to read it
+- [Validation](#validation) — the gates CI enforces, on both platforms
+- [TLA+ formal verification](#tla-formal-verification) — the JobRegistry model
+- [License](#license) — MIT OR Apache-2.0
 
 ## Quick Start
 
@@ -96,21 +108,21 @@ sequenceDiagram
 ## Architecture
 
 This repository uses spec-as-source-of-truth. All architectural decisions live
-under `docs/arch/` as MADR 4.0 ADRs, CUE schemas, Gherkin features, Rego policies,
+under `doc/arch/` as MADR 4.0 ADRs, CUE schemas, Gherkin features, Rego policies,
 Structurizr DSL, OpenSLO definitions, AsyncAPI spec, and a TLA+ formal model.
 
 Read in order:
 
-1. [Architecture Overview](docs/arch/README.md) — entry point for the spec
-2. [Glossary](docs/arch/glossary.md) — ubiquitous-language vocabulary
-3. [ADR-0002](docs/arch/adr/0002-bounded-contexts.md) — strategic DDD and the ten bounded contexts (filesystem-query, filesystem-mutation, process, system-info, text-processing, archive, job, subprocess, network-info, launch)
-4. [ADR-0040](docs/arch/adr/0040-async-job-control-plane.md) — async job control-plane (Push/Pull dual channel)
-5. [ADR-0063](docs/arch/adr/0063-launch-orchestration-bounded-context.md) — launch BC overview; read alongside ADR-0064..0069 for the trust model, dependency graph, event stream, concurrency topology, and the detached-supervisor design
+1. [Architecture Overview](doc/arch/README.md) — entry point for the spec
+2. [Glossary](doc/arch/glossary.md) — ubiquitous-language vocabulary
+3. [ADR-0002](doc/arch/adr/0002-bounded-contexts.md) — strategic DDD and the ten bounded contexts (filesystem-query, filesystem-mutation, process, system-info, text-processing, archive, job, subprocess, network-info, launch)
+4. [ADR-0040](doc/arch/adr/0040-async-job-control-plane.md) — async job control-plane (Push/Pull dual channel)
+5. [ADR-0063](doc/arch/adr/0063-launch-orchestration-bounded-context.md) — launch BC overview; read alongside ADR-0064..0069 for the trust model, dependency graph, event stream, concurrency topology, and the detached-supervisor design
 
 ## Validation
 
 ```bash
-spec validate --lane full      # conftest/vale/SLO/AsyncAPI/TLC validators, on top of the fast+default lanes
+speckit validate --deep       # native validators plus the external conftest/vale/SLO/AsyncAPI/TLC lanes
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo nextest run --locked --workspace --all-features --no-fail-fast
 ```
@@ -125,7 +137,7 @@ stretches between real-Linux verification passes.
 
 ## TLA+ formal verification
 
-A `JobRegistry.tla` model lives at `docs/arch/formal/JobRegistry.tla`. To enable
+A `JobRegistry.tla` model lives at `doc/arch/formal/JobRegistry.tla`. To enable
 the `run_tlc` validator:
 
 ```bash
@@ -133,8 +145,8 @@ the `run_tlc` validator:
 curl -L -o tools/tla2tools.jar \
   https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
 
-# Then run the spec full lane -- TLC will be invoked automatically
-spec validate --lane full
+# Then run the deep validation lane -- TLC will be invoked automatically
+speckit validate --deep
 ```
 
 The `TLA2TOOLS_JAR` environment variable is auto-set by `mise` when
@@ -143,3 +155,5 @@ The `TLA2TOOLS_JAR` environment variable is auto-set by `mise` when
 ## License
 
 Dual-licensed under MIT OR Apache-2.0. See `LICENSE-MIT` and `LICENSE-APACHE`.
+
+Built with 🦀 Rust.
