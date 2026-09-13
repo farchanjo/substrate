@@ -37,9 +37,25 @@ import "strings"
 	openWorldHint: bool | *false
 }
 
+// DDD role: ValueObject
+// #ToolSchemaContract groups the two JSON Schema contracts of #ToolSpec.
+// Both are opaque maps: the contract is authored per tool and never re-parsed
+// by the registry.
+#ToolSchemaContract: {
+	// input_schema is a JSON Schema object (opaque map) describing accepted arguments.
+	input_schema: {[string]: _}
+
+	// output_schema is a JSON Schema object describing structured return values.
+	output_schema: {[string]: _}
+}
+
 // #ToolSpec is the aggregate root for a single registered MCP tool.
 // It binds identity, schema contracts, and behavioral annotations together.
 #ToolSpec: {
+	// id is the identity of this aggregate instance, in the shared wire form of
+	// the shared kernel #CorrelationId (a UUIDv7 alias of #JobId per ADR-0040).
+	id: #CorrelationId
+
 	// name must follow <namespace>_<snake_case> and be non-empty (wire form per
 	// ADR-0062). "job" namespace added 2026-05-21 per ADR-0040; "subprocess" per
 	// ADR-0052; "net" per ADR-0058; "launch" per ADR-0069.
@@ -54,11 +70,7 @@ import "strings"
 	// namespace is derived from the name prefix; kept explicit for query convenience.
 	namespace: #ToolNamespace
 
-	// input_schema is a JSON Schema object (opaque map) describing accepted arguments.
-	input_schema: {[string]: _}
-
-	// output_schema is a JSON Schema object describing structured return values.
-	output_schema: {[string]: _}
+	#ToolSchemaContract
 
 	// annotations controls MCP client hints for this tool.
 	annotations: #ToolAnnotations

@@ -20,16 +20,18 @@ package schemas
 	key: #HintKey
 
 	// value is the hint payload; must stay within #HintValueMaxTokens.
-	value: string
+	value: #ShortText
 }
 
 // #HintsMap is the canonical map of hint keys to their string values
 // as embedded in a #ToolResult. All keys are optional; absent keys
 // signal that the hint is not applicable for this invocation.
+// Values are carried as text here; #Hints in tool_card.cue is the typed
+// counterpart used on the wire.
 #HintsMap: {
-	next_action_suggested?: string
-	alternative_tool?:      string
-	confirm_destructive?:   string
-	quota_status?:          string
-	error_recovery?:        string
+	next_action_suggested?: #ShortText
+	alternative_tool?:      #ToolName
+	confirm_destructive?:   #ShortText
+	quota_status?:          #ShortText
+	error_recovery?:        #ShortText
 }

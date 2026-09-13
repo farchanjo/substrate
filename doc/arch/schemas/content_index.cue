@@ -16,13 +16,20 @@ package schemas
 	b: number & >=0.0 & <=1.0 | *0.75
 }
 
+// #TokenPositions carries the zero-based token offsets of every occurrence of
+// one term within one document.
+#TokenPositions: [...uint]
+
+// #ByteOffsets carries absolute byte offsets within a file.
+#ByteOffsets: [...uint]
+
 // #PostingEntry is a single document's occurrence record for one term within
 // one #IndexShard, per ADR-0072's content inverted index.
 #PostingEntry: {
 	// doc_id references the indexed document by its stable per-shard
 	// identifier. Not stable across shards; a document's postings never span
 	// more than one shard.
-	doc_id: uint
+	doc_id: #Counter
 
 	// term_freq is the number of occurrences of the term within the document.
 	term_freq: uint & >=1
@@ -30,8 +37,12 @@ package schemas
 	// positions carries the zero-based token offsets of each occurrence,
 	// captured once at index time and used to build a context-window snippet
 	// without re-scanning the file at query time for the common (fresh) case.
-	positions: [...uint]
+	positions: #TokenPositions
 }
+
+// #PostingEntryList is the per-document occurrence list of one term, sorted by
+// doc_id.
+#PostingEntryList: [...#PostingEntry]
 
 // #PostingList aggregates every #PostingEntry for a single term within one
 // #IndexShard, plus the document frequency the BM25 IDF term consumes.
@@ -45,7 +56,7 @@ package schemas
 	doc_freq: uint & >=1
 
 	// entries is the per-document occurrence list, sorted by doc_id.
-	entries: [...#PostingEntry]
+	entries: #PostingEntryList
 }
 
 // #IndexShard (a.k.a. segment) is one unit of the LSM-lite segmented content
@@ -55,11 +66,11 @@ package schemas
 // compaction merge. Shards are never mutated in place once frozen.
 #IndexShard: {
 	// shard_id is a monotonically increasing per-process identifier.
-	shard_id: uint
+	shard_id: #Counter
 
 	// generation is the publish generation at which this shard's current
 	// contents became visible to readers (see #IndexEvent ShardPublished).
-	generation: uint
+	generation: #Counter
 
 	// doc_count is the number of documents represented in this shard.
 	doc_count: uint & >=0
@@ -148,11 +159,11 @@ package schemas
 	// score is the BM25 relevance score (higher is more relevant). Not
 	// normalized across queries; meaningful only for ranking within one
 	// response.
-	score: number
+	score: #Score
 
 	// snippet is a context-window excerpt built via grep-searcher around the
 	// highest-scoring match position in this document.
-	snippet: string
+	snippet: #ShortText
 
 	// snippet_start_line is the 1-based line number of the first line
 	// included in snippet.
@@ -160,7 +171,7 @@ package schemas
 
 	// match_offsets carries the byte offsets, within the file, of the term
 	// occurrences that contributed to this document's score.
-	match_offsets: [...uint]
+	match_offsets: #ByteOffsets
 
 	// term_freq is the total matched-term occurrence count in this document
 	// across all matched query terms.

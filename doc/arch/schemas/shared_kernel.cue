@@ -26,8 +26,9 @@ package schemas
 // #ProgressToken tracks incremental progress for long-running tools.
 // Tools that support streaming progress emit this alongside partial results.
 #ProgressToken: {
-	// token is the opaque progress identifier issued by the runtime.
-	token: string
+	// token is the opaque progress identifier issued by the runtime. Non-empty;
+	// callers must treat the payload as opaque.
+	token: #ShortText
 
 	// total_known is the estimated total unit count; absent when unknown.
 	total_known?: uint & >=1
@@ -38,7 +39,7 @@ package schemas
 #ToolResult: {
 	// content_text_summary is a concise, redacted human-readable description
 	// of what the tool produced. Shown verbatim in MCP client UIs.
-	content_text_summary: string
+	content_text_summary: #ShortText
 
 	// structured_content carries machine-readable output (JSON-compatible map).
 	// May be empty ({}) when no structured data is produced.

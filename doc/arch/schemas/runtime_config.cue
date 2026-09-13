@@ -52,7 +52,7 @@ package schemas
 
 	// redaction_extra_patterns is a list of additional Go-compatible regex patterns
 	// whose matches are replaced with [REDACTED] before any log line is written.
-	redaction_extra_patterns: [...string] | *[]
+	redaction_extra_patterns: #RedactionPatternList
 
 	// max_log_file_bytes is the rolling size ceiling for a log file before rotation (default 100 MiB).
 	max_log_file_bytes: uint & >=1048576 | *104857600
@@ -67,8 +67,9 @@ package schemas
 }
 
 // DDD role: ValueObject
-// #ProtocolConfig governs MCP wire-level constraints.
-#ProtocolConfig: {
+// #ProtocolLimits groups the size ceilings that #ProtocolConfig enforces on a
+// single request, a single response frame, and a single buffered payload.
+#ProtocolLimits: {
 	// max_page_size is the handler-level pagination cap (default 500 per ADR-0008,
 	// applied on fs.find / proc.list / text.search). It is a SECOND, narrower layer
 	// on top of the domain #PageSize bound (1..=10000 per ADR-0060): the domain
@@ -87,6 +88,12 @@ package schemas
 
 	// max_archive_input_bytes caps the decompressed size of any archive processed (1 GiB default).
 	max_archive_input_bytes: uint | *1073741824
+}
+
+// DDD role: ValueObject
+// #ProtocolConfig governs MCP wire-level constraints.
+#ProtocolConfig: {
+	#ProtocolLimits
 
 	// max_in_flight_requests is the maximum number of concurrent JSON-RPC requests
 	// the server will process before returning SUBSTRATE_RESOURCE_LIMIT (default 32).
@@ -140,9 +147,11 @@ package schemas
 	log_tier_on_startup: bool | *true
 }
 
-// #RuntimeConfig is the top-level aggregate root for substrate runtime tuning.
-// All sub-sections have safe defaults; omitting a section activates those defaults.
-#RuntimeConfig: {
+// DDD role: ValueObject
+// #RuntimeSubsystems groups the five tuning sub-sections that #RuntimeConfig
+// always resolves. Each section is optional in the TOML file and falls back to
+// its own documented defaults when omitted.
+#RuntimeSubsystems: {
 	// timeouts configures per-tool and global execution time limits.
 	timeouts: #Timeouts
 
@@ -157,6 +166,16 @@ package schemas
 
 	// security contains runtime-level security hardening knobs.
 	security: #SecurityRuntime
+}
+
+// #RuntimeConfig is the top-level aggregate root for substrate runtime tuning.
+// All sub-sections have safe defaults; omitting a section activates those defaults.
+#RuntimeConfig: {
+	// id is the identity of this aggregate instance, in the shared wire form of
+	// the shared kernel #CorrelationId (a UUIDv7 alias of #JobId per ADR-0040).
+	id: #CorrelationId
+
+	#RuntimeSubsystems
 
 	// shutdown_drain_secs is the maximum time (in seconds) the runtime waits for
 	// in-flight requests to complete during graceful shutdown (default 5s, max 120s).

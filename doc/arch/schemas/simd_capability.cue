@@ -60,54 +60,69 @@ package schemas
 // A SUBSTRATE_CAPABILITY_TIERS_SELECTED audit event is emitted before any MCP session
 // is accepted, recording all selected tier strings.
 // Closed struct: all fields are mandatory; omitting any field is a schema violation.
+// The fields are grouped into the three fragments below (tier selection, Linux probes,
+// macOS probes); each fragment is scoped to this definition and embedded in place, so
+// the flat snapshot shape is unchanged.
 #Capabilities: {
-	// simd_tier is the highest SIMD instruction set available on this CPU.
-	simd_tier: #SimdTier
+	// #TierSelection groups the implementation tier selected for each capability port.
+	#TierSelection: {
+		// simd_tier is the highest SIMD instruction set available on this CPU.
+		simd_tier: #SimdTier
 
-	// walker_tier is the selected directory-walk implementation for this platform.
-	walker_tier: #WalkerTier
+		// walker_tier is the selected directory-walk implementation for this platform.
+		walker_tier: #WalkerTier
 
-	// watcher_tier is the selected filesystem-watch implementation for this platform.
-	watcher_tier: #WatcherTier
+		// watcher_tier is the selected filesystem-watch implementation for this platform.
+		watcher_tier: #WatcherTier
 
-	// jail_tier is the selected path-jail implementation for this platform.
-	// userspace-degraded triggers a SUBSTRATE_JAIL_DEGRADED audit event per ADR-0042.
-	jail_tier: #JailTier
+		// jail_tier is the selected path-jail implementation for this platform.
+		// userspace-degraded triggers a SUBSTRATE_JAIL_DEGRADED audit event per ADR-0042.
+		jail_tier: #JailTier
 
-	// hash_tier is the selected BLAKE3 hashing implementation driven by simd_tier.
-	hash_tier: #HashTier
+		// hash_tier is the selected BLAKE3 hashing implementation driven by simd_tier.
+		hash_tier: #HashTier
 
-	// stat_tier is the selected file-stat implementation for this platform.
-	stat_tier: #StatTier
+		// stat_tier is the selected file-stat implementation for this platform.
+		stat_tier: #StatTier
+	}
+	#TierSelection
 
-	// has_openat2 is true when the Linux kernel supports openat2(2) (kernel 5.6+).
-	has_openat2: bool
+	// #LinuxCapabilityProbes groups the Linux kernel feature probes that feed tier selection.
+	#LinuxCapabilityProbes: {
+		// has_openat2 is true when the Linux kernel supports openat2(2) (kernel 5.6+).
+		has_openat2: #Flag
 
-	// has_statx is true when the Linux kernel supports statx(2) (kernel 4.11+).
-	has_statx: bool
+		// has_statx is true when the Linux kernel supports statx(2) (kernel 4.11+).
+		has_statx: #Flag
 
-	// has_io_uring is true when io_uring is available (kernel 5.1+) and the
-	// linux-iouring Cargo feature is compiled in.
-	has_io_uring: bool
+		// has_io_uring is true when io_uring is available (kernel 5.1+) and the
+		// linux-iouring Cargo feature is compiled in.
+		has_io_uring: #Flag
 
-	// has_inotify is always true on Linux (kernel 2.6.13+).
-	has_inotify: bool
+		// has_inotify is always true on Linux (kernel 2.6.13+).
+		has_inotify: #Flag
 
-	// has_fanotify is true when fanotify is available and CAP_SYS_ADMIN is held.
-	// A runtime capability check is performed; false when privilege is absent.
-	has_fanotify: bool
+		// has_fanotify is true when fanotify is available and CAP_SYS_ADMIN is held.
+		// A runtime capability check is performed; false when privilege is absent.
+		has_fanotify: #Flag
+	}
+	#LinuxCapabilityProbes
 
-	// has_getattrlistbulk is true on macOS 10.10+ (getattrlistbulk(2) available).
-	has_getattrlistbulk: bool
+	// #MacosCapabilityProbes groups the macOS feature probes that feed tier selection.
+	#MacosCapabilityProbes: {
+		// has_getattrlistbulk is true on macOS 10.10+ (getattrlistbulk(2) available).
+		has_getattrlistbulk: #Flag
 
-	// has_fsevents is always true on macOS.
-	has_fsevents: bool
+		// has_fsevents is always true on macOS.
+		has_fsevents: #Flag
 
-	// has_kqueue is always true on macOS.
-	has_kqueue: bool
+		// has_kqueue is always true on macOS.
+		has_kqueue: #Flag
 
-	// has_o_nofollow_any is true on macOS 12+ (Monterey) where O_NOFOLLOW_ANY is available.
-	has_o_nofollow_any: bool
+		// has_o_nofollow_any is true on macOS 12+ (Monterey) where O_NOFOLLOW_ANY is available.
+		has_o_nofollow_any: #Flag
+	}
+	#MacosCapabilityProbes
 }
 
 // #CapabilityOverride allows operators to force a specific tier for integration testing

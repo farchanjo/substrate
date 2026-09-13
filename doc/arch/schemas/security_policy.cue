@@ -25,26 +25,33 @@ package schemas
 	per_tool_overrides: {[string]: [...string & =~"^/"]}
 }
 
-// #SecurityPolicy is the aggregate root governing runtime access control.
-// A missing or empty policy causes the runtime to deny all filesystem and
-// process operations by default (fail-closed posture).
-#SecurityPolicy: {
+// DDD role: ValueObject
+// #AccessControlPolicy groups the admission-gate facets of #SecurityPolicy:
+// what paths are reachable, which tools must be dry-run or elicited first,
+// which signals may be delivered, and what is redacted before it is logged.
+#AccessControlPolicy: {
 	// allowlist controls which filesystem paths tools may read or modify.
 	allowlist: #Allowlist
 
 	// dry_run_required_for lists tool names that MUST be called with dry_run=true
 	// on their first invocation; a live call without prior dry run is rejected
 	// with SUBSTRATE_DRY_RUN_REQUIRED.
-	dry_run_required_for: [...string]
+	dry_run_required_for: #ToolNameList
 
 	// elicitation_required_for lists tool names that require an explicit
 	// confirmation elicitation before execution; rejected otherwise with
 	// SUBSTRATE_CONFIRMATION_REQUIRED.
-	elicitation_required_for: [...string]
+	elicitation_required_for: #ToolNameList
 
 	// signal_allowlist is the set of signals that proc tools may send.
 	// Defaults exclude SIGKILL and SIGSTOP; include them only with explicit justification.
-	signal_allowlist: [...#Signal] | *["SIGTERM", "SIGHUP", "SIGINT", "SIGUSR1", "SIGUSR2"]
+	signal_allowlist: #SignalList
+
+	// proc_signal_pid_allowlist_filter controls how the PID allowlist is computed
+	// when proc tools deliver signals.
+	// current_user_only: restrict to PIDs owned by the process's effective UID (default).
+	// explicit_list: require an explicit PID list in the tool call arguments.
+	proc_signal_pid_allowlist_filter: "current_user_only" | "explicit_list" | *"current_user_only"
 
 	// outbound_net_enabled controls whether sys_* tools may open outbound TCP/UDP sockets.
 	// Defaults to false (no outbound network) to prevent exfiltration.
@@ -53,8 +60,14 @@ package schemas
 	// extra_redaction_patterns is a list of organization-specific regex patterns
 	// whose matches are replaced with [REDACTED] in all log output per ADR-0018.
 	// Patterns are Go-compatible regular expressions.
-	extra_redaction_patterns: [...string] | *[]
+	extra_redaction_patterns: #RedactionPatternList
+}
 
+// DDD role: ValueObject
+// #HardeningPolicy groups the fail-closed startup refusals and the opt-in
+// accelerations of #SecurityPolicy. Every refusal defaults to the safe value;
+// enabling one is an explicit operator acceptance of the documented risk.
+#HardeningPolicy: {
 	// reject_hardlinks causes the runtime to refuse hard links to files outside the
 	// allowlist. Mirrors the runtime_config field; policy-time declaration.
 	reject_hardlinks: bool | *false
@@ -62,12 +75,6 @@ package schemas
 	// archive_allow_symlinks permits symlinks inside extracted archive contents.
 	// Disabled by default; mirrors the runtime_config field; policy-time declaration.
 	archive_allow_symlinks: bool | *false
-
-	// proc_signal_pid_allowlist_filter controls how the PID allowlist is computed
-	// when proc tools deliver signals.
-	// current_user_only: restrict to PIDs owned by the process's effective UID (default).
-	// explicit_list: require an explicit PID list in the tool call arguments.
-	proc_signal_pid_allowlist_filter: "current_user_only" | "explicit_list" | *"current_user_only"
 
 	// refuse_degraded_jail causes startup to abort if the PathJail cannot reach tier 1
 	// (openat2 on Linux, O_NOFOLLOW_ANY on macOS). Default true (fail-closed) per ADR-0035 + ADR-0042.
@@ -86,7 +93,13 @@ package schemas
 	// AVX-512 is capability-detected but not activated without this flag because of
 	// power-license and clock-frequency side-effects on some microarchitectures.
 	allow_avx512: bool | *false
+}
 
+// DDD role: ValueObject
+// #SubprocessSecurityPolicy groups every subprocess-spawn gate of #SecurityPolicy
+// per ADR-0052. The gates are default-deny: an empty binary or env list permits
+// nothing until the operator populates it.
+#SubprocessSecurityPolicy: {
 	// subprocess_policy_enforced reflects the build-time verification result that
 	// no subprocess-spawning syscalls exist in the linked binary per ADR-0044.
 	// The runtime sets this field at startup; operators MUST NOT override it.
@@ -100,13 +113,13 @@ package schemas
 	// SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED. The recovery hint and ADR prose name
 	// this key security.subprocess_binary_allowlist, while the loaded TOML path is
 	// the [subprocess] section field binary_allowlist; both denote the same gate.
-	subprocess_binary_allowlist: [...string & =~"^/"] | *[]
+	subprocess_binary_allowlist: #BinaryPathList
 
 	// subprocess_env_allowlist names the environment variables (names only) that a
 	// child process may inherit from substrate per ADR-0052. Banned injection
 	// vectors (LD_PRELOAD, DYLD_INSERT_LIBRARIES, LD_LIBRARY_PATH,
 	// DYLD_LIBRARY_PATH) are rejected unconditionally regardless of this list.
-	subprocess_env_allowlist: [...string] | *[]
+	subprocess_env_allowlist: #EnvVarNameList
 
 	// subprocess_cwd_within_allowlist requires every child working directory to
 	// resolve inside security_policy.allowlist.roots per ADR-0052; a cwd outside is
@@ -121,4 +134,19 @@ package schemas
 	// (loaded TOML path: [subprocess] max_per_client). Default 4 per ADR-0052.
 	// Exceeding either quota yields SUBSTRATE_SUBPROCESS_QUOTA_EXCEEDED.
 	subprocess_max_per_client: int & >=1 | *4
+}
+
+// #SecurityPolicy is the aggregate root governing runtime access control.
+// A missing or empty policy causes the runtime to deny all filesystem and
+// process operations by default (fail-closed posture).
+#SecurityPolicy: {
+	// id is the identity of this aggregate instance, in the shared wire form of
+	// the shared kernel #CorrelationId (a UUIDv7 alias of #JobId per ADR-0040).
+	id: #CorrelationId
+
+	#AccessControlPolicy
+
+	#HardeningPolicy
+
+	#SubprocessSecurityPolicy
 }

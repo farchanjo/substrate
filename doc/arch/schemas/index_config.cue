@@ -5,7 +5,17 @@ package schemas
 // per ADR-0041. It is embedded in the main RuntimeConfig under the [index] TOML section.
 // The index is OFF by default; the Cargo feature fs-index must also be compiled in.
 // Closed struct: all fields that have defaults must appear explicitly in TOML when changed.
+// The settings are grouped into the three fragments below (snapshot, content index,
+// backpressure); each fragment is embedded in place, so the TOML shape is unchanged.
 #IndexConfig: {
+	#IndexSnapshotConfig
+	#ContentIndexConfig
+	#IndexBackpressureConfig
+}
+
+// #IndexSnapshotConfig configures the metadata snapshot layer (ADR-0041 Layer 3) and its
+// optional kernel-watcher layer (Layer 2).
+#IndexSnapshotConfig: {
 	// enabled activates the in-process filesystem index.
 	// Requires the fs-index Cargo feature to be compiled in.
 	// Default OFF: the non-indexed ignore-crate walk path from ADR-0003 is used when false.
@@ -41,14 +51,13 @@ package schemas
 	// Higher values reduce rebuild latency for trees with many allowlist roots at the cost
 	// of additional spawn_blocking worker threads per ADR-0003.
 	rebuild_concurrency: int & >=1 | *2
+}
 
-	// ---- Content index (ADR-0072) -----------------------------------------
-	// The fields below activate the content-side inverted index and BM25
-	// relevance ranking layered onto this same index per ADR-0072. They have
-	// no effect unless `enabled` above is also true, and the content-search
-	// specific fields require the fs-index-content Cargo feature to be
-	// compiled in on top of fs-index.
-
+// #ContentIndexConfig activates the content-side inverted index and BM25 relevance
+// ranking layered onto the same index per ADR-0072. These settings have no effect
+// unless the snapshot's enabled flag is true, and they require the fs-index-content
+// Cargo feature to be compiled in on top of fs-index.
+#ContentIndexConfig: {
 	// content_index_enabled activates the content inverted index and BM25
 	// relevance ranking for text.search per ADR-0072. Requires both the
 	// fs-index and fs-index-content Cargo features to be compiled in.
@@ -83,7 +92,11 @@ package schemas
 	// max_snippet_bytes bounds the context-window snippet built around each
 	// ranked match's highest-scoring position.
 	max_snippet_bytes: int & >=1 | *512
+}
 
+// #IndexBackpressureConfig bounds the index actor's queues, its mutable hot shard,
+// and the write-through acknowledgement wait per ADR-0072.
+#IndexBackpressureConfig: {
 	// command_queue_capacity is the bounded mpsc<IndexCommand> channel
 	// capacity feeding the single-writer IndexerActor per ADR-0072.
 	// Producers use try_send with coalesce-on-full: a command that cannot be
