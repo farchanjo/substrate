@@ -127,10 +127,25 @@ insta = { version = "1", features = ["json", "yaml"] }
 tempfile = "3"
 tokio-test = "0.4"
 
+# Development profile — the default for every `cargo build` and `cargo test`.
+# No optimization of this workspace's own crates, incremental compilation on,
+# full debug info. `release` is for deploy artifacts only.
 [profile.dev]
 opt-level = 0
 debug = true
 incremental = true
+codegen-units = 256
+lto = false
+strip = "none"
+overflow-checks = true
+debug-assertions = true
+
+# Dependencies never change between edits, so optimizing them is a one-time cost
+# that sccache then caches; it is what makes the SIMD- and C-backed dependencies
+# — blake3 above all — usable in a dev binary. Workspace members stay at
+# opt-level 0, so editing them never pays an optimizer pass.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 opt-level = 3

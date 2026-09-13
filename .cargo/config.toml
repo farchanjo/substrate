@@ -33,6 +33,11 @@ rustflags = [
 # No global rustflags; per-target sections above handle each platform.
 rustflags = []
 
+# Local build accelerator. The wrapper execs sccache when it is on PATH and
+# falls back to plain rustc when it is not, so this stays safe on a CI runner
+# with no sccache installed. Path is relative to this file.
+rustc-wrapper = "scripts/rustc-wrapper"
+
 [net]
 git-fetch-with-cli = true
 

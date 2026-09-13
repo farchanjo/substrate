@@ -1,0 +1,17 @@
+#!/bin/sh
+# rustc wrapper for local development (see `.cargo/config.toml`).
+#
+# Uses sccache when it is on PATH, and falls back to plain rustc when it is not,
+# so the committed config never breaks a machine — or a CI runner — that has no
+# sccache installed.
+#
+# Cargo invokes a wrapper as `<wrapper> <rustc> <args...>`, so the fallback must
+# exec the first argument rather than `rustc` from PATH.
+
+set -eu
+
+if command -v sccache >/dev/null 2>&1; then
+    exec sccache "$@"
+fi
+
+exec "$@"

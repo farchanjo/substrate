@@ -47,16 +47,17 @@ Chosen option: "layered test pyramid with proptest, cargo-fuzz, cucumber-rs, sch
 
 - cargo-fuzz requires a nightly toolchain for the fuzz runner; CI must maintain a separate nightly job alongside the stable build.
 - cucumber-rs step definitions can become verbose; maintainers must discipline themselves to keep feature files readable by non-Rust contributors.
-- cargo-tarpaulin is slower than standard `cargo test`; coverage jobs run in a separate CI stage to avoid blocking the primary test pipeline.
+- cargo-tarpaulin is slower than a standard `cargo nextest run`; coverage jobs run in a separate CI stage to avoid blocking the primary test pipeline.
 - Golden schema files add a maintenance burden when intentional output type changes are made.
 
 ## Validation
 
-- CI pipeline: `cargo test --workspace` must pass on stable Rust.
+- CI pipeline: `cargo nextest run --workspace` must pass on stable Rust, followed
+  by the doctest pass (`cargo test --workspace --doc`), which nextest does not run.
 - CI pipeline: `cargo tarpaulin --workspace` must meet domain 80% / adapter 70% gates.
 - CI pipeline: `cargo fuzz run <target> -- -max_total_time=60` runs on each fuzz target for 60 seconds in CI (extended runs scheduled weekly).
-- CI pipeline: `cargo test --test cucumber` runs all Gherkin scenarios.
-- Schema golden comparison runs as part of `cargo test --test contract`.
+- CI pipeline: `cargo nextest run --test cucumber` runs all Gherkin scenarios.
+- Schema golden comparison runs as part of `cargo nextest run --test contract`.
 
 ## Cross-References
 

@@ -94,7 +94,7 @@ insta = { workspace = true }
 tempfile = { workspace = true }
 # Always-on for test compilation: subprocess crate directly available to cucumber harness.
 # The subprocess feature gate in src/ still controls composition-root wiring.
-# To run subprocess cucumber scenarios: cargo test --test cucumber --features subprocess
+# To run subprocess cucumber scenarios: cargo nextest run --test cucumber --features subprocess
 substrate-subprocess = { path = "../substrate-subprocess" }
 
 [[bin]]

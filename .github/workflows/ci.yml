@@ -32,7 +32,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # No `toolchain:` input on purpose: the `@master` ref of this action
       # auto-detects and installs the exact channel/profile/components pinned
@@ -40,10 +40,10 @@ jobs:
       # clippy, rust-src). Using the `@stable` shorthand instead would install
       # whatever "stable" resolves to at run time and silently ignore that pin.
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
 
       - name: Cache cargo registry/build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: build-test-${{ matrix.os }}
 
@@ -53,8 +53,16 @@ jobs:
       - name: cargo clippy --workspace --all-targets --all-features -- -D warnings
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: cargo test --workspace --all-features
-        run: cargo test --workspace --all-features
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: nextest
+
+      - name: cargo nextest run --workspace
+        run: |
+          cargo nextest run --workspace --all-features -E 'not binary(cucumber)' --no-fail-fast
+          cargo test --workspace --all-features --test cucumber -p substrate-mcp-server
+          cargo test --workspace --all-features --doc
 
   # ---------------------------------------------------------------------------
   # Required gate: supply-chain audit. deny.toml already exists and is
@@ -66,10 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: cargo deny check
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
 
@@ -90,16 +98,16 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
 
       - name: cargo fmt --all -- --check
         run: cargo fmt --all -- --check
 
   # ---------------------------------------------------------------------------
-  # speckit validate --deep: native + external SDD validators over docs/arch/.
+  # speckit validate --deep: native + external SDD validators over doc/arch/.
   #
   # This repo's spec tooling migrated from the old Python `spec` framework to
   # `speckit` (github.com/farchanjo/speckit), a self-contained Rust binary.
@@ -111,24 +119,24 @@ jobs:
   # `SPECKIT_REPO_TOKEN` secret (a PAT or deploy key with read access to
   # farchanjo/speckit) is configured on this repository, it checks out
   # speckit at `main`, builds it with the already-pinned Rust toolchain, and
-  # runs `speckit validate --deep` against docs/arch/ as a blocking check.
+  # runs `speckit validate --deep` against doc/arch/ as a blocking check.
   # When the secret is absent (e.g. on a fork without repo access), the job
   # skips cleanly instead of failing CI for contributors who cannot hold that
   # credential — run `speckit validate --deep` manually before merging any
-  # docs/arch/ change until the secret is wired up. `speckit validate`
+  # doc/arch/ change until the secret is wired up. `speckit validate`
   # (native-only, no --deep) is the cheap local/pre-commit check; only the
   # --deep lane belongs in CI per CLAUDE.md.
   # ---------------------------------------------------------------------------
   speckit-validate-deep:
-    name: speckit validate --deep (docs/arch/)
+    name: speckit validate --deep (doc/arch/)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout substrate
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Checkout speckit source
         if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: farchanjo/speckit
           ref: main
@@ -137,11 +145,11 @@ jobs:
 
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
         if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
 
       - name: Cache cargo registry/build artifacts
         if: ${{ secrets.SPECKIT_REPO_TOKEN != '' }}
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: .speckit-src
           shared-key: speckit-build
@@ -158,4 +166,4 @@ jobs:
         if: ${{ secrets.SPECKIT_REPO_TOKEN == '' }}
         run: |
           echo "::warning::SPECKIT_REPO_TOKEN not set — skipping speckit validate --deep."
-          echo "Run it manually before merging any docs/arch/ change: speckit validate --deep"
+          echo "Run it manually before merging any doc/arch/ change: speckit validate --deep"

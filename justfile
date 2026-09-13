@@ -12,13 +12,23 @@ default:
 build-release:
     cargo build --workspace --release --bin substrate --features substrate-mcp-server/subprocess
 
-# Build everything (workspace, all targets) in dev profile.
+# Build everything (workspace, all targets) in the dev profile. This is the
+# day-to-day path: unoptimized, incremental, sccache-wrapped. `build-release`
+# is for deploy artifacts only.
 build:
     cargo build --workspace --all-targets
 
-# Run all unit and integration tests (dev convenience — single-threaded for output clarity).
-# NOTE: CI uses `cargo nextest run --locked` (see `just ci-nextest` for exact parity).
+# Fast test loop. nextest parallelizes across binaries; the cucumber harness is
+# excluded because its clap CLI rejects the `--list` probe nextest uses to
+# enumerate tests, so it runs on cargo's harness instead. Doctests follow for the
+# same reason: nextest does not run them.
 test:
+    cargo nextest run --workspace -E 'not binary(cucumber)' --no-fail-fast
+    cargo test -p substrate-mcp-server --test cucumber
+    cargo test --workspace --doc
+
+# Serial fallback for when interleaved output matters more than speed.
+test-serial:
     cargo test --workspace --no-fail-fast -- --test-threads=1
 
 # Clippy gate at -D warnings.
@@ -29,9 +39,9 @@ clippy:
 fmt-check:
     cargo fmt --all --check
 
-# Spec validate full lane.
+# Spec validate, deep lane (native + external validators).
 spec-validate:
-    spec validate --lane full
+    speckit validate --deep
 
 # Validate every Mermaid block in every .md by piping each to mmdc (mermaid-cli).
 # Requires `mmdc` and `perl` on PATH. Per ADR-0047.
@@ -54,9 +64,12 @@ ci-fmt:
 ci-clippy:
     cargo clippy --locked --workspace --all-targets -- -D warnings
 
-# Run tests via cargo-nextest (mirrors CI job: nextest).
+# Run tests via cargo-nextest (mirrors CI job: nextest). The cucumber harness is
+# excluded from the nextest pass — see `test` for why — and run on its own.
 ci-nextest:
-    cargo nextest run --locked --workspace --no-fail-fast
+    cargo nextest run --locked --workspace -E 'not binary(cucumber)' --no-fail-fast
+    cargo test --locked -p substrate-mcp-server --test cucumber
+    cargo test --locked --workspace --doc
 
 # Run tests with the subprocess feature enabled (mirrors CI job: nextest-subprocess).
 # Required to exercise subprocess.* tools and their cucumber integration scenarios.
@@ -83,9 +96,9 @@ ci-coverage:
 ci-bench:
     cargo bench --locked --workspace --no-run
 
-# Spec full-lane validation (mirrors CI job: spec-validate).
+# Spec deep-lane validation (mirrors CI job: spec-validate).
 ci-spec:
-    spec validate --lane full
+    speckit validate --deep
 
 # Mermaid diagram lint via mmdc (alias for lint-mermaid).
 ci-mermaid:

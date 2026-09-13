@@ -42,6 +42,9 @@ criterion/
 # speckit runtime state — audit log is regenerated; config/policy/features/constitution are tracked
 .specify/guard-audit.jsonl
 
+# speckit born-local index cache (regenerated on demand)
+doc/.specify/
+
 # mise local overrides
 .mise.local.toml
 
@@ -51,4 +54,4 @@ tools/tla2tools.jar
 # TLC model-checker run output (binary state dumps, fingerprint files)
 # These are generated artefacts from running tlc on formal/*.tla models.
 # Source models (.tla, .cfg) are tracked; run output is not.
-docs/arch/formal/states/
+doc/arch/formal/states/

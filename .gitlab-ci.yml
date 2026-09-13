@@ -1,0 +1,91 @@
+# .gitlab-ci.yml — GitLab mirror of .github/workflows/ci.yml.
+#
+# ADR-0023 designs a GitLab-primary pipeline (validate -> lint -> test ->
+# security -> build -> package -> release) and was deferred when no pipeline was
+# provisioned; its `.gitlab-ci.yml` was removed with the deferral. This file
+# carries the gates that exist today, so both forges enforce the same checks and
+# neither drifts.
+#
+# No `image:` key appears anywhere: ADR-0025 mandates the runner's default image
+# as the single image source. The runners are therefore expected to carry the
+# Rust toolchain pinned in `rust-toolchain.toml`; `before_script` asserts that
+# instead of trusting it. The macOS leg additionally needs a runner tagged
+# `macos`.
+
+stages:
+  - test
+  - security
+  - spec
+
+variables:
+  CARGO_TERM_COLOR: always
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  RUST_BACKTRACE: "1"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cargo/registry/
+    - .cargo/git/
+    - target/
+
+default:
+  before_script:
+    - rustc --version
+    - cargo --version
+
+.build-test: &build-test
+  stage: test
+  script:
+    # nextest runs every test in its own process; doctests stay on cargo's own
+    # harness because nextest does not run them.
+    - |
+      case "$(uname -s)" in
+        Darwin) url=https://get.nexte.st/latest/macos ;;
+        *)      url=https://get.nexte.st/latest/linux ;;
+      esac
+      mkdir -p "$CI_PROJECT_DIR/.bin"
+      curl -LsSf "$url" | tar zxf - -C "$CI_PROJECT_DIR/.bin"
+      export PATH="$CI_PROJECT_DIR/.bin:$PATH"
+    - cargo build --workspace --all-features
+    - cargo clippy --workspace --all-targets --all-features -- -D warnings
+    # The cucumber harness is excluded from the nextest pass because its clap CLI
+    # rejects the `--list` probe nextest uses; doctests follow for the same reason.
+    - cargo nextest run --workspace --all-features -E 'not binary(cucumber)' --no-fail-fast
+    - cargo test --workspace --all-features --test cucumber -p substrate-mcp-server
+    - cargo test --workspace --all-features --doc
+
+build-test:linux:
+  <<: *build-test
+
+# macOS is a first-class target: the path jail, the FSEvents index tier, and the
+# libc field widths all diverge from Linux, so this leg is not optional.
+build-test:macos:
+  <<: *build-test
+  tags:
+    - macos
+
+cargo-deny:
+  stage: security
+  script:
+    - cargo install cargo-deny --locked
+    - cargo deny check
+
+fmt-advisory:
+  stage: security
+  allow_failure: true
+  script:
+    - cargo fmt --all -- --check
+
+# Advisory until SPECKIT_REPO_TOKEN is configured, matching the GitHub job.
+speckit-validate-deep:
+  stage: spec
+  rules:
+    - if: '$SPECKIT_REPO_TOKEN'
+      when: always
+    - when: manual
+      allow_failure: true
+  script:
+    - git clone --depth 1 "https://${SPECKIT_REPO_TOKEN}@github.com/farchanjo/speckit.git" .speckit-src
+    - cargo install --locked --path .speckit-src
+    - speckit validate --deep

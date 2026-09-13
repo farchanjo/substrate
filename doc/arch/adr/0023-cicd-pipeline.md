@@ -74,8 +74,8 @@ Depends on: `lint`.
 
 | Job | Command |
 |---|---|
-| `unit` | `cargo test --workspace` |
-| `cucumber` | `cargo test --test cucumber` |
+| `unit` | `cargo nextest run --workspace` |
+| `cucumber` | `cargo nextest run --test cucumber` |
 | `coverage` | `cargo tarpaulin --out Xml --fail-under 80` |
 
 Coverage artifact uploaded; gate is 80% line coverage. MR decoration via GitLab coverage regex.
@@ -88,7 +88,7 @@ Depends on: `lint` (parallel with `test`).
 |---|---|
 | `deny` | `cargo deny check` |
 | `audit` | `cargo audit` |
-| `rego` | `conftest test --policy docs/arch/rego/ --data docs/arch/` |
+| `rego` | `conftest test --policy doc/arch/rego/ --data doc/arch/` |
 
 #### build
 
