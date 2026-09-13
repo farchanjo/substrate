@@ -283,9 +283,9 @@ ADR-0027 30-day stability window closes after SEP-1686 graduation.
 
 New spec artifacts required before implementation:
 
-- CUE schema `docs/arch/schemas/tasks.cue` (TaskInfo, CreateTaskResult,
+- CUE schema `doc/arch/schemas/tasks.cue` (TaskInfo, CreateTaskResult,
   TaskState enum).
-- Gherkin features under `docs/arch/specs/features/tasks/` covering: enqueue via
+- Gherkin features under `doc/arch/specs/features/tasks/` covering: enqueue via
   `task` field, status push, result poll, cancel propagation, dual-namespace
   state-sync invariants.
 

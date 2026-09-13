@@ -4,6 +4,6 @@
 # `.specify/` (config.toml, guard-policy.toml, features.json, memory/constitution.md).
 # Retained for historical reference only.
 # Per-project spec overrides. Optional - delete if defaults suffice.
-spec_root: docs/arch
+spec_root: doc/arch
 project: substrate
 org: com.archanjo

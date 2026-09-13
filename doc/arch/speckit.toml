@@ -1,0 +1,29 @@
+[hygiene]
+markerThreshold = 7
+
+# `k1` and `b` are two characters each, below the `calisthenics.no-abbreviation`
+# floor of three. They are the canonical Robertson/Zaragoza BM25 parameters used
+# verbatim by Lucene and Elasticsearch, so renaming them would desync the schema
+# from every search-engine reference.
+[[validate.waivers]]
+rule = "calisthenics.no-abbreviation"
+path = "doc/arch/schemas/content_index.cue"
+reason = "k1 and b are the canonical BM25 parameters; the names are the literature's, not abbreviations."
+
+# `tools/list` is the MCP method name, not a filesystem path, so the checker
+# resolves it as `<root>/tools/list` and misses. Every other path reference in
+# these files resolves; the entry goes unused if the method is ever renamed.
+[[validate.waivers]]
+rule = "llm-context.path-ref.broken"
+path = "AGENTS.md"
+reason = "`tools/list` is an MCP method name, not a path; all other references in this file resolve."
+
+[[validate.waivers]]
+rule = "llm-context.path-ref.broken"
+path = "CLAUDE.md"
+reason = "`tools/list` is an MCP method name, not a path; all other references in this file resolve."
+
+[[validate.waivers]]
+rule = "llm-context.path-ref.broken"
+path = "GROK.md"
+reason = "`tools/list` is an MCP method name, not a path; all other references in this file resolve."

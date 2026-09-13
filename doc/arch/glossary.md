@@ -439,7 +439,7 @@ context. See [ADR-0002](adr/0002-bounded-contexts.md).
 ## MADR
 
 Markdown Architecture Decision Records, version 4.0; the ADR template format
-used in `docs/arch/adr/`. Each record follows the MADR 4.0 front-matter schema
+used in `doc/arch/adr/`. Each record follows the MADR 4.0 front-matter schema
 (`status`, `date`, `deciders`, `consulted`, `informed`) and body structure
 (Context and Problem Statement, Decision Drivers, Considered Options, Decision
 Outcome, Consequences, Validation, Links). Records are immutable once accepted;
@@ -528,7 +528,7 @@ Architectural rule per [ADR-0044](adr/0044-no-subprocess-policy.md) forbidding
 the use of `std::process::Command`, `tokio::process::Command`, or any
 subprocess-invocation crate (`subprocess`, `duct`, `xshell`, `cmd_lib`) in
 shipped substrate source. All capabilities must bind directly to syscalls or
-pure-Rust crates. Enforced in CI by `docs/arch/policies/no_subprocess.rego`.
+pure-Rust crates. Enforced in CI by `doc/arch/policies/no_subprocess.rego`.
 
 ## output schema
 

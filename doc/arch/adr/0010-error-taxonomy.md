@@ -148,7 +148,7 @@ When substrate fails before the MCP `initialize` handshake, it cannot use the JS
 
 ### Recovery Hint Length Cap
 
-Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `docs/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 58 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
+Every `recovery_hint` field in both runtime error responses and startup envelopes MUST be ≤ 150 characters. The CUE schema in `doc/arch/schemas/error_catalog.cue` enforces this constraint via `len(recovery_hint) <= 150`. Lint (`spec validate --lane full`) MUST verify the cap across all 58 codes in the catalog (the original 13 + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
 
 ### JSON-RPC Standard Code Pass-Through
 
@@ -208,7 +208,7 @@ The top-level `recovery_hint` in the JSON-RPC `data` object retains its generic 
 ## Validation
 
 - Unit tests assert that every `thiserror` variant maps to a known stable code.
-- Integration tests assert the `data` shape conforms to the CUE schema in `docs/arch/schemas/error_catalog.cue`.
+- Integration tests assert the `data` shape conforms to the CUE schema in `doc/arch/schemas/error_catalog.cue`.
 - `cargo-deny` ensures no dependency introduces a conflicting JSON-RPC error range.
 - `spec validate --lane full` validates CUE schema coverage for all 58 codes in the catalog (13 original + 6 kernel-induced documented here, plus the job, capability, startup, subprocess, and launch codes added by later amendments).
 - CUE schema asserts `len(recovery_hint) <= 150` for every code.
@@ -245,7 +245,7 @@ One new startup error code is introduced for invalid capability tier overrides i
 
 **Additions:**
 
-- `SUBSTRATE_TIER_OVERRIDE_INVALID` — startup error code emitted when a runtime config `capabilities.override.<port>` entry specifies a tier name that does not exist for that capability port. The composition root aborts startup non-zero with this code before accepting any MCP requests. recovery_hint: `"check capabilities.override in config; valid tiers are listed in docs/arch/adr/0042"`.
+- `SUBSTRATE_TIER_OVERRIDE_INVALID` — startup error code emitted when a runtime config `capabilities.override.<port>` entry specifies a tier name that does not exist for that capability port. The composition root aborts startup non-zero with this code before accepting any MCP requests. recovery_hint: `"check capabilities.override in config; valid tiers are listed in doc/arch/adr/0042"`.
 
 ### 2026-05-21 — Extended by ADR-0035 amendment (path-jail degraded tier)
 

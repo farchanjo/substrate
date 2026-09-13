@@ -218,7 +218,7 @@ to the MCP caller. The domain never receives an invalid value.
 5. Remove `debug_assert!(page_size > 0)` from `registry.rs:985`.
 6. Add unit tests: `PageSize::try_from(0)` → `Err`, `try_from(10001)` → `Err`,
    `try_from(1)` → `Ok`, `try_from(10000)` → `Ok`, `Default::default()` → 50.
-7. Update the Rego policy `docs/arch/policies/subprocess_pagination_invariants.rego`
+7. Update the Rego policy `doc/arch/policies/subprocess_pagination_invariants.rego`
    to reference this ADR in its header cross-references.
 
 **Tests required:**
@@ -279,7 +279,7 @@ operations (subprocess result, search, network TCP/UDP list).
 ## References
 
 - Trigger commits: `ec6c935`, `06dc285`, `530ce06` (subprocess_list page_size bug fix).
-- `docs/arch/policies/subprocess_pagination_invariants.rego` — existing Rego policy
+- `doc/arch/policies/subprocess_pagination_invariants.rego` — existing Rego policy
   enforcing `page_size in [1, 10000]` at CI/conftest level.
-- `docs/arch/specs/features/subprocess/subprocess-list-empty-args-returns-handles.feature` —
+- `doc/arch/specs/features/subprocess/subprocess-list-empty-args-returns-handles.feature` —
   Gherkin coverage added by the tactical fix.

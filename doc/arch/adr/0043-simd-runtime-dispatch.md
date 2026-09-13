@@ -27,7 +27,7 @@ records. SIMD compresses that inner-loop envelope by a factor of 2x to 10x on
 modern hardware.
 
 Second, substrate is distributed as a single binary consumed by operators
-running a variety of x86-64 and aarch64 CPU generations. Separate per-CPU
+running x86-64 and aarch64 CPU generations across the fleet. Separate per-CPU
 build artifacts are operationally unacceptable (ADR-0015). Runtime dispatch --
 probing CPUID once at startup, caching the result, and selecting the matching
 SIMD backend -- provides near-native throughput without per-operator rebuilds.

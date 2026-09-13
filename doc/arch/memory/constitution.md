@@ -19,9 +19,9 @@ either.
    language, aggregates, and adapter crate. No aggregate root crosses a
    context boundary; the only permitted inter-context dependency at the
    domain layer is the shared kernel, `substrate-domain`. The vocabulary in
-   `docs/arch/glossary.md` is authoritative: a new domain term is added there
+   `doc/arch/glossary.md` is authoritative: a new domain term is added there
    before it appears in code, ADRs, or Gherkin. See
-   [ADR-0002](../../docs/arch/adr/0002-bounded-contexts.md).
+   [ADR-0002](../../doc/arch/adr/0002-bounded-contexts.md).
 
 2. **Tactical domain-driven design.** Domain concepts are modeled as
    aggregates, entities, and value objects with invariants enforced at
@@ -39,7 +39,7 @@ either.
    `substrate-domain` is the innermost ring: zero infrastructure dependencies
    beyond std, serde, thiserror, async-trait, futures, uuid, tracing, and the
    narrow accepted amendments (`time`, `serde_json`) recorded in
-   [ADR-0022](../../docs/arch/adr/0022-project-layout.md). Bounded-context
+   [ADR-0022](../../doc/arch/adr/0022-project-layout.md). Bounded-context
    adapter crates depend on `substrate-domain` (and `substrate-policy` for
    write paths) and MUST NOT depend on each other; only
    `substrate-mcp-server`, the composition root, depends on `rmcp` and wires
@@ -73,7 +73,7 @@ either.
 
 6. **Security is defense-in-depth against a local, single-client threat
    model.** The threat model
-   ([ADR-0029](../../docs/arch/adr/0029-threat-model.md)) is a local MCP
+   ([ADR-0029](../../doc/arch/adr/0029-threat-model.md)) is a local MCP
    server invoked by one trusted-transport client, not a network service: the
    primary attacker is a prompt-injected payload that causes the LLM to emit
    malicious tool arguments, and the secondary attacker is a compromised or
@@ -88,14 +88,14 @@ either.
    binary allowlist, an environment-variable allowlist, and a cwd jail. All
    five layers are enforced server-side before any syscall; client-side
    validation is advisory only and MUST NOT be relied upon. See
-   [ADR-0004](../../docs/arch/adr/0004-security-model.md).
+   [ADR-0004](../../doc/arch/adr/0004-security-model.md).
 
 7. **Async work is zone-classified, never guessed.** Every tool
    implementation is one of Zone A (async-native, awaited directly on the
    tokio executor), Zone B (blocking syscalls via
    `tokio::task::spawn_blocking`), or Zone C (CPU-saturating work via
    `spawn_blocking` plus a `Semaphore` sized to `num_cpus`), per
-   [ADR-0003](../../docs/arch/adr/0003-crate-stack-and-async-zones.md). Zone
+   [ADR-0003](../../doc/arch/adr/0003-crate-stack-and-async-zones.md). Zone
    C work MUST NOT execute synchronously on the request path; it is
    dispatched through the async job control-plane and returns a `job_id`
    immediately. A `Semaphore` permit lives only in async scope and is never
@@ -111,13 +111,13 @@ either.
    `SIG_IGN` at startup; `SIGTERM`/`SIGINT` trigger a bounded graceful drain
    (default 5 s). No network listener is opened by default; outbound network
    access requires the explicit, non-default `outbound-net` Cargo feature.
-   See [ADR-0005](../../docs/arch/adr/0005-stdio-transport.md).
+   See [ADR-0005](../../doc/arch/adr/0005-stdio-transport.md).
 
 9. **Spec is the source of truth, and it is validated, not assumed.** Every
    architectural decision is recorded as a MADR 4.0 ADR under
-   `docs/arch/adr/`, immutable once accepted and cross-referenced forward
+   `doc/arch/adr/`, immutable once accepted and cross-referenced forward
    when superseded. Every bounded context has CUE schemas carrying a DDD-role
-   header and Gherkin feature specs under `docs/arch/specs/features/`; the C4
+   header and Gherkin feature specs under `doc/arch/specs/features/`; the C4
    model lives in Structurizr DSL. Code and spec MUST agree; when they
    diverge in practice, the code is ground truth and a spec-correction change
    is raised alongside the code change, not deferred. Compliance is
@@ -128,7 +128,7 @@ either.
 ## Governance
 
 Changes to this constitution require a recorded Architecture Decision (MADR)
-under `docs/arch/adr/` with status `accepted` and at least one `deciders`
+under `doc/arch/adr/` with status `accepted` and at least one `deciders`
 entry, mirroring the ADR process used for every other architectural decision
 in this repository. Trivial corrections (typos, formatting, broken links) may
 be committed directly; changes to a principle's substance — adding, removing,
@@ -140,7 +140,7 @@ ADR-0004, ADR-0007, and ADR-0022): the prior text is retained and a new,
 dated subsection records what changed and why, rather than silently rewriting
 ratified language.
 
-A pull request that touches `crates/**` or `docs/arch/**` and conflicts with
+A pull request that touches `crates/**` or `doc/arch/**` and conflicts with
 an article in this constitution is out of compliance regardless of whether it
 passes `cargo test` or `speckit validate`; constitutional compliance is a
 precondition for merge, not an optional lint.

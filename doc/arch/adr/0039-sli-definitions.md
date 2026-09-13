@@ -127,7 +127,7 @@ SLI(subprocess.spawn, threshold_ms=500) =
 
 Measurement window: 5-minute rolling. `duration_ms` covers the wall-clock time from `subprocess.spawn` invocation to the first `job_state = Running` notification emission (i.e., spawn-to-running latency, not job completion). Cancelled and timeout outcomes excluded from both numerator and denominator per the general rule above.
 
-SLO target: p95 spawn-to-running ≤ 500 ms. See `docs/arch/slo/subprocess-stream-integrity.yaml` for the corresponding OpenSLO file.
+SLO target: p95 spawn-to-running ≤ 500 ms. See `doc/arch/slo/subprocess-stream-integrity.yaml` for the corresponding OpenSLO file.
 
 **Subprocess stream chunk drop rate**
 
@@ -141,7 +141,7 @@ SLI(stream_integrity) =
   })
 ```
 
-`SUBSTRATE_STREAM_CHUNK_DROPPED` events are emitted by the dispatcher task per ADR-0054 whenever `mpsc::Sender::try_send` returns `Err::Full`. `SUBSTRATE_STREAM_CHUNK_DELIVERED` events are emitted on each successful `notifications/progress` emission. Measurement window: 10-minute rolling (long-lived services accumulate chunks slowly in low-throughput phases). SLO target: delivery rate ≥ 0.999 (drop rate ≤ 0.1%). See `docs/arch/slo/subprocess-stream-integrity.yaml`.
+`SUBSTRATE_STREAM_CHUNK_DROPPED` events are emitted by the dispatcher task per ADR-0054 whenever `mpsc::Sender::try_send` returns `Err::Full`. `SUBSTRATE_STREAM_CHUNK_DELIVERED` events are emitted on each successful `notifications/progress` emission. Measurement window: 10-minute rolling (long-lived services accumulate chunks slowly in low-throughput phases). SLO target: delivery rate ≥ 0.999 (drop rate ≤ 0.1%). See `doc/arch/slo/subprocess-stream-integrity.yaml`.
 
 **Network-info read latency**
 
@@ -161,7 +161,7 @@ SLI(net_tools, threshold_ms=500) =
                        AND outcome IN {success, error})
 ```
 
-Measurement window: 5-minute rolling. Net tools are Zone A (async-native, no job registry overhead); a 500 ms p95 threshold aligns with the `sys.info` tier. Cancelled and timeout outcomes excluded. SLO target: p95 ≤ 500 ms. See `docs/arch/slo/net-read-latency.yaml`.
+Measurement window: 5-minute rolling. Net tools are Zone A (async-native, no job registry overhead); a 500 ms p95 threshold aligns with the `sys.info` tier. Cancelled and timeout outcomes excluded. SLO target: p95 ≤ 500 ms. See `doc/arch/slo/net-read-latency.yaml`.
 
 ### Amended SLI Table
 

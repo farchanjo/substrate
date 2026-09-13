@@ -71,7 +71,7 @@ is it enforced systematically rather than per-struct by convention?
   multiple handlers. A per-handler fix is reactive; a structural rule is
   preventative.
 - **Existing enforcement prior art**: the project already uses Rego policies
-  (`docs/arch/policies/`) for structural invariants (hexagonal layering,
+  (`doc/arch/policies/`) for structural invariants (hexagonal layering,
   no-subprocess, security, audit events, pagination). The same mechanism
   is appropriate here. A CI-script approach (`scripts/check-default-derives.sh`)
   would duplicate the pattern-matching already centralized in OPA.
@@ -99,7 +99,7 @@ is it enforced systematically rather than per-struct by convention?
 
 4. **Rego policy: `#[serde(default = "fn")]` implies no `#[derive(Default)]`**
    (chosen): add a Rego policy
-   `docs/arch/policies/request_default_invariants.rego` that operates on
+   `doc/arch/policies/request_default_invariants.rego` that operates on
    AST-extracted struct metadata (present in the existing spec-mode CUE schema
    for request types). The policy denies any request struct that has both
    `derive_default: true` and any field with `serde_default_fn: true`. Wired
@@ -124,7 +124,7 @@ PR time without requiring a custom clippy lint.
 
 ### Rego Policy Specification
 
-New file: `docs/arch/policies/request_default_invariants.rego`
+New file: `doc/arch/policies/request_default_invariants.rego`
 
 Package: `substrate.request_default_invariants`
 
@@ -195,7 +195,7 @@ handler module header via a module-level doc comment:
 //! `is_null() || empty_object` shortcut MUST implement `Default` manually
 //! (not via `#[derive(Default)]`). The manual impl MUST match every
 //! `#[serde(default = "fn")]` field override.
-//! Enforced by: docs/arch/policies/request_default_invariants.rego
+//! Enforced by: doc/arch/policies/request_default_invariants.rego
 ```
 
 ### Affected Request Structs (immediate)
@@ -218,7 +218,7 @@ and the `Default` impl returns `PageSize::default()` (50).
 ### Enforcement in CI
 
 The `spec lint:opa` stage in CI already runs `conftest test` against every
-`.rego` file under `docs/arch/policies/` with companion `_test.rego` vectors.
+`.rego` file under `doc/arch/policies/` with companion `_test.rego` vectors.
 Adding `request_default_invariants.rego` and
 `request_default_invariants_test.rego` requires no CI pipeline changes.
 
@@ -255,7 +255,7 @@ evaluation without a custom clippy lint.
 
 #### Migration order
 
-1. Author `docs/arch/policies/request_default_invariants.rego` and companion
+1. Author `doc/arch/policies/request_default_invariants.rego` and companion
    `_test.rego`.
 2. Author `scripts/extract_request_structs.py` and add it to the `spec lint:opa`
    CI step.
@@ -300,9 +300,9 @@ evaluation without a custom clippy lint.
 ## References
 
 - Trigger commits: `ec6c935`, `06dc285`, `530ce06` (subprocess_list page_size bug fix).
-- `docs/arch/policies/subprocess_pagination_invariants.rego` — existing Rego policy
+- `doc/arch/policies/subprocess_pagination_invariants.rego` — existing Rego policy
   that already enforces `page_size in [1, 10000]` at the conftest level, but only
   for pagination objects received over the wire; does not cover the `Req::default()`
   shortcut path.
-- `docs/arch/policies/wait_timeout_invariants.rego` — prior art: Rego enforcement
+- `doc/arch/policies/wait_timeout_invariants.rego` — prior art: Rego enforcement
   of a serde default requirement (the third rule in that policy).

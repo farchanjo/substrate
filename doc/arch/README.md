@@ -29,7 +29,7 @@ spec validate --lane full
 ## Layout
 
 ```text
-docs/arch/
+doc/arch/
   adr/               MADR 4.0 architecture decision records (numbered, immutable)
   architecture/      Structurizr DSL workspace model (C4 levels 1-3)
   cue.mod/           CUE module definition
@@ -120,7 +120,7 @@ context, container, and component diagrams. Render it with the Structurizr CLI
 or the Structurizr Lite server:
 
 ```shell
-structurizr-cli export -workspace docs/arch/architecture/workspace.dsl -format plantuml
+structurizr-cli export -workspace doc/arch/architecture/workspace.dsl -format plantuml
 ```
 
 ## Bounded Contexts
@@ -216,6 +216,6 @@ ADR-0024 (repository conventions). Key rules:
   supersedes the original.
 - CUE schemas and Rego policies are validated in CI via `spec validate --lane
   full` before merge.
-- The `docs/arch/` directory is the source of truth for all design decisions;
+- The `doc/arch/` directory is the source of truth for all design decisions;
   implementation code must not contradict a standing ADR without first amending
   or superseding it.

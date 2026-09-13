@@ -2,7 +2,7 @@
 // ADR-0041 introduces optional filesystem index (substrate-fs-index).
 // ADR-0042 capability-adapter factory pattern affects every adapter (no new container; cross-cutting).
 // ADR-0043 SIMD runtime dispatch is cross-cutting; no new container.
-// ADR-0044 no-subprocess policy is enforced via CI Rego (docs/arch/policies/no_subprocess.rego); no new container.
+// ADR-0044 no-subprocess policy is enforced via CI Rego (doc/arch/policies/no_subprocess.rego); no new container.
 workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — secure, async-native, STDIO transport." {
 
     model {
@@ -34,39 +34,39 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             }
 
             domain = container "substrate-domain" "Shared kernel: domain types, port traits, error taxonomy, and value objects. Zero infrastructure dependencies." "Rust" {
-                tags "Domain"
+                tags "Domain" "Layer:Domain"
             }
 
             fsQuery = container "substrate-fs-query" "Adapter for read-only filesystem operations: list, read, stat, search, glob." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             fsMutation = container "substrate-fs-mutation" "Adapter for filesystem mutations: write, copy, move, delete, mkdir, chmod." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             process = container "substrate-process" "Adapter for process management: spawn, exec, signal, stream stdout/stderr." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             systemInfo = container "substrate-system-info" "Adapter for host introspection: CPU, memory, disk, network interfaces, OS metadata." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             text = container "substrate-text" "Adapter for text processing: grep, sed-like replace, diff, encoding, line operations." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             archive = container "substrate-archive" "Adapter for archive operations: tar, zip, gzip, zstd — pack, unpack, inspect." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             jobs = container "substrate-jobs" "In-memory JobRegistry adapter for async control-plane. Tracks job state, CancellationToken handles, and progress notifications. Exposes job.status, job.result, job.cancel, job.list tool endpoints." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Port"
             }
 
             fsIndex = container "substrate-fs-index" "Optional filesystem index adapter (fs-index Cargo feature). Accelerates fs.find and fs.stat by maintaining a lightweight in-memory index updated at commit time." "Rust crate, opt-in" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Port"
             }
 
             fsIndexMacosSys = container "substrate-fs-index-macos-sys" "Platform shim providing the macOS-specific FSEvents and kqueue backend bindings consumed by substrate-fs-index on Apple platforms." "Rust / macOS FFI" {
@@ -80,18 +80,18 @@ workspace "substrate" "MCP server exposing POSIX baseutils to LLM agents — sec
             // ADR-0052: subprocess bounded context — optional Cargo feature 'subprocess' (default-OFF).
             // Hosts tokio::process::Command as the single permitted site per no_subprocess.rego amendment.
             subprocessAdapter = container "substrate-subprocess" "Adapter for child process spawning: validates binary allowlist, env filtering, cascading kill, stdout/stderr stream multiplex (ADR-0054), and orphan prevention (PR_SET_PDEATHSIG / watchdog pipe, ADR-0053)." "Rust crate, opt-in (feature subprocess)" {
-                tags "Adapter" "OptionalFeature"
+                tags "Adapter" "Layer:Adapter" "OptionalFeature"
             }
 
             // ADR-0058: network-info bounded context — net.tcp_list, net.udp_list, net.tcp_stats, net.connection_count.
             networkInfo = container "substrate-network-info" "Adapter for network socket introspection: lists TCP/UDP sockets, aggregates per-connection stats, and resolves owner PIDs from kernel PCB tables (procfs on Linux, pcblist_n sysctl on macOS)." "Rust" {
-                tags "Adapter"
+                tags "Adapter" "Layer:Adapter"
             }
 
             // ADR-0063..0068: launch bounded context — declarative process orchestration OVER subprocess.
             // Optional Cargo feature 'launch'. Detached --supervise mode (ADR-0068) is the same binary.
             launch = container "substrate-launch" "Orchestration adapter for declarative multi-process stacks from .substrate.toml: TOFU trust gate (ADR-0064), depends_on DAG + reconciler reload (ADR-0065), distilled event stream (ADR-0066), lock-free mpsc/broadcast/watch fabric (ADR-0067), and the detached supervisor with zero-orphan governance (ADR-0068)." "Rust crate, opt-in (feature launch)" {
-                tags "Adapter" "OptionalFeature"
+                tags "Adapter" "Layer:Adapter" "OptionalFeature"
             }
         }
 

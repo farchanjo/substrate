@@ -1,7 +1,7 @@
 # package substrate.security
 #
 # Enforces security invariants derived from ADR-0004 (Security Model) and the
-# schemas in docs/arch/schemas/security_policy.cue and mcp_tool_spec.cue.
+# schemas in doc/arch/schemas/security_policy.cue and mcp_tool_spec.cue.
 #
 # These rules run at policy-evaluation time (e.g. OPA sidecar or CI gate) and
 # are NOT a substitute for runtime enforcement inside the substrate process.

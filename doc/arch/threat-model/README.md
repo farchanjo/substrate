@@ -25,38 +25,84 @@ full profile.
 
 ## STRIDE categories covered
 
-[ADR-0029](../adr/0029-threat-model.md) covers all six STRIDE categories. The
-threats summarized below are enumerated in full, with scenarios and mitigations,
-in the ADR.
+[ADR-0029](../adr/0029-threat-model.md) covers all six STRIDE categories. Each
+entry below is the summary; the ADR carries the full scenario and the residual
+risk.
 
-- **Spoofing** - MCP session-ID forgery and path arguments that impersonate an
-  allowlisted path; mitigated by server-generated session UUIDs and canonical
-  path resolution through the path jail.
-- **Tampering** - path traversal, Zip Slip during archive extraction, symlink
-  escape, null-byte injection, TOCTOU symlink swap, archive symlink-member
-  chaining, macOS Unicode normalization mismatch, APFS firmlink bypass, and
-  symlink allowlist roots; mitigated by `strict-path`, kernel-atomic resolution
-  (`openat2` / `O_NOFOLLOW_ANY`), archive symlink-member ban, NFC normalization,
-  `F_GETPATH` re-validation, and config-load canonicalization.
-- **Repudiation** - mutation without an audit trail and audit-log line
-  injection; mitigated by structured audit events around every invocation and
-  CRLF stripping on logged string fields.
-- **Information Disclosure** - secret exfiltration over outbound network, secret
-  leakage into the audit log, directory enumeration beyond scope, and hard links
-  to pre-existing external files; mitigated by outbound network off by default,
-  the redaction pipeline, pre-call allowlist checks, and `nlink` warnings with
-  an opt-in hard-link rejection.
-- **Denial of Service** - resource exhaustion via tool sequences, signal-on-init,
-  zip bombs, ENOSPC mid-write partial files, SIGBUS via concurrent mmap
-  truncation, child fork-bombs, and subprocess orphans on substrate SIGKILL;
-  mitigated by the dry-run and elicitation gates, depth and size limits,
-  transactional writes, disabled blake3 mmap, per-client and global subprocess
-  quotas, and the death-signal and watchdog-pipe orphan controls.
-- **Elevation of Privilege** - writing to privileged paths, destructive signals
-  on arbitrary PIDs, env-var injection (LD_PRELOAD and equivalents), child
-  inheriting substrate's UID, and child escaping cwd via `chdir`; mitigated by
-  elicitation gates on permission changes and destructive signals, the env-var
-  hard-ban list, the optional UID drop, and the binary allowlist.
+### TM-001: Spoofing
+
+**Category:** Spoofing.
+
+**Description:** MCP session-ID forgery, and path arguments that impersonate an allowlisted path.
+
+**Mitigations:**
+
+- Server-generated session UUIDs.
+- Canonical path resolution through the path jail.
+
+### TM-002: Tampering
+
+**Category:** Tampering.
+
+**Description:** Path traversal, Zip Slip during archive extraction, symlink escape, null-byte injection, TOCTOU symlink swap, archive symlink-member chaining, macOS Unicode normalization mismatch, APFS firmlink bypass, and symlink allowlist roots.
+
+**Mitigations:**
+
+- `strict-path` resolution, kernel-atomic (`openat2` / `O_NOFOLLOW_ANY`).
+- Archive symlink-member ban.
+- NFC normalization plus `F_GETPATH` re-validation.
+- Config-load canonicalization.
+
+### TM-003: Repudiation
+
+**Category:** Repudiation.
+
+**Description:** Mutation without an audit trail, and audit-log line injection.
+
+**Mitigations:**
+
+- Structured audit events around every invocation.
+- CRLF stripping on logged string fields.
+
+### TM-004: Information Disclosure
+
+**Category:** Information disclosure.
+
+**Description:** Secret exfiltration over the outbound network, secret leakage into the audit log, directory enumeration beyond scope, and hard links to pre-existing external files.
+
+**Mitigations:**
+
+- Outbound network off by default.
+- The redaction pipeline.
+- Pre-call allowlist checks.
+- `nlink` warnings with an opt-in hard-link rejection.
+
+### TM-005: Denial of Service
+
+**Category:** Denial of service.
+
+**Description:** Resource exhaustion via tool sequences, signal-on-init, zip bombs, ENOSPC mid-write partial files, SIGBUS via concurrent mmap truncation, child fork-bombs, and subprocess orphans on substrate SIGKILL.
+
+**Mitigations:**
+
+- Dry-run and elicitation gates.
+- Depth and size limits, plus transactional writes.
+- Disabled blake3 mmap.
+- Per-client and global subprocess quotas.
+- Death-signal and watchdog-pipe orphan controls.
+
+### TM-006: Elevation of Privilege
+
+**Category:** Elevation of privilege.
+
+**Description:** Writing to privileged paths, destructive signals on arbitrary PIDs, env-var injection (LD_PRELOAD and equivalents), a child inheriting substrate's UID, and a child escaping cwd via `chdir`.
+
+**Mitigations:**
+
+- Elicitation gates on permission changes and destructive signals.
+- The env-var hard-ban list.
+- The optional UID drop.
+- The binary allowlist.
 
 ## Subprocess threat expansion
 

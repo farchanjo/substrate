@@ -94,7 +94,7 @@ required is premature.
   in the MVP codebase.
 - Each adapter's audit call must be a synchronous function call to a logging
   sink, verifiable by reading the adapter source.
-- The future reservation path must be documented in `docs/arch/` before any
+- The future reservation path must be documented in `doc/arch/` before any
   implementation begins in v2.
 
 ## Links

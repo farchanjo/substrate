@@ -114,7 +114,7 @@ No CLA is required. Contributors assert the DCO v1.1 by including the trailer. T
 
 - `cargo deny check licenses` passes on every CI run (validate stage).
 - MR CI lint step verifies `Signed-off-by` trailer on every non-merge commit.
-- `docs/arch/schemas/cargo-workspace.cue` asserts `license == "MIT OR Apache-2.0"` for all workspace members.
+- `doc/arch/schemas/cargo-workspace.cue` asserts `license == "MIT OR Apache-2.0"` for all workspace members.
 
 ## Cross-References
 

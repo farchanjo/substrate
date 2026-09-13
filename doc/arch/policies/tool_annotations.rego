@@ -1,7 +1,7 @@
 # package substrate.tool_annotations
 #
 # Enforces that every registered MCP tool declares annotations that match the
-# canonical defaults defined in the tool annotation matrix (docs/arch/schemas/mcp_tool_spec.cue).
+# canonical defaults defined in the tool annotation matrix (doc/arch/schemas/mcp_tool_spec.cue).
 #
 # Input shape:
 #   {

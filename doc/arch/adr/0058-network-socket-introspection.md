@@ -508,10 +508,10 @@ read counter in `tcpstat`).
   come from the SDK-shipped
   `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/netinet/tcp_var.h`.
 - Companion Gherkin features:
-  `docs/arch/specs/features/network/net-tcp-list-listen-entry-has-nonzero-local-port.feature`,
-  `docs/arch/specs/features/network/net-tcp-stats-returns-nonzero-counters-on-active-host.feature`.
+  `doc/arch/specs/features/network/net-tcp-list-listen-entry-has-nonzero-local-port.feature`,
+  `doc/arch/specs/features/network/net-tcp-stats-returns-nonzero-counters-on-active-host.feature`.
 - Companion Rego invariant:
-  `docs/arch/policies/network_invariants.rego` rule
+  `doc/arch/policies/network_invariants.rego` rule
   `listen_entry_has_nonzero_port`.
 
 **Status.** Implemented in commit `b30815a` (fix(network-info): correct
@@ -555,5 +555,5 @@ clients can distinguish "host has no traffic" from "kernel hides counters".
   on the policy state.
 
 **Status.** Documented; the hint field is tracked as a follow-up under
-`docs/arch/adr/0058-network-socket-introspection.md` and not yet wired
+`doc/arch/adr/0058-network-socket-introspection.md` and not yet wired
 into the tool card.

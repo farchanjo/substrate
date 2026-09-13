@@ -15,6 +15,50 @@ placeholder seam written as `<file>:<line>` or a fully-qualified path such as
 time and update this runbook alongside the code (the spec is the source of
 truth; this runbook tracks the seams that prove it).
 
+## Preconditions
+
+- A build with the `launch` feature on, and a Stack reproducible from a profile
+  directory you control.
+- `RUST_LOG` raised for `substrate` and `substrate_launch`; the audit stream on
+  stderr is the primary evidence, and the `correlation_id` plus the monotonic
+  `seq` are the join keys.
+- The native debugger (`lldb` on macOS, `gdb` on Linux) for synchronous seams, and
+  `tokio-console` attached when the failure looks like a parked task rather than a
+  wrong value.
+- A disposable profile: bring the Stack up from a scratch directory so a failed
+  probe does not disturb a Stack you care about.
+
+## Steps
+
+1. Reproduce once and capture stderr verbatim, including `seq` order and every
+   `correlation_id`. Evidence first, hypotheses second.
+2. Classify the failure with the two-class triage below: wrong value versus parked
+   task. The lane decides the tool, and the wrong lane wastes the session.
+3. Match the symptom to a hazard in the catalog and run its probe recipe.
+4. For a wrong value, attach the debugger at the seam the hazard names and inspect
+   the state before the decision, not after the symptom.
+5. For a parked task, read in `tokio-console` which `.await` holds the task, then
+   check the mailbox and reactor path that feeds it.
+6. Record what the probe showed, the hazard id, and the evidence path before
+   touching code.
+
+## Verification
+
+A fix is verified when the hazard's own probe shows the expected value or the task
+resumes, the matching scenario under `doc/arch/specs/features/launch/` passes, and
+the audit stream shows the expected event sequence with no orphan left behind by
+`launch.down`. Re-run the probe against a fresh Stack — a fix that holds only on
+the already-degraded one is not verified.
+
+## Rollback
+
+Bring the Stack down with `launch.down`, then `launch.forget` the profile when the
+trust entry or the durable `supervisor.json` was part of the experiment. For a
+supervisor left behind by a crash, let the orphan-TTL path reap it rather than
+killing the pid by hand. Revert the code change with a normal revert commit; the
+profile directory and the trust store are the only state this runbook mutates
+outside the repository.
+
 ## Tool selection — the two-class triage
 
 The launch BC is heavily async (the supervisor actor, the `mio` reactor, the
@@ -75,7 +119,7 @@ gotchas:
 Unit test under the debugger (run to one seam, dump scalars):
 
 ```bash
-BIN=$(cargo test -p substrate-launch --no-run 2>&1 \
+BIN=$(cargo nextest list -p substrate-launch --message-format json 2>/dev/null \
   | grep -oE 'target/debug/deps/substrate_launch-[A-Za-z0-9]+' | head -1)
 fapp-debug --format ndjson inspect --bin "$BIN" \
   --at <file.rs:line> --var <scalar_a> --var <scalar_b> \

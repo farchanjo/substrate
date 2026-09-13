@@ -42,7 +42,8 @@ that ADR's own invariants:
 - **The watcher is coded but never wired.** `FsIndexWatcher`
   (`crates/substrate-fs-index/src/watcher.rs`) fully implements event translation
   and overflow-triggered rebuilds, but its own module doc says "Wire
-  `FsIndexWatcher` into `substrate-mcp-server` composition root" as a TODO, and
+  `FsIndexWatcher` into `substrate-mcp-server` composition root" as an open
+  wiring step, and
   `crates/substrate-mcp-server/src/composition.rs` has zero references to it.
   Layer 2 of ADR-0041's freshness stack does not run in any deployed build.
 - **Layer 0 (mandatory lazy lstat) has no real callsite** in the lookup pipeline

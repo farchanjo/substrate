@@ -168,8 +168,8 @@ The following alternatives MUST be used in place of external binaries:
   [ADR-0043](0043-simd-runtime-dispatch.md).
 
 - Filesystem watching: NOT external `inotifywait` or `fswatch`. Use the
-  `notify`, `inotify`, `fsevent-stream`, or `kqueue` crates as appropriate
-  per platform gate ([ADR-0028](0028-platform-feature-gates.md)).
+  `notify`, `inotify`, `fsevent-stream`, or `kqueue` crates, selected per platform
+  gate ([ADR-0028](0028-platform-feature-gates.md)).
 
 ### Process Boundary Diagram
 
@@ -205,7 +205,7 @@ flowchart TD
 
 ### Enforcement Mechanism
 
-A new Rego policy file `docs/arch/policies/no_subprocess.rego` (package
+A new Rego policy file `doc/arch/policies/no_subprocess.rego` (package
 `substrate.no_subprocess`) enforces this rule in CI. The policy is wired into
 the full lane: `spec validate --lane full` runs `conftest` against it. The
 policy denies merge when any of the following hold:
@@ -283,7 +283,7 @@ When a new tool requires a capability that appears to need an external binary:
   non-test files (enforced by the `no_subprocess.rego` policy and `clippy::disallowed_methods`).
 - `cargo grep -n "tokio::process::Command" crates/` must return zero results in
   non-test files.
-- `conftest test --policy docs/arch/policies/no_subprocess.rego` must pass in
+- `conftest test --policy doc/arch/policies/no_subprocess.rego` must pass in
   the full CI lane.
 - A manual audit of `cargo tree --workspace` must confirm none of the
   forbidden crates appear as transitive dependencies.
