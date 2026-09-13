@@ -1,0 +1,48 @@
+# substrate
+
+> Model Context Protocol (MCP) server in Rust exposing POSIX baseutils-equivalent OS management to LLM agents over STDIO. Ten bounded contexts, 61 tools with the `launch` feature on, no network listener, no daemon.
+
+spec-first: doc/arch is the source of truth — run `speckit status` then `speckit next` and read the spec before writing any code.
+
+substrate gives an agent the local machine: read and mutate files under an
+allowlist, inspect processes, sockets, and system state, search and page through
+text, create and extract archives, spawn and supervise subprocesses, and bring a
+declarative Service stack up and down. Every path passes the allowlist and the
+path jail before any syscall, every mutation is dry-run first, and every
+destructive call is gated behind elicitation. stdout is the JSON-RPC wire; all
+telemetry goes to stderr.
+
+## Architecture
+
+Hexagonal, one-way dependency rule: `substrate-domain` is pure (std, serde,
+thiserror, async-trait, futures, uuid, tracing) and no adapter may import another
+adapter; only `substrate-mcp-server` depends on `rmcp` and `tokio`. Each bounded
+context maps to one `crates/substrate-<bc>` adapter, enforced by
+`doc/arch/policies/hexagonal_layering.rego`. Security is layered: allowlist, path
+jail, dry-run, elicitation.
+
+## Commands
+
+- Build, lint, and test workspace-wide with every feature on: `cargo build --workspace --all-features`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace --all-features`.
+- Spec gates: `speckit validate` (native) and `speckit validate --deep` (adds the external validators); `speckit verify` runs the Gherkin corpus against the binary.
+- CI lanes: `just ci-fmt`, `just ci-clippy`, `just ci-nextest`, `just ci-spec`, aggregated by `just ci`.
+
+## Documentation
+
+- [README](README.md): project overview, quick start, and the boundary diagrams.
+- [AGENTS.md](AGENTS.md): canonical, harness-agnostic context file — the agent dispatch table, spec-first protocol, and locked architectural decisions. `CLAUDE.md` and `GROK.md` are symlinks to it.
+- [Architecture specification index](doc/arch/README.md): the authoritative corpus — ADRs, CUE schemas, Gherkin features, Rego policies, Structurizr model.
+- [Glossary](doc/arch/glossary.md): ubiquitous-language vocabulary.
+- [Observability strategy](doc/arch/observability/observability.md): signals, logs, tracing, and cardinality bounds.
+- [Quality scenarios](doc/arch/quality/quality-scenarios.md): the measurable ISO/IEC 25010 scenarios and their budgets.
+- [Threat model](doc/arch/threat-model/README.md): the STRIDE entries and their mitigations.
+- [Privacy threat model](doc/arch/threat-model/privacy-threat-model.md): the LINDDUN analysis and its residual risk.
+- [Functional specification](doc/arch/functional/functional.md): actors, call flow, and how a behaviour is accepted.
+- [Operator guide](doc/arch/operations/operator-guide.md): deployment and operation.
+- [Launch debug runbook](doc/arch/runbooks/launch-debug-runbook.md): the runtime hazard catalog and probe recipes.
+
+## Optional
+
+- [CHANGELOG](CHANGELOG.md): user-visible changes per release.
+- [CONTRIBUTING](CONTRIBUTING.md): how to propose a change and the conventions it must follow.
+- [SECURITY](SECURITY.md): the disclosure process and the security invariants.
