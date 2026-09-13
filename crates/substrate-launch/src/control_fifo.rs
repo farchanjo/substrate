@@ -491,6 +491,10 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join(CONTROL_FIFO_FILE);
         mkfifo(&path, Mode::from_bits_truncate(0o644)).expect("mkfifo 0644");
+        // mkfifo(2) masks the mode with the process umask, so the call alone is not
+        // enough: under a 077 umask it yields 0600, which is secure, and the
+        // assertion below inverts. Set the mode explicitly.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 0644");
 
         let err = verify_fifo_secure(&path).expect_err("0644 fifo rejected");
         assert!(matches!(err, LaunchError::RegistryInsecure { .. }), "got {err:?}");
