@@ -1,6 +1,6 @@
 //! `ClientId` — identifies the originating MCP client session.
 //!
-//! Mirrors `#ClientId` in `docs/arch/schemas/shared_kernel.cue`:
+//! Mirrors `#ClientId` in `doc/arch/schemas/shared_kernel.cue`:
 //! pattern `^[A-Za-z0-9._-]{1,64}$`.
 
 use serde::{Deserialize, Serialize};

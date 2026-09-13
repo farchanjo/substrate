@@ -103,7 +103,7 @@ pub trait SubprocessPort: Send + Sync {
     /// is preserved as a fast-return (non-blocking poll). This port trait always
     /// receives the already-substituted value; the substitution and the boot guard
     /// that rejects an invalid wait window reside exclusively in the handler layer.
-    /// See [ADR-0059](../../../docs/arch/adr/0059-universal-wait-timeout-enforcement.md).
+    /// See [ADR-0059](../../../doc/arch/adr/0059-universal-wait-timeout-enforcement.md).
     ///
     /// When `include_aggregates` is `false`, the `stdout_aggregate` and
     /// `stderr_aggregate` fields in the result are empty to reduce response size.

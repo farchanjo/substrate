@@ -7,7 +7,7 @@
 //   cargo build --bin substrate --profile dev
 //   cargo nextest run --test cucumber
 //
-// Feature files live under docs/arch/specs/features/ (relative to workspace
+// Feature files live under doc/arch/specs/features/ (relative to workspace
 // root).  The path below is resolved at runtime from CARGO_MANIFEST_DIR.
 //
 // Lint relaxations (integration-test carve-out per ADR-0044):
@@ -811,7 +811,7 @@ fn features_dir() -> PathBuf {
         .ancestors()
         .nth(2)
         .expect("workspace root ancestor")
-        .join("docs/arch/specs/features")
+        .join("doc/arch/specs/features")
 }
 
 #[tokio::main]

@@ -1,6 +1,6 @@
 //! `IdempotencyKey` — client-generated deduplication token for job submissions.
 //!
-//! Mirrors `#IdempotencyKey` in `docs/arch/schemas/job.cue`:
+//! Mirrors `#IdempotencyKey` in `doc/arch/schemas/job.cue`:
 //! a `UUIDv7` encoded as Crockford base32 (26 uppercase characters).
 //!
 //! The deduplication key is `(client_id, tool_name, idempotency_key, blake3_hash_of_args_json)`

@@ -1,7 +1,7 @@
 //! Stack aggregate and detached-supervisor registry value objects.
 //!
 //! Mirrors `#Stack`, `#StackChild`, and `#SupervisorRegistry` in
-//! `docs/arch/schemas/launch.cue`. A [`StackHandle`] is the running instance of
+//! `doc/arch/schemas/launch.cue`. A [`StackHandle`] is the running instance of
 //! a Profile: the per-Service handles, the pinned config hash, and the lifecycle
 //! state. The per-Service state reuses `SubprocessState` from the subprocess BC.
 //!

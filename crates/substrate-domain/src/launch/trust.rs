@@ -1,6 +1,6 @@
 //! `TrustRecord` — one bless entry in the user-scope trust store (`trust.toml`).
 //!
-//! Mirrors `#TrustRecord` in `docs/arch/schemas/launch.cue` (ADR-0064). It binds
+//! Mirrors `#TrustRecord` in `doc/arch/schemas/launch.cue` (ADR-0064). It binds
 //! a canonical Profile path to its full inode-and-content identity tuple, which
 //! is re-verified on every load to defeat permission-flip and rewrite attacks.
 //!

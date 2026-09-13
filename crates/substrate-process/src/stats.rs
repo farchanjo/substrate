@@ -14,7 +14,7 @@
 //!
 //! # See also
 //!
-//! [ADR-0051](../../../docs/arch/adr/0051-per-process-resource-stats.md)
+//! [ADR-0051](../../../doc/arch/adr/0051-per-process-resource-stats.md)
 // macOS proc_pidinfo FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
 #![cfg_attr(
     target_os = "macos",
@@ -45,7 +45,7 @@ use substrate_domain::SubstrateResult;
 
 /// Single-character process state compatible with both Linux and macOS.
 ///
-/// See [ADR-0051](../../../docs/arch/adr/0051-per-process-resource-stats.md).
+/// See [ADR-0051](../../../doc/arch/adr/0051-per-process-resource-stats.md).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum ProcessState {
@@ -99,7 +99,7 @@ impl ProcessState {
 
 /// Per-process resource-usage snapshot returned by `proc.stats`.
 ///
-/// See [ADR-0051](../../../docs/arch/adr/0051-per-process-resource-stats.md).
+/// See [ADR-0051](../../../doc/arch/adr/0051-per-process-resource-stats.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessStats {
     /// POSIX process identifier.

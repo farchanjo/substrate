@@ -1,6 +1,6 @@
 //! `SubprocessRequest` — value object for a subprocess spawn invocation.
 //!
-//! Mirrors `#SubprocessRequest` in `docs/arch/schemas/subprocess.cue`.
+//! Mirrors `#SubprocessRequest` in `doc/arch/schemas/subprocess.cue`.
 //! All fields are validated by `SubprocessRequest::validate` before any OS call
 //! is made; the same invariants are enforced by `subprocess_invariants.rego`.
 //!
@@ -66,7 +66,7 @@ pub enum CaptureKind {
 /// call is made. The caller MUST call `validate` and check for
 /// `elicitation_confirmed = true` before passing this to `SubprocessPort::spawn`.
 ///
-/// See `docs/arch/schemas/subprocess.cue #SubprocessRequest` and ADR-0052.
+/// See `doc/arch/schemas/subprocess.cue #SubprocessRequest` and ADR-0052.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubprocessRequest {
     /// Absolute path to the executable to spawn.
@@ -155,7 +155,7 @@ pub struct SubprocessRequest {
 
 impl SubprocessRequest {
     /// Validates all fields of this request against the invariants specified in
-    /// `docs/arch/policies/subprocess_invariants.rego` and ADR-0052.
+    /// `doc/arch/policies/subprocess_invariants.rego` and ADR-0052.
     ///
     /// Validation is purely in-memory (no OS calls). Callers must pass this
     /// through `PathJail` separately for the Layer 2 jailing check.

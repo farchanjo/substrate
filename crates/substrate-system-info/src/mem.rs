@@ -19,7 +19,7 @@
 //!
 //! # See also
 //!
-//! [ADR-0050](../../../docs/arch/adr/0050-system-resource-monitoring.md)
+//! [ADR-0050](../../../doc/arch/adr/0050-system-resource-monitoring.md)
 // macOS sysctl + mach FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
 #![cfg_attr(
     target_os = "macos",
@@ -51,7 +51,7 @@ use substrate_domain::SubstrateResult;
 /// The `platform_tier` field identifies the data source used for this snapshot
 /// per the ADR-0050 tier-cascade contract.
 ///
-/// See [ADR-0050](../../../docs/arch/adr/0050-system-resource-monitoring.md).
+/// See [ADR-0050](../../../doc/arch/adr/0050-system-resource-monitoring.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemorySnapshot {
     /// Total installed physical RAM in bytes.

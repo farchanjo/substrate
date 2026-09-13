@@ -3,7 +3,7 @@
 //! Extends the base error catalog from ADR-0010 with subprocess-specific codes
 //! introduced in ADR-0052. Every variant carries a stable `SUBSTRATE_*` code
 //! string and a recovery hint capped at 150 characters per the CUE constraint
-//! in `docs/arch/schemas/error_catalog.cue`.
+//! in `doc/arch/schemas/error_catalog.cue`.
 //!
 //! References: ADR-0052 §"New Error Codes", ADR-0010 §"Error taxonomy".
 
@@ -149,7 +149,7 @@ impl SubprocessError {
     /// Returns the operator-facing recovery hint for this error.
     ///
     /// All hints are <= 150 characters per the CUE schema constraint in
-    /// `docs/arch/schemas/error_catalog.cue`.
+    /// `doc/arch/schemas/error_catalog.cue`.
     #[must_use]
     pub const fn recovery_hint(&self) -> &'static str {
         match self {

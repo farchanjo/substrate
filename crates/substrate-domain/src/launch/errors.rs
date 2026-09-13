@@ -4,7 +4,7 @@
 //! introduced in ADR-0063..0069 (`SUBSTRATE_LAUNCH_*`, JSON-RPC -32044..-32056).
 //! Every variant carries a stable `SUBSTRATE_*` code string and a recovery hint
 //! capped at 150 characters per the CUE constraint in
-//! `docs/arch/schemas/error_catalog.cue`. The hints below are copied verbatim
+//! `doc/arch/schemas/error_catalog.cue`. The hints below are copied verbatim
 //! from that catalog.
 //!
 //! References: ADR-0063, ADR-0064, ADR-0065, ADR-0066, ADR-0068.
@@ -200,7 +200,7 @@ impl LaunchError {
     /// Returns the operator-facing recovery hint for this error.
     ///
     /// All hints are `<= 150` characters per the CUE schema constraint in
-    /// `docs/arch/schemas/error_catalog.cue`; the launch-BC hints are copied
+    /// `doc/arch/schemas/error_catalog.cue`; the launch-BC hints are copied
     /// verbatim from that catalog.
     #[must_use]
     pub const fn recovery_hint(&self) -> &'static str {

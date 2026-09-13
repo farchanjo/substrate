@@ -20,7 +20,7 @@
 //!
 //! Enforces [`resource_limit::DecompressGuard`] to prevent gzip-bomb / unbounded
 //! expansion. Matches scenario in
-//! `docs/arch/specs/features/archive/archive-gzip-large-input-resource-limit.feature`.
+//! `doc/arch/specs/features/archive/archive-gzip-large-input-resource-limit.feature`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;

@@ -2,7 +2,7 @@
 //! network-info bounded context.
 //!
 //! These types mirror the `#TcpStats` and `#ConnectionCounts` definitions in
-//! `docs/arch/schemas/network.cue` per ADR-0058 §"Wire Shape".
+//! `doc/arch/schemas/network.cue` per ADR-0058 §"Wire Shape".
 //!
 //! References: ADR-0058.
 

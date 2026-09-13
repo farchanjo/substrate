@@ -1,6 +1,6 @@
 //! `JobId` — uniquely identifies an async job.
 //!
-//! Mirrors `#JobId` in `docs/arch/schemas/job.cue`:
+//! Mirrors `#JobId` in `doc/arch/schemas/job.cue`:
 //! a `UUIDv7` encoded as Crockford base32 (26 uppercase characters).
 //!
 //! Per ADR-0040 triple-equality invariant: `job_id == progressToken == correlation_id`.

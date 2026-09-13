@@ -1,6 +1,6 @@
 //! `SubprocessHandle` — aggregate root for an active or completed child process.
 //!
-//! Mirrors `#SubprocessHandle` in `docs/arch/schemas/subprocess.cue`.
+//! Mirrors `#SubprocessHandle` in `doc/arch/schemas/subprocess.cue`.
 //! Stored in the `JobRegistry` under the corresponding `JobId`. The handle is
 //! the authoritative record for a single spawn invocation and is updated on
 //! every state transition by the `substrate-subprocess` adapter.
@@ -23,7 +23,7 @@ use crate::value_objects::{JobId, ProcessGroup};
 /// on each state transition. Domain code treats a received `SubprocessHandle`
 /// as a read-only snapshot.
 ///
-/// See `docs/arch/schemas/subprocess.cue #SubprocessHandle` and ADR-0052.
+/// See `doc/arch/schemas/subprocess.cue #SubprocessHandle` and ADR-0052.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubprocessHandle {
     /// Canonical job identifier correlating this handle with the async `JobEntry`,

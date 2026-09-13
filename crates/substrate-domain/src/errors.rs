@@ -1,7 +1,7 @@
 //! Canonical error taxonomy for the substrate domain.
 //!
 //! All stable error codes mirror the `#ErrorCatalog` in
-//! `docs/arch/schemas/error_catalog.cue` and the narrative in ADR-0010
+//! `doc/arch/schemas/error_catalog.cue` and the narrative in ADR-0010
 //! (including amendments from ADR-0040 and ADR-0042).
 //!
 //! Each variant carries structured context that adapters use when building
@@ -369,7 +369,7 @@ impl SubstrateError {
     /// Returns the operator-facing recovery hint for this error.
     ///
     /// All hints are ≤ 150 characters per the CUE schema constraint in
-    /// `docs/arch/schemas/error_catalog.cue`.
+    /// `doc/arch/schemas/error_catalog.cue`.
     #[must_use]
     pub const fn recovery_hint(&self) -> &'static str {
         match self {

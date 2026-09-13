@@ -1,7 +1,7 @@
 //! `LaunchEvent` — one entry in the durable per-Stack event-log.
 //!
 //! Mirrors `#LaunchEvent` and `#LaunchEventKind` in
-//! `docs/arch/schemas/launch.cue` (ADR-0066). Lifecycle events are
+//! `doc/arch/schemas/launch.cue` (ADR-0066). Lifecycle events are
 //! authoritative; the `Semantic` marker carries advisory, redacted output
 //! distilled from a child channel. The `message` is already redacted by the
 //! source before it ever reaches this value object.

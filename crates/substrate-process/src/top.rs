@@ -21,7 +21,7 @@
 //!
 //! # See also
 //!
-//! [ADR-0051](../../../docs/arch/adr/0051-per-process-resource-stats.md)
+//! [ADR-0051](../../../doc/arch/adr/0051-per-process-resource-stats.md)
 
 use std::sync::Arc;
 

@@ -8,7 +8,7 @@
 //! - Paths whose canonical parent resolves outside `dest_root` after joining.
 //!
 //! This matches the Gherkin scenario in
-//! `docs/arch/specs/features/archive/archive-zip-extract-zip-slip-blocked.feature`.
+//! `doc/arch/specs/features/archive/archive-zip-extract-zip-slip-blocked.feature`.
 
 use std::path::{Component, Path, PathBuf};
 

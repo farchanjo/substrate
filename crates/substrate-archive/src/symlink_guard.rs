@@ -6,7 +6,7 @@
 //!
 //! This module implements a two-tier guard per ADR-0004 and the Gherkin
 //! scenarios in
-//! `docs/arch/specs/features/archive/archive-symlink-member-blocked.feature`:
+//! `doc/arch/specs/features/archive/archive-symlink-member-blocked.feature`:
 //!
 //! 1. Symlinks whose **resolved target** stays within `extraction_root` are
 //!    allowed and must be restored on disk.

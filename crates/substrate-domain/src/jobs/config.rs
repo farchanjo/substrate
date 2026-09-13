@@ -1,7 +1,7 @@
 //! Job control-plane configuration value objects per ADR-0040.
 //!
 //! Mirrors `#JobQuotas`, `#JobInlineThresholds`, `#JobTimeouts`, and `#JobConfig`
-//! from `docs/arch/schemas/job.cue`. Loaded from the TOML `[jobs]` section by
+//! from `doc/arch/schemas/job.cue`. Loaded from the TOML `[jobs]` section by
 //! `substrate-config`.
 
 use serde::{Deserialize, Serialize};
@@ -141,7 +141,7 @@ mod quota_tests {
 /// A tool invocation below its threshold returns an inline result; at or above
 /// the threshold the tool is promoted to an async job.
 ///
-/// Mirrors `#JobInlineThresholds` in `docs/arch/schemas/job.cue`.
+/// Mirrors `#JobInlineThresholds` in `doc/arch/schemas/job.cue`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobInlineThresholds {
     /// Inline if the candidate count is below this value. Default: 1000.
@@ -187,7 +187,7 @@ impl Default for JobInlineThresholds {
 /// Per-tool execution time limits for async jobs per ADR-0040.
 ///
 /// Per-tool entries override the default. All values are in seconds.
-/// Mirrors `#JobTimeouts` in `docs/arch/schemas/job.cue`.
+/// Mirrors `#JobTimeouts` in `doc/arch/schemas/job.cue`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobTimeouts {
     /// Default timeout in seconds when no per-tool override is present. Default: 600.
@@ -221,7 +221,7 @@ impl Default for JobTimeouts {
 /// Top-level configuration aggregate for the async job control-plane per ADR-0040.
 ///
 /// Embedded in the main `RuntimeConfig` under the `[jobs]` TOML section.
-/// Mirrors `#JobConfig` in `docs/arch/schemas/job.cue`.
+/// Mirrors `#JobConfig` in `doc/arch/schemas/job.cue`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct JobConfig {
     /// Resource limits (concurrency, TTL, channel sizes).

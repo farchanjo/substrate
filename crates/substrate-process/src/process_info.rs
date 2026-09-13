@@ -1,7 +1,7 @@
 //! `ProcessInfo` — point-in-time snapshot of a single running process.
 //!
 //! Maps to the `ProcessSnapshot` aggregate root defined in the process BC
-//! narrative (`docs/arch/domain/process/README.md`). Serialised as-is into
+//! narrative (`doc/arch/domain/process/README.md`). Serialised as-is into
 //! `structuredContent`.
 
 use serde::{Deserialize, Serialize};

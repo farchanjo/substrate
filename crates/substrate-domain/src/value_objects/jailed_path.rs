@@ -1,6 +1,6 @@
 //! `JailedPath` — a filesystem path that has been validated as safe.
 //!
-//! Mirrors `#JailedPath` in `docs/arch/schemas/shared_kernel.cue`.
+//! Mirrors `#JailedPath` in `doc/arch/schemas/shared_kernel.cue`.
 //! Construction of a `JailedPath` asserts both invariants:
 //! 1. The path is a fully-resolved, canonical absolute path (no `..` or symlink escapes).
 //! 2. The path starts with one of the configured allowlist roots.

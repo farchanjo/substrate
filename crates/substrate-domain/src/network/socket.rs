@@ -1,7 +1,7 @@
 //! Socket-level value objects for the network-info bounded context.
 //!
 //! These types mirror the `#SocketEntry`, `#Protocol`, `#AddrFamily`, and
-//! `#TcpState` definitions in `docs/arch/schemas/network.cue` and are stable
+//! `#TcpState` definitions in `doc/arch/schemas/network.cue` and are stable
 //! across the wire format per ADR-0058 §"Wire Shape".
 //!
 //! References: ADR-0058.

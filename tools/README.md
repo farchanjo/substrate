@@ -33,8 +33,8 @@ Expected output starts with `TLC version ...`.
 
 ```bash
 java -jar tools/tla2tools.jar \
-  -config docs/arch/JobRegistry.cfg \
-  docs/arch/JobRegistry.tla
+  -config doc/arch/JobRegistry.cfg \
+  doc/arch/JobRegistry.tla
 ```
 
 Or use the spec framework wrapper which sets up the classpath and output format:

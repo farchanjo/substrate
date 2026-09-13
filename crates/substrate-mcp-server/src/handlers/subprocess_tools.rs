@@ -15,7 +15,7 @@
 //! `#[serde(default = "fn")]` field override.
 //!
 //! Currently: [`SubprocessListRequest`] uses this shortcut.
-//! Enforced by: `docs/arch/policies/request_default_invariants.rego`
+//! Enforced by: `doc/arch/policies/request_default_invariants.rego`
 
 #![cfg(feature = "subprocess")]
 #![allow(

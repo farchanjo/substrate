@@ -87,7 +87,7 @@ pub fn build_error_hints(recovery: &str) -> Hints {
 /// Returns the canonical lowercase string label for a SIMD tier.
 ///
 /// These labels match the `#SimdTier` enum values in
-/// `docs/arch/schemas/simd_capability.cue` and the audit event field
+/// `doc/arch/schemas/simd_capability.cue` and the audit event field
 /// `simd_tier_used` from ADR-0043.
 #[must_use]
 pub fn simd_tier_label(tier: SimdTier) -> String {

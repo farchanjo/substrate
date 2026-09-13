@@ -27,7 +27,7 @@
 //!
 //! # See also
 //!
-//! [ADR-0050](../../../docs/arch/adr/0050-system-resource-monitoring.md)
+//! [ADR-0050](../../../doc/arch/adr/0050-system-resource-monitoring.md)
 // macOS sysctl + mach processor_info FFI — module-level allow per ADR-0042 + ADR-0044 carve-out.
 #![cfg_attr(
     target_os = "macos",
@@ -71,7 +71,7 @@ pub struct CpuSnapshot {
 
 /// CPU topology and utilization snapshot returned by `sys.cpu`.
 ///
-/// See [ADR-0050](../../../docs/arch/adr/0050-system-resource-monitoring.md).
+/// See [ADR-0050](../../../doc/arch/adr/0050-system-resource-monitoring.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CpuStats {
     /// Number of logical CPUs (hardware threads) visible to the OS scheduler.

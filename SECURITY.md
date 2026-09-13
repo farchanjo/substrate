@@ -42,10 +42,10 @@ In scope:
 
 - The `substrate-mcp-server` binary and any `substrate-*` adapter crate.
 - The security model (allowlist, path jail, dry-run, elicitation) defined in
-  [ADR-0004](docs/arch/adr/0004-security-model.md) and
-  [ADR-0035](docs/arch/adr/0035-path-safety-hardening.md).
-- The audit-event taxonomy ([ADR-0038](docs/arch/adr/0038-audit-event-semantics.md))
-  and error taxonomy ([ADR-0010](docs/arch/adr/0010-error-taxonomy.md)).
+  [ADR-0004](doc/arch/adr/0004-security-model.md) and
+  [ADR-0035](doc/arch/adr/0035-path-safety-hardening.md).
+- The audit-event taxonomy ([ADR-0038](doc/arch/adr/0038-audit-event-semantics.md))
+  and error taxonomy ([ADR-0010](doc/arch/adr/0010-error-taxonomy.md)).
 - Supply-chain hygiene (Cargo manifest, build scripts, release artifacts).
 
 Out of scope:
@@ -71,8 +71,8 @@ contains the fix.
 
 ## Hardening references
 
-- [ADR-0004 — Security model](docs/arch/adr/0004-security-model.md): allowlist + path jail + dry-run + elicitation layers.
-- [ADR-0035 — Path safety hardening](docs/arch/adr/0035-path-safety-hardening.md): `openat2(RESOLVE_BENEATH | NO_SYMLINKS)` (Linux) and `O_NOFOLLOW_ANY` (macOS).
-- [ADR-0032 — Signal safety](docs/arch/adr/0032-signal-safety.md): SIGPIPE handling, blake3 mmap disabled.
-- [ADR-0044 — No subprocess policy](docs/arch/adr/0044-no-subprocess-policy.md): no `std::process::Command` in shipping crates.
-- [ADR-0029 — Threat model](docs/arch/adr/0029-threat-model.md): documented attacker model and trust boundaries.
+- [ADR-0004 — Security model](doc/arch/adr/0004-security-model.md): allowlist + path jail + dry-run + elicitation layers.
+- [ADR-0035 — Path safety hardening](doc/arch/adr/0035-path-safety-hardening.md): `openat2(RESOLVE_BENEATH | NO_SYMLINKS)` (Linux) and `O_NOFOLLOW_ANY` (macOS).
+- [ADR-0032 — Signal safety](doc/arch/adr/0032-signal-safety.md): SIGPIPE handling, blake3 mmap disabled.
+- [ADR-0044 — No subprocess policy](doc/arch/adr/0044-no-subprocess-policy.md): no `std::process::Command` in shipping crates.
+- [ADR-0029 — Threat model](doc/arch/adr/0029-threat-model.md): documented attacker model and trust boundaries.

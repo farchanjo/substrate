@@ -4,7 +4,7 @@
 //! modifying disk. The manifest lists every entry that would be created or
 //! overwritten, together with totals.
 //!
-//! Mirrors `#ArchiveManifest` in `docs/arch/schemas/archive_bc.cue`.
+//! Mirrors `#ArchiveManifest` in `doc/arch/schemas/archive_bc.cue`.
 
 use serde::{Deserialize, Serialize};
 

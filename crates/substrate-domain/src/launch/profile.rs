@@ -1,7 +1,7 @@
 //! Launch Profile value objects parsed from `.substrate.toml`.
 //!
 //! Mirrors `#LaunchProfile`, `#LaunchService`, `#LaunchOperatorConfig`, and
-//! `#LaunchChannelBounds` in `docs/arch/schemas/launch.cue`. A `LaunchProfile`
+//! `#LaunchChannelBounds` in `doc/arch/schemas/launch.cue`. A `LaunchProfile`
 //! is immutable once loaded and trusted (ADR-0063). `RestartPolicy` and
 //! `HealthProbe` are reused verbatim from the subprocess BC (ADR-0056).
 //!

@@ -1,6 +1,6 @@
 //! `JobEntry` — in-memory aggregate root snapshot per ADR-0040.
 //!
-//! Mirrors `#JobEntry` in `docs/arch/schemas/job.cue`.
+//! Mirrors `#JobEntry` in `doc/arch/schemas/job.cue`.
 //! State transitions are serialised through a `parking_lot::Mutex<JobState>`
 //! in the `substrate-jobs` adapter; the domain type is a plain data struct.
 //! Mutation methods live in the registry adapter, not here.

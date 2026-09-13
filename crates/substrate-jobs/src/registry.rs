@@ -840,7 +840,7 @@ mod tests {
     /// watch channel, `status()` must report the terminal state — not the
     /// initial `Pending` snapshot captured at submit time.
     ///
-    /// Per [ADR-0040](../../../docs/arch/adr/0040-async-job-control-plane.md)
+    /// Per [ADR-0040](../../../doc/arch/adr/0040-async-job-control-plane.md)
     /// `job.status` returns the live snapshot; the regression keeps the entry
     /// stuck at `Pending` even though the result channel was set.
     #[tokio::test]

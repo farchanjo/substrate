@@ -14,7 +14,7 @@
 //! Step definition modules for the launch bounded context (ADR-0063..0069).
 //!
 //! Covers the 36 Gherkin features under
-//! `docs/arch/specs/features/launch/`. Split by concern, mirroring the
+//! `doc/arch/specs/features/launch/`. Split by concern, mirroring the
 //! `subprocess/` directory:
 //!
 //! - [`trust`] — TOFU trust gate, symlink/dir/permission rejection (ADR-0064).

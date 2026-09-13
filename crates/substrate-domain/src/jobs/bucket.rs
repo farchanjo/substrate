@@ -1,6 +1,6 @@
 //! `JobBucket` — static dispatch classification for every MCP tool per ADR-0040.
 //!
-//! Mirrors `#JobBucket` in `docs/arch/schemas/job.cue`.
+//! Mirrors `#JobBucket` in `doc/arch/schemas/job.cue`.
 //! Bucket assignment is compile-time constant per tool except for Bucket B,
 //! whose actual inline-vs-job path is decided at runtime based on payload size.
 //!

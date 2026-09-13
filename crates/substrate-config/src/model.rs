@@ -1,5 +1,5 @@
-//! Configuration model types mirroring `docs/arch/schemas/runtime_config.cue`,
-//! `docs/arch/schemas/index_config.cue`, and `docs/arch/schemas/security_policy.cue`.
+//! Configuration model types mirroring `doc/arch/schemas/runtime_config.cue`,
+//! `doc/arch/schemas/index_config.cue`, and `doc/arch/schemas/security_policy.cue`.
 //!
 //! Every struct uses `#[serde(deny_unknown_fields)]` per ADR-0006 so that typos
 //! in operator TOML fail at load time with a clear error.
@@ -14,7 +14,7 @@ use substrate_domain::{CapabilityOverride, jobs::config::JobConfig};
 
 /// Top-level runtime configuration aggregate root.
 ///
-/// Mirrors `#RuntimeConfig` in `docs/arch/schemas/runtime_config.cue`.
+/// Mirrors `#RuntimeConfig` in `doc/arch/schemas/runtime_config.cue`.
 /// All sub-sections have safe defaults; an empty TOML file is valid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -24,7 +24,7 @@ pub struct RuntimeConfig {
 
     /// Allowlist policy: the set of absolute path roots accessible to tools.
     ///
-    /// Mirrors `#Allowlist.roots` in `docs/arch/schemas/security_policy.cue`.
+    /// Mirrors `#Allowlist.roots` in `doc/arch/schemas/security_policy.cue`.
     /// A process with an empty allowlist refuses all path-jail operations.
     /// The field defaults to an empty `Vec` so that an empty TOML file is
     /// structurally valid, but the composition root will fail at `Allowlist::new`
@@ -240,7 +240,7 @@ impl Default for LoggingConfig {
 
 // ---- PolicyConfig -----------------------------------------------------------
 
-/// Allowlist policy configuration per `#Allowlist` in `docs/arch/schemas/security_policy.cue`.
+/// Allowlist policy configuration per `#Allowlist` in `doc/arch/schemas/security_policy.cue`.
 ///
 /// Embedded under the `[policy]` TOML section.
 /// An empty `roots` list is valid TOML but causes the composition root to fail
@@ -437,7 +437,7 @@ impl Default for ProtocolConfig {
 
 /// Optional in-process filesystem index configuration per ADR-0041.
 ///
-/// Mirrors `#IndexConfig` in `docs/arch/schemas/index_config.cue`.
+/// Mirrors `#IndexConfig` in `doc/arch/schemas/index_config.cue`.
 /// Embedded under the `[index]` TOML section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]

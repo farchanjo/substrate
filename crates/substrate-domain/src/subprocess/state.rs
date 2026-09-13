@@ -1,6 +1,6 @@
 //! `SubprocessState` — lifecycle state machine for a spawned child process.
 //!
-//! Mirrors `#SubprocessState` in `docs/arch/schemas/subprocess.cue`.
+//! Mirrors `#SubprocessState` in `doc/arch/schemas/subprocess.cue`.
 //! Terminal states (`Succeeded`, `Failed`, `Cancelled`, `Killed`, `TimedOut`)
 //! never regress. Invalid transitions return an error (no panic) per the `GoF`
 //! State pattern and ADR-0040 conventions.

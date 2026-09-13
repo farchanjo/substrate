@@ -12,7 +12,7 @@
 //! Its fields are all `Option<T>` with `#[serde(default)]` (standard, no custom fn),
 //! so `derive(Default)` is safe there. If `page_size` or another serde-fn-defaulted
 //! field is added in the future, replace `#[derive(Default)]` with a manual impl.
-//! Enforced by: `docs/arch/policies/request_default_invariants.rego`
+//! Enforced by: `doc/arch/policies/request_default_invariants.rego`
 //!
 //! Every tool name is a static, compile-time constant matched here. Bucket B/C
 //! tools follow the inline-vs-job decision policy from ADR-0040. Bucket A/D

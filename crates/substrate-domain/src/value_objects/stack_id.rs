@@ -1,6 +1,6 @@
 //! `StackId` — uniquely identifies a running launch Stack instance.
 //!
-//! Mirrors `#Stack.stack_id` in `docs/arch/schemas/launch.cue`: a `UUIDv7`
+//! Mirrors `#Stack.stack_id` in `doc/arch/schemas/launch.cue`: a `UUIDv7`
 //! encoded as Crockford base32 (26 uppercase characters, `^[0-9A-HJKMNP-TV-Z]{26}$`).
 //! Structurally identical to [`JobId`] and [`SubprocessId`]; semantically scoped
 //! to the launch bounded context (ADR-0063).

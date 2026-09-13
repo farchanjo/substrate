@@ -2,7 +2,7 @@
 //!
 //! These types mirror the `#NetworkTcpListRequest`, `#NetworkTcpListResult`,
 //! `#NetworkUdpListRequest`, and `#NetworkUdpListResult` definitions in
-//! `docs/arch/schemas/network.cue` per ADR-0058 §"Wire Shape".
+//! `doc/arch/schemas/network.cue` per ADR-0058 §"Wire Shape".
 //!
 //! References: ADR-0058, ADR-0057 (pagination).
 

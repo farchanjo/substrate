@@ -52,7 +52,7 @@ pub trait JobRegistryPort: Send + Sync {
     /// already-substituted value as `Some(d)` or `None` (fast-return). The
     /// substitution logic and the boot guard that rejects an invalid wait window
     /// live exclusively in the handler layer; the port and the registry adapter are
-    /// unaware of the default. See [ADR-0059](../../../docs/arch/adr/0059-universal-wait-timeout-enforcement.md).
+    /// unaware of the default. See [ADR-0059](../../../doc/arch/adr/0059-universal-wait-timeout-enforcement.md).
     ///
     /// # Errors
     ///

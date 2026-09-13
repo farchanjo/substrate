@@ -2,7 +2,7 @@
 //!
 //! Mirrors `#Capabilities`, `#SimdTier`, `#WalkerTier`, `#WatcherTier`,
 //! `#JailTier`, `#HashTier`, `#StatTier`, and `#CapabilityOverride` from
-//! `docs/arch/schemas/simd_capability.cue`.
+//! `doc/arch/schemas/simd_capability.cue`.
 //!
 //! `probe_capabilities()` runs once at startup (in `substrate-mcp-server`)
 //! and stores the result in `std::sync::OnceLock<Capabilities>`. Domain code
@@ -221,7 +221,7 @@ impl Default for Capabilities {
 
 /// Operator-supplied tier overrides for integration testing or explicit tier downgrade.
 ///
-/// Mirrors `#CapabilityOverride` in `docs/arch/schemas/simd_capability.cue`.
+/// Mirrors `#CapabilityOverride` in `doc/arch/schemas/simd_capability.cue`.
 /// All fields are optional; absent fields use the probe-detected tier.
 /// Validated at config load time — an invalid tier name aborts startup with
 /// `SUBSTRATE_TIER_OVERRIDE_INVALID`.

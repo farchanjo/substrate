@@ -1,6 +1,6 @@
 //! `ProgressEvent` — push-channel payload for async job progress notifications.
 //!
-//! Mirrors `#ProgressEvent` in `docs/arch/schemas/job.cue`.
+//! Mirrors `#ProgressEvent` in `doc/arch/schemas/job.cue`.
 //! Events are throttled: suppressed unless 250 ms have elapsed since the last
 //! emission OR the progress delta >= 1 percentage point per ADR-0040.
 //! `sequence_number` is sourced from a per-job `AtomicU64` for dropped-event detection.

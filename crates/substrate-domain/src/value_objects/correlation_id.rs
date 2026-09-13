@@ -1,6 +1,6 @@
 //! `CorrelationId` — request-chain correlation identifier.
 //!
-//! Per `docs/arch/schemas/shared_kernel.cue`: `#CorrelationId` is an alias
+//! Per `doc/arch/schemas/shared_kernel.cue`: `#CorrelationId` is an alias
 //! for `#JobId`. In practice the triple-equality invariant from ADR-0040 means
 //! a `CorrelationId` value IS the `JobId` — no mapping table is needed.
 

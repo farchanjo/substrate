@@ -5,7 +5,7 @@
 //! `SUBSTRATE_RESOURCE_LIMIT` and the caller discards the in-progress output.
 //!
 //! This guard satisfies the Gherkin scenario in
-//! `docs/arch/specs/features/archive/archive-gzip-large-input-resource-limit.feature`.
+//! `doc/arch/specs/features/archive/archive-gzip-large-input-resource-limit.feature`.
 //!
 //! Default ceiling: 100 MiB (`DEFAULT_MAX_OUTPUT_BYTES`).
 

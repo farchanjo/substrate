@@ -2,7 +2,7 @@
 """extract_request_structs.py — Scan Rust source for request struct metadata.
 
 Produces JSON on stdout in the shape expected by
-docs/arch/policies/request_default_invariants.rego (ADR-0061):
+doc/arch/policies/request_default_invariants.rego (ADR-0061):
 
   {
     "structs": [

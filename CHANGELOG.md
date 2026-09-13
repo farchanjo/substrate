@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Commit messages follow the Angular convention defined in
-[ADR-0024](docs/arch/adr/0024-repo-conventions.md).
+[ADR-0024](doc/arch/adr/0024-repo-conventions.md).
 
 ## [Unreleased]
 
@@ -22,7 +22,7 @@ Commit messages follow the Angular convention defined in
 - `SubprocessResult.stdout_tmp_path` / `stderr_tmp_path` `Option<PathBuf>`
   fields — absolute paths to persisted final stream files; set only when
   `capture_kind = "tmp_file"` and the job terminates with `Succeeded`.
-- `#SubprocessResult` CUE definition added to `docs/arch/schemas/subprocess.cue`
+- `#SubprocessResult` CUE definition added to `doc/arch/schemas/subprocess.cue`
   formalising the terminal output shape including tmp path fields.
 
 - subprocess bounded context (ADR-0052 supersedes ADR-0044) with tools
@@ -79,7 +79,7 @@ documentation) before the tag landed at its final commit.
 
 ### Added
 
-**Architecture spec** (`docs/arch/`)
+**Architecture spec** (`doc/arch/`)
 
 - 49 MADR 4.0 ADRs covering: bounded contexts, crate stack + async zones,
   security model, error taxonomy, MCP protocol negotiation, async job

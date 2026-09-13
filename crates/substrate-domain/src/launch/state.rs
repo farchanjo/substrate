@@ -1,6 +1,6 @@
 //! `StackState` — lifecycle state machine for a whole launch Stack.
 //!
-//! Mirrors `#StackState` in `docs/arch/schemas/launch.cue`. This is distinct
+//! Mirrors `#StackState` in `doc/arch/schemas/launch.cue`. This is distinct
 //! from the per-Service `SubprocessState`: a Stack aggregates many child
 //! processes and has its own lifecycle. `Draining` and `Down` are terminal and
 //! never regress. Invalid transitions return `false` (no panic) per the `GoF`
