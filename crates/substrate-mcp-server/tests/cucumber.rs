@@ -180,6 +180,10 @@ impl SubstrateWorld {
             "[policy]\nroots = [\"{root}\"]\n\n\
              [logging]\nlevel = \"error\"\n\n\
              [security]\nrefuse_degraded_jail = false\n\n\
+             [subprocess]\n\
+             # The launch profile fixtures run /bin/echo; the field is\n\
+             # default-deny, so an unset allowlist rejects every binary.\n\
+             binary_allowlist = [\"/bin/echo\"]\n\n\
              [timeouts]\nglobal_default_seconds = 30\nshutdown_drain_secs = 2\n",
             root = root.display()
         );
@@ -198,6 +202,15 @@ impl SubstrateWorld {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Point XDG_CONFIG_HOME at an empty directory: otherwise the figment
+            // loader merges the developer's ~/.config/substrate/config.toml on
+            // top of the sandbox config, and the suite behaves differently on a
+            // machine that has one (a CI runner does not).
+            .env("XDG_CONFIG_HOME", {
+                let isolated = dir.join("isolated_xdg");
+                let _ = std::fs::create_dir_all(&isolated);
+                isolated
+            })
             .spawn()
             .expect("failed to spawn substrate binary")
     }
