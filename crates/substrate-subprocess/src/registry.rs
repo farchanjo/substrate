@@ -1566,11 +1566,14 @@ impl SubprocessPort for SubprocessRegistry {
         // has not been polled yet leaves the aggregates empty. Wait (bounded) for
         // the readers to drain before snapshotting, so a terminal job never
         // reports a truncated result and `TmpFile` finalises a complete file.
+        // Ungated by `include_aggregates`: the byte totals and
+        // `stream_chunks_dropped` are always reported, and a `TmpFile` is always
+        // finalised, so every caller needs the drain.
         let child_exited = reaped || {
             let guard = handle.child.lock().await;
             guard.is_none()
         };
-        if include_aggregates && child_exited {
+        if child_exited {
             handle.await_capture_drain(CAPTURE_DRAIN_GRACE).await;
         }
 
