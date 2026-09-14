@@ -3203,7 +3203,12 @@ async fn given_file_with_numbered_lines(
         "the declared line count must match the {first:?} through {last:?} range"
     );
 
-    let body: String = (start..=end).map(|n| format!("{prefix}{n}\n")).collect();
+    let mut body = String::new();
+    for n in start..=end {
+        // `write!` into a `String` is infallible, so the result is discarded.
+        let _ = std::fmt::Write::write_fmt(&mut body, format_args!("{prefix}{n}\n"));
+    }
+
     let real_path = path.replace("/work/repo", &world.root_str());
     if let Some(parent) = std::path::Path::new(&real_path).parent() {
         let _ = std::fs::create_dir_all(parent);
