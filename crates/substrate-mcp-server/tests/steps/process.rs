@@ -37,6 +37,17 @@ async fn given_host_many_processes(world: &mut SubstrateWorld, min: u32) {
 
 #[given(regex = r#"^the host has a running process with pid=(\d+) and name="([^"]+)"$"#)]
 async fn given_running_process_pid(world: &mut SubstrateWorld, pid: u32, name: String) {
+    // The pid in the feature is a placeholder: nothing guarantees the host has
+    // that exact pid, and the liveness assertion below reads /proc on Linux.
+    // Spawn a real long-lived process so there is something to find, and record
+    // its pid alongside the literal one.
+    if let Ok(child) = std::process::Command::new("sleep").arg("300").spawn() {
+        world
+            .context
+            .insert("live_pid".to_string(), child.id().to_string());
+        // Detach the handle: the process outlives this step, which is the point.
+        std::mem::forget(child);
+    }
     world
         .context
         .insert("target_pid".to_string(), pid.to_string());
@@ -306,17 +317,24 @@ async fn then_proc_no_pid_overlap(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the process pid=(\d+) is still running$"#)]
 async fn then_proc_still_running(world: &mut SubstrateWorld, pid: u32) {
+    // Prefer the pid the fixture actually spawned: the literal one in the
+    // feature is a placeholder and need not exist on the host.
+    let live = world
+        .context
+        .get("live_pid")
+        .cloned()
+        .unwrap_or_else(|| pid.to_string());
     // Verify the process exists in /proc on Linux or via sysinfo on macOS.
     #[cfg(target_os = "linux")]
     {
         assert!(
-            std::path::Path::new(&format!("/proc/{pid}")).exists(),
-            "expected pid {pid} to still exist"
+            std::path::Path::new(&format!("/proc/{live}")).exists(),
+            "expected pid {live} to still exist"
         );
     }
     // On macOS we skip the live check — it requires the pid fixture to be real.
     #[cfg(not(target_os = "linux"))]
-    let _ = pid;
+    let _ = live;
 }
 
 #[then(regex = r#"^the process pid=(\d+) is no longer running$"#)]
