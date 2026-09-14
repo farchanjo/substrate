@@ -3219,6 +3219,32 @@ async fn given_file_with_numbered_lines(
         .insert("numbered_file_path".to_string(), real_path);
 }
 
+/// Materializes a file whose bytes are fixed, so a digest taken by one call can
+/// be compared with a later call. The scenarios assert only that a digest comes
+/// back and that repeated calls agree, so the bytes need to be stable, not
+/// meaningful.
+#[given(regex = r#"^the file "([^"]+)" exists on disk with known content$"#)]
+async fn given_file_with_known_content(world: &mut SubstrateWorld, path: String) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    // 4 KiB of a repeating byte pattern: large enough to exercise the streaming
+    // hash path, and identical on every platform and run.
+    let body: Vec<u8> = (0..4096u32)
+        .map(|i| u8::try_from(i % 251).expect("i % 251 is below 251"))
+        .collect();
+
+    let real_path = path.replace("/work/repo", &world.root_str());
+    if let Some(parent) = std::path::Path::new(&real_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&real_path, &body).expect("write known-content fixture");
+    world
+        .context
+        .insert("known_content_path".to_string(), real_path);
+}
+
 // ---------------------------------------------------------------------------
 // Given — job scenarios (submitted, running, completed)
 // ---------------------------------------------------------------------------
