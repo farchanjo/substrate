@@ -44,6 +44,7 @@ pub(crate) mod signal_handlers;
 pub(crate) mod stub_ports;
 
 use std::process::ExitCode;
+#[cfg(feature = "launch")]
 use std::time::Duration;
 
 use substrate_domain::JailTier;
@@ -57,6 +58,7 @@ use substrate_domain::JailTier;
 /// expiry, `launch.down`, drain) would sit alive forever with its registry
 /// already cleared. The parked thread has nothing left to do at that point, so
 /// the shutdown is bounded rather than awaited.
+#[cfg(feature = "launch")]
 const SUPERVISOR_SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
 /// Emits the ADR-0036 startup-error JSON envelope to stderr, then flushes.
@@ -367,8 +369,10 @@ fn run_supervisor_process(args: substrate_launch::detached::SuperviseArgs) -> Ex
 
 /// Applies [`SUPERVISOR_SHUTDOWN_GRACE`] when the supervisor's runtime is torn
 /// down, on both the normal and the panicking exit path.
+#[cfg(feature = "launch")]
 struct SupervisorRuntimeGuard(Option<tokio::runtime::Runtime>);
 
+#[cfg(feature = "launch")]
 impl Drop for SupervisorRuntimeGuard {
     fn drop(&mut self) {
         if let Some(runtime) = self.0.take() {
