@@ -92,11 +92,6 @@ pub struct FsHashRequest {
 ///
 /// Propagates any [`SubstrateError`] from jail validation, semaphore closure,
 /// or file I/O during hashing.
-#[expect(
-    clippy::too_many_lines,
-    reason = "handle_fs_hash orchestrates jail, semaphore acquisition, and the BLAKE3/SHA-256 \
-              dispatch (including the streaming SHA-256 read loop) in one cohesive Zone-C handler"
-)]
 #[instrument(skip(deps, _cancel), fields(path = %req.path, algorithm = %req.algorithm))]
 pub async fn handle_fs_hash(
     req: FsHashRequest,
