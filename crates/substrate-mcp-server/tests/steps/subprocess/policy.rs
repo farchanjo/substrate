@@ -139,10 +139,10 @@ async fn when_spawn_binary_with_args(
             let job_id = handle.job_id.clone();
             let result = registry.result(&job_id, 3000, false).await;
             if let Ok(r) = result {
-                // Only store exit_code when it is genuinely available.
-                // The registry returns None when exit_code capture is not yet
-                // implemented (production gap); do not store a -999 sentinel
-                // because then_exit_code would fail on a valid run.
+                // `result()` reports the real exit code for a child that exited;
+                // it stays `None` only for a signal death (the spec's
+                // `exit_code: null`), so store it whenever it is present rather
+                // than inventing a sentinel `then_exit_code` would trip on.
                 if let Some(code) = r.exit_code {
                     world
                         .context

@@ -10,8 +10,8 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use tokio::sync::{Mutex, Semaphore};
@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use substrate_domain::subprocess::request::CaptureKind;
 use substrate_domain::subprocess::state::SubprocessState;
-use substrate_domain::subprocess::supervisor::HealthProbe;
+use substrate_domain::subprocess::supervisor::{HealthProbe, RestartPolicy};
 use substrate_domain::subprocess::{StdinKind, SubprocessError, SubprocessRequest};
 use substrate_domain::value_objects::{JobId, ProcessGroup};
 
@@ -29,6 +29,9 @@ use substrate_policy::Allowlist;
 // SubprocessState ↔ u8 conversion helpers (private to this crate).
 // AtomicU8 is used in ChildHandle.state for lock-free reads by snapshot_handle.
 // ---------------------------------------------------------------------------
+
+/// Sentinel for [`ChildHandle::exit_code`]: no exit status recorded yet.
+pub const EXIT_CODE_UNKNOWN: i32 = i32::MIN;
 
 /// Maps a [`SubprocessState`] to its stable u8 discriminant.
 ///
@@ -201,6 +204,28 @@ pub struct ChildHandle {
     /// Surfaced in the terminal job result per ADR-0054.
     pub stream_chunks_dropped: Arc<AtomicU64>,
 
+    /// Whether a supervisor watcher owns this handle's state machine (ADR-0056).
+    ///
+    /// `true` for any handle spawned with a restart policy other than `Never`.
+    /// The watcher writes `Restarting` and the post-respawn rebind, so neither
+    /// the dispatcher task nor `result()` may overwrite the state on child exit —
+    /// they would race the watcher's own writes.
+    pub supervised: bool,
+
+    /// The child's OS exit status code, or [`EXIT_CODE_UNKNOWN`] while it is still
+    /// running (or when the platform reports no code for a signal death).
+    ///
+    /// Written by [`ChildHandle::wait_exit`] the moment the child is reaped, so
+    /// `subprocess.result` and `subprocess.list` report it without reaping.
+    pub exit_code: Arc<AtomicI32>,
+
+    /// Cached reap result, written once by [`ChildHandle::wait_exit`].
+    ///
+    /// Its presence is also the handle's "the child is gone" signal
+    /// ([`ChildHandle::has_exited`]), which the result path uses to decide
+    /// whether a capture drain and a `TmpFile` finalisation are safe.
+    exit_status: std::sync::Mutex<Option<std::process::ExitStatus>>,
+
     /// Capture reader tasks that have not yet returned.
     ///
     /// Incremented by two in [`spawn_stream_captures`](crate::stream_capture::spawn_stream_captures)
@@ -245,20 +270,84 @@ impl ChildHandle {
     /// Locks the `child` mutex, takes the `Child` out of the `Option`, and calls
     /// `Child::wait()`. Returns `None` if the child was already waited on.
     ///
+    /// On a successful reap the OS exit status code is recorded on the handle
+    /// (see [`Self::exit_code`]) so that every other observer — `result()`,
+    /// `snapshot_handle` — reports it without needing to reap again.
+    ///
+    /// # Cancel safety
+    ///
+    /// The `Child` stays inside the handle for the whole wait (the mutex guard
+    /// is held across the await), so dropping this future — a `result()` whose
+    /// `wait_ms` elapsed, a `select!` arm that lost — leaves the child
+    /// reap-able by the next caller. It used to be taken out of the handle,
+    /// which meant a single timed-out `result()` stranded the exit status
+    /// forever: the job's terminal state then fell back to `Killed` and
+    /// `exit_code` stayed null for every later observer.
+    ///
     /// # Errors
     ///
     /// Returns `std::io::Error` if `Child::wait()` fails.
     pub async fn wait_exit(&self) -> std::io::Result<Option<std::process::ExitStatus>> {
-        // Take the child out of the mutex before awaiting to avoid holding
-        // the MutexGuard across .await (clippy::significant_drop_tightening).
-        let child_opt = {
-            let mut guard = self.child.lock().await;
-            guard.take()
-        };
-        let Some(mut child) = child_opt else {
+        // Fast path: an earlier (or concurrent) waiter already reaped it.
+        if let Some(status) = self.reaped_status() {
+            return Ok(Some(status));
+        }
+
+        let mut guard = self.child.lock().await;
+        // Re-check under the lock: the waiter that held it may have just finished.
+        if let Some(status) = self.reaped_status() {
+            return Ok(Some(status));
+        }
+        let Some(child) = guard.as_mut() else {
             return Ok(None);
         };
-        child.wait().await.map(Some)
+
+        let status = child.wait().await?;
+        // Release the child lock before publishing: the stores below touch
+        // separate fields and must not keep a concurrent waiter blocked.
+        drop(guard);
+
+        // `code()` is `None` for a signal death, which is exactly the spec's
+        // `exit_code: null` for a SIGKILL'd child — store it verbatim.
+        self.exit_code.store(
+            status.code().unwrap_or(EXIT_CODE_UNKNOWN),
+            Ordering::Release,
+        );
+        *self
+            .exit_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(status);
+        Ok(Some(status))
+    }
+
+    /// Whether any waiter has already reaped the child.
+    pub fn has_exited(&self) -> bool {
+        self.reaped_status().is_some()
+    }
+
+    /// The cached exit status, if the child has been reaped.
+    ///
+    /// A `std::sync::Mutex` (never held across an await) keeps the read cheap
+    /// enough for `has_exited` to be called from hot paths. A poisoned lock is
+    /// recovered rather than propagated: a panicking waiter must not make the
+    /// child look alive forever.
+    fn reaped_status(&self) -> Option<std::process::ExitStatus> {
+        *self
+            .exit_status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The child's OS exit status code, or `None` while it is still running or
+    /// when the platform reports no code because the child died from a signal.
+    ///
+    /// Recorded by [`Self::wait_exit`]; every caller that reaps the child writes
+    /// it, so this is populated for any path that observed the exit.
+    pub fn exit_code(&self) -> Option<i32> {
+        match self.exit_code.load(Ordering::Acquire) {
+            EXIT_CODE_UNKNOWN => None,
+            code => Some(code),
+        }
     }
 
     /// Waits (bounded by `budget`) until both capture readers have drained their
@@ -541,6 +630,12 @@ pub async fn spawn_supervised(
         stdout_bytes_total: Arc::new(AtomicU64::new(0)),
         stderr_bytes_total: Arc::new(AtomicU64::new(0)),
         stream_chunks_dropped: Arc::new(AtomicU64::new(0)),
+        exit_code: Arc::new(AtomicI32::new(EXIT_CODE_UNKNOWN)),
+        exit_status: std::sync::Mutex::new(None),
+        supervised: req
+            .restart_policy
+            .as_ref()
+            .is_some_and(|policy| !matches!(policy, RestartPolicy::Never)),
         readers_live: Arc::new(AtomicUsize::new(0)),
         readers_done: Arc::new(Semaphore::new(0)),
         stdout_seq: Arc::new(AtomicU64::new(0)),

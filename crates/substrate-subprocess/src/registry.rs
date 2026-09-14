@@ -628,7 +628,7 @@ impl SubprocessRegistry {
             process_group: handle.process_group,
             state: crate::spawn::u8_to_state(handle.state.load(Ordering::SeqCst)),
             started_at: time::OffsetDateTime::now_utc(),
-            exit_code: None,
+            exit_code: handle.exit_code(),
             stream_chunks_dropped: handle.stream_chunks_dropped.load(Ordering::Relaxed),
             tmp_files: Vec::new(),
         }
@@ -1070,10 +1070,7 @@ impl SubprocessPort for SubprocessRegistry {
         // dispatcher.state.store(terminal) and watcher.state.store(Restarting)
         // is non-deterministic and result(supervisor_id) could observe stale
         // terminal state during the backoff window.
-        let is_supervised_for_dispatcher = req
-            .restart_policy
-            .as_ref()
-            .is_some_and(|p| !matches!(p, RestartPolicy::Never));
+        let is_supervised_for_dispatcher = handle_for_dispatcher.supervised;
         tokio::spawn(async move {
             while let Some(chunk) = receiver.recv().await {
                 for observer in observers_for_dispatcher.iter() {
@@ -1102,7 +1099,16 @@ impl SubprocessPort for SubprocessRegistry {
             // Restarting + the post-respawn rebind on NEW ChildHandle starts
             // fresh at Running. Dispatcher's role on supervised handles is the
             // data-plane (chunk drain + on_terminal observer fan-out) only.
-            if !is_supervised_for_dispatcher {
+            //
+            // Also skip when the state is ALREADY terminal: `cancel()` writes
+            // its own verdict (Cancelled/Killed) once its cascade completes, and
+            // the derived state here would otherwise race it into `Failed` for a
+            // signalled child. First terminal writer wins; the dispatcher only
+            // fills in for a child that exited on its own.
+            let already_terminal =
+                crate::spawn::u8_to_state(handle_for_dispatcher.state.load(Ordering::SeqCst))
+                    .is_terminal();
+            if !is_supervised_for_dispatcher && !already_terminal {
                 handle_for_dispatcher
                     .state
                     .store(crate::spawn::state_to_u8(terminal_state), Ordering::SeqCst);
@@ -1547,19 +1553,35 @@ impl SubprocessPort for SubprocessRegistry {
             Arc::clone(&*guard)
         };
 
-        // If still live and wait_ms > 0, poll for exit. `Ok(Ok(None))` means a
-        // concurrent waiter (the dispatcher task) got the child first — it too
-        // only returns once the child is reaped. A timeout means it is still
-        // running.
-        let reaped = wait_ms > 0
-            && matches!(
-                tokio::time::timeout(
-                    Duration::from_millis(u64::from(wait_ms)),
-                    handle.wait_exit(),
-                )
-                .await,
-                Ok(Ok(_))
+        // If still live and wait_ms > 0, poll for exit. A timeout means it is
+        // still running.
+        let waited = if wait_ms > 0 {
+            tokio::time::timeout(
+                Duration::from_millis(u64::from(wait_ms)),
+                handle.wait_exit(),
+            )
+            .await
+            .ok()
+        } else {
+            None
+        };
+        let reaped = matches!(waited, Some(Ok(_)));
+
+        // A caller that just observed the exit must not be told the job is
+        // still `Running`: derive the terminal state from the status this call
+        // reaped and persist it, unless a supervisor watcher owns the state
+        // machine or a verdict (e.g. `cancel()`) already landed. The dispatcher
+        // task writes the same mapping once the capture readers finish, so both
+        // writers agree for a child that exited on its own.
+        if let Some(Ok(Some(status))) = &waited
+            && !handle.supervised
+            && !crate::spawn::u8_to_state(handle.state.load(Ordering::SeqCst)).is_terminal()
+        {
+            handle.state.store(
+                crate::spawn::state_to_u8(Self::terminal_state_from_exit(&Ok(Some(*status)))),
+                Ordering::SeqCst,
             );
+        }
 
         // The child being reaped does NOT mean its output has been read: the
         // last bytes can still sit in the pipe buffer, and a capture reader that
@@ -1569,10 +1591,7 @@ impl SubprocessPort for SubprocessRegistry {
         // Ungated by `include_aggregates`: the byte totals and
         // `stream_chunks_dropped` are always reported, and a `TmpFile` is always
         // finalised, so every caller needs the drain.
-        let child_exited = reaped || {
-            let guard = handle.child.lock().await;
-            guard.is_none()
-        };
+        let child_exited = reaped || handle.has_exited();
         if child_exited {
             handle.await_capture_drain(CAPTURE_DRAIN_GRACE).await;
         }
@@ -1669,7 +1688,7 @@ impl SubprocessPort for SubprocessRegistry {
 
         Ok(SubprocessResult {
             terminal_state: crate::spawn::u8_to_state(handle.state.load(Ordering::SeqCst)),
-            exit_code: None,
+            exit_code: handle.exit_code(),
             stdout_aggregate: stdout_agg,
             stderr_aggregate: stderr_agg,
             stdout_aggregate_truncated: stdout_truncated,
@@ -2471,6 +2490,163 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Acquire),
             0,
             "result() must have awaited the drain latch to completion"
+        );
+    }
+
+    /// Regression guard for `exit_code`: `result()` and `snapshot_handle` used
+    /// to hardcode `exit_code: None`, so no caller could ever learn how a child
+    /// exited even though ADR-0054's result shape declares `<i32 | null>`.
+    ///
+    /// A signal death must stay `None` (that is the spec's null), so this also
+    /// asserts the distinction rather than blanket-populating the field.
+    #[tokio::test]
+    async fn result_reports_the_child_exit_code() {
+        use substrate_domain::ports::subprocess::SubprocessPort as _;
+
+        let sh = std::path::PathBuf::from("/bin/sh");
+        assert!(sh.exists(), "/bin/sh must exist on this platform");
+        let tmp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).expect("temp_dir must be canonicalisable");
+        let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
+            .expect("temp_dir must be a valid allowlist root");
+
+        let registry = SubprocessRegistry::new(
+            strict(vec![sh.clone()]),
+            Vec::new(),
+            4,
+            8,
+            DEFAULT_AGGREGATE_BUFFER_BYTES,
+            5,
+            path_allowlist,
+            CancellationToken::new(),
+        );
+
+        let make_req = |script: &str| SubprocessRequest {
+            binary_path: sh.clone(),
+            args: vec!["-c".to_owned(), script.to_owned()],
+            cwd: tmp_dir.clone(),
+            env_allowlist: Vec::new(),
+            env_override: std::collections::BTreeMap::new(),
+            stdin_kind: substrate_domain::subprocess::StdinKind::None,
+            capture_kind: CaptureKind::InMemory,
+            timeout_secs: None,
+            idempotency_key: None,
+            elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
+            parent_death_signal: None,
+        };
+
+        // Non-zero exit: reported verbatim.
+        let handle = registry
+            .spawn(make_req("exit 7"), &NoCancel)
+            .await
+            .expect("spawn must succeed");
+        let result = registry
+            .result(&handle.job_id, 10_000, false)
+            .await
+            .expect("result must succeed");
+        assert_eq!(
+            result.exit_code,
+            Some(7),
+            "result() must report the child's real exit code"
+        );
+        assert_eq!(
+            result.terminal_state,
+            substrate_domain::subprocess::state::SubprocessState::Failed
+        );
+
+        // Clean exit: zero, not null.
+        let handle = registry
+            .spawn(make_req("exit 0"), &NoCancel)
+            .await
+            .expect("spawn must succeed");
+        let result = registry
+            .result(&handle.job_id, 10_000, false)
+            .await
+            .expect("result must succeed");
+        assert_eq!(result.exit_code, Some(0), "a clean exit must report 0");
+        assert_eq!(
+            result.terminal_state,
+            substrate_domain::subprocess::state::SubprocessState::Succeeded
+        );
+    }
+
+    /// Regression guard for `wait_exit` cancel safety: a `result()` whose
+    /// `wait_ms` elapses while the child is still running used to take the
+    /// `Child` out of the handle and drop it with the timed-out future, so the
+    /// process was left unreaped by anyone — every later observer then saw
+    /// `Killed` with a null exit code.
+    ///
+    /// The second call here must observe the real status.
+    #[tokio::test]
+    async fn timed_out_result_leaves_the_child_reapable() {
+        use substrate_domain::ports::subprocess::SubprocessPort as _;
+
+        let sh = std::path::PathBuf::from("/bin/sh");
+        assert!(sh.exists(), "/bin/sh must exist on this platform");
+        let tmp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).expect("temp_dir must be canonicalisable");
+        let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
+            .expect("temp_dir must be a valid allowlist root");
+
+        let registry = SubprocessRegistry::new(
+            strict(vec![sh.clone()]),
+            Vec::new(),
+            4,
+            8,
+            DEFAULT_AGGREGATE_BUFFER_BYTES,
+            5,
+            path_allowlist,
+            CancellationToken::new(),
+        );
+
+        let req = SubprocessRequest {
+            binary_path: sh,
+            // Outlives the first (100 ms) wait, then exits non-zero.
+            args: vec!["-c".to_owned(), "sleep 1; exit 4".to_owned()],
+            cwd: tmp_dir,
+            env_allowlist: Vec::new(),
+            env_override: std::collections::BTreeMap::new(),
+            stdin_kind: substrate_domain::subprocess::StdinKind::None,
+            capture_kind: CaptureKind::InMemory,
+            timeout_secs: None,
+            idempotency_key: None,
+            elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
+            parent_death_signal: None,
+        };
+
+        let handle = registry
+            .spawn(req, &NoCancel)
+            .await
+            .expect("spawn must succeed");
+        let job_id = handle.job_id.clone();
+
+        let early = registry
+            .result(&job_id, 100, false)
+            .await
+            .expect("result must succeed");
+        assert_eq!(early.exit_code, None, "the child is still running");
+
+        let late = registry
+            .result(&job_id, 10_000, false)
+            .await
+            .expect("result must succeed");
+        assert_eq!(
+            late.exit_code,
+            Some(4),
+            "a timed-out result() must not strand the child's exit status"
+        );
+        assert_eq!(
+            late.terminal_state,
+            substrate_domain::subprocess::state::SubprocessState::Failed,
+            "and must not fall back to Killed"
         );
     }
 

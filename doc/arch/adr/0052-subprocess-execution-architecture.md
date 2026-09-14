@@ -440,3 +440,39 @@ Cross-references: [ADR-0004](0004-security-model.md) §"Layer 5 binary/cwd
 allowlist"; implemented in `crates/substrate-subprocess/src/registry.rs`
 (`BinaryAllowlist::with_mode`, `resolve_binary_allowed`) and
 `crates/substrate-config/src/model.rs` (`SubprocessConfig::binary_allowlist_mode`).
+
+## Amendment 2026-09-14: `exit_code` is actually captured
+
+`SubprocessResult.exit_code` and `SubprocessHandle.exit_code` were hardcoded to
+`None` at both construction sites (`registry.rs`), so no caller could ever learn
+how a child exited — the field was declared `<i32 | null>` in the ADR-0054
+result shape and in the CUE schemas, and stayed null even for a plain
+`exit 0`. It now reports the real status code, and stays `None` exactly where
+the spec says it must: while the child is still running, and for a signal death
+(the platform reports no code).
+
+Two properties came out of making it real, both of which the field's
+correctness depends on:
+
+**`wait_exit` is cancel-safe.** It used to take the `Child` out of the handle
+and drop it with the awaiting future, so one `result()` whose `wait_ms` elapsed
+stranded the exit status forever: the child was left unreaped by anyone, and
+every later observer read the `Ok(None)` fallback — terminal state `Killed`,
+`exit_code` null. The `Child` now stays in the handle for the whole wait, and
+the reaped status is cached on it, so a timed-out caller merely stops waiting
+and the next one reaps.
+
+**The first terminal writer wins.** The dispatcher task derives a state from the
+exit status once the capture readers finish; `cancel()` writes its own verdict
+when its cascade completes. The dispatcher no longer overwrites a state that is
+already terminal, so a cancelled child cannot be raced into `Failed`. For the
+same reason `result()` now derives and persists the terminal state when it
+reaped the child itself, instead of reporting `Running` alongside a real exit
+code. Neither writes when a supervisor watcher owns the handle (`supervised`,
+i.e. any restart policy other than `Never`), which was already the dispatcher's
+rule.
+
+Cross-references: [ADR-0054](0054-subprocess-stream-multiplex.md) §"Result
+Shape" (`exit_code: <i32 | null>`; null for a SIGKILL'd child);
+[ADR-0053](0053-process-lifecycle-cascade-contract.md) — the cascade relies on
+`wait_exit` being re-runnable after a `select!` arm loses.
