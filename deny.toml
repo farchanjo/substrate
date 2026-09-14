@@ -28,6 +28,9 @@ allow = [
     # via syn/proc-macro2) and `unicode-normalization`.
     "Unicode-3.0",
     "MPL-2.0",
+    # CC0-1.0 — public-domain dedication with no attribution obligation;
+    # required by `notify` (the filesystem watcher).
+    "CC0-1.0",
 ]
 
 [sources]
