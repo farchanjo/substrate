@@ -68,7 +68,9 @@ jobs:
       - name: cargo test --test cucumber (nextest cannot list this harness)
         run: cargo test --workspace --all-features --test cucumber -p substrate-mcp-server
 
+      # `always()` so a cucumber failure does not hide the doctest result.
       - name: cargo test --doc (nextest does not run doctests)
+        if: always()
         run: cargo test --workspace --all-features --doc
 
   # ---------------------------------------------------------------------------

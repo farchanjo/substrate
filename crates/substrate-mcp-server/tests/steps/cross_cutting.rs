@@ -1090,7 +1090,11 @@ async fn when_substrate_starts(world: &mut SubstrateWorld) {
     // blocks forever when the server starts successfully and waits on stdin.
     let mut child = match Command::new(SubstrateWorld::binary_path())
         .current_dir(tmp.path())
-        .stdin(Stdio::null()) // null stdin so the server sees EOF immediately
+        // A live stdin, not /dev/null: the server opens the STDIO transport and
+        // then waits for an initialize request. With null stdin it sees EOF,
+        // fails rmcp initialization, and exits 74 — which the scenario asserting
+        // a successful startup would read as a premature exit.
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("XDG_CONFIG_HOME", &isolated_home)
