@@ -3168,6 +3168,53 @@ async fn given_file_with_mode_only(world: &mut SubstrateWorld, path: String, mod
 }
 
 // ---------------------------------------------------------------------------
+// Given — text-processing fixtures
+// ---------------------------------------------------------------------------
+
+/// Materializes a file of `count` lines whose labels run from `first` to `last`,
+/// e.g. `"line 1" through "line 200"`. The shared prefix comes from `first`, so
+/// the middle labels follow without being spelled out in the scenario.
+#[given(
+    regex = r#"^the file "([^"]+)" contains (\d+) lines numbered "([^"]+)" through "([^"]+)"$"#
+)]
+async fn given_file_with_numbered_lines(
+    world: &mut SubstrateWorld,
+    path: String,
+    count: u32,
+    first: String,
+    last: String,
+) {
+    if world.child.is_none() {
+        world.spawn_and_initialize();
+    }
+
+    let prefix = first.trim_end_matches(|c: char| c.is_ascii_digit());
+    let start: u32 = first
+        .trim_start_matches(prefix)
+        .parse()
+        .expect("first line label carries a number");
+    let end: u32 = last
+        .trim_start_matches(prefix)
+        .parse()
+        .expect("last line label carries a number");
+    assert_eq!(
+        end - start + 1,
+        count,
+        "the declared line count must match the {first:?} through {last:?} range"
+    );
+
+    let body: String = (start..=end).map(|n| format!("{prefix}{n}\n")).collect();
+    let real_path = path.replace("/work/repo", &world.root_str());
+    if let Some(parent) = std::path::Path::new(&real_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&real_path, body.as_bytes()).expect("write numbered-line fixture");
+    world
+        .context
+        .insert("numbered_file_path".to_string(), real_path);
+}
+
+// ---------------------------------------------------------------------------
 // Given — job scenarios (submitted, running, completed)
 // ---------------------------------------------------------------------------
 
