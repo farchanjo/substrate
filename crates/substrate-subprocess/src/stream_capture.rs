@@ -62,20 +62,41 @@ pub fn spawn_stream_captures(
             source: std::io::Error::other("child stderr was not piped"),
         })?;
 
+    // Register both readers on the handle's drain latch *before* spawning them,
+    // so `ChildHandle::await_capture_drain` can never observe a half-counted
+    // state (a reader that has not been polled yet still counts as live).
+    handle.readers_live.fetch_add(2, Ordering::Release);
+
     // Spawn stdout reader.
     let stdout_handle = Arc::clone(handle);
     let stdout_sender = sender.clone();
     tokio::spawn(async move {
-        read_stream(stdout, Stream::Stdout, stdout_handle, stdout_sender).await;
+        read_stream(
+            stdout,
+            Stream::Stdout,
+            Arc::clone(&stdout_handle),
+            stdout_sender,
+        )
+        .await;
+        release_reader(&stdout_handle);
     });
 
     // Spawn stderr reader.
     let stderr_handle = Arc::clone(handle);
     tokio::spawn(async move {
-        read_stream(stderr, Stream::Stderr, stderr_handle, sender).await;
+        read_stream(stderr, Stream::Stderr, Arc::clone(&stderr_handle), sender).await;
+        release_reader(&stderr_handle);
     });
 
     Ok(())
+}
+
+/// Marks one capture reader as finished: release the drain permit *before*
+/// decrementing the live counter, so a caller that observes a zero counter is
+/// guaranteed that both permits are already available.
+fn release_reader(handle: &ChildHandle) {
+    handle.readers_done.add_permits(1);
+    handle.readers_live.fetch_sub(1, Ordering::Release);
 }
 
 /// Creates a bounded mpsc channel for stream chunks per ADR-0054.

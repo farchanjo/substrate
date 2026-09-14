@@ -11,9 +11,10 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use substrate_domain::subprocess::request::CaptureKind;
@@ -200,6 +201,17 @@ pub struct ChildHandle {
     /// Surfaced in the terminal job result per ADR-0054.
     pub stream_chunks_dropped: Arc<AtomicU64>,
 
+    /// Capture reader tasks that have not yet returned.
+    ///
+    /// Incremented by two in [`spawn_stream_captures`](crate::stream_capture::spawn_stream_captures)
+    /// and decremented once per reader as it returns, so `0` means "both pipes
+    /// have been drained to EOF". Used by [`Self::await_capture_drain`].
+    pub readers_live: Arc<AtomicUsize>,
+
+    /// Release latch for [`Self::await_capture_drain`]: each returning reader adds
+    /// one permit, so the latch reaches two permits once both readers are done.
+    pub readers_done: Arc<Semaphore>,
+
     /// Monotonic sequence counter for stdout stream chunks per ADR-0054.
     pub stdout_seq: Arc<AtomicU64>,
 
@@ -247,6 +259,29 @@ impl ChildHandle {
             return Ok(None);
         };
         child.wait().await.map(Some)
+    }
+
+    /// Waits (bounded by `budget`) until both capture readers have drained their
+    /// pipe to EOF.
+    ///
+    /// [`Self::wait_exit`] only guarantees that the child has been reaped: its
+    /// last bytes can still be sitting in the pipe buffer, and a reader task that
+    /// has not been polled yet would leave [`Self::stdout_bytes_total`] at 0 and
+    /// the `TmpFile` aggregate empty. Snapshotting a terminal job before the
+    /// drain therefore reports a truncated — sometimes empty — result, which is a
+    /// real, reproduced race on loaded CI runners.
+    ///
+    /// Returns immediately when no reader was ever started (the counter is
+    /// incremented by `spawn_stream_captures`, so a handle that never got
+    /// captures has no drain to await).
+    pub async fn await_capture_drain(&self, budget: Duration) {
+        // Acquire before checking the counter: each reader adds its permit
+        // *before* decrementing, so observing 0 proves both permits exist and
+        // the latch cannot be missed.
+        if self.readers_live.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        let _ = tokio::time::timeout(budget, self.readers_done.acquire_many(2)).await;
     }
 
     /// Removes `path` from the registered tmp-file list.
@@ -506,6 +541,8 @@ pub async fn spawn_supervised(
         stdout_bytes_total: Arc::new(AtomicU64::new(0)),
         stderr_bytes_total: Arc::new(AtomicU64::new(0)),
         stream_chunks_dropped: Arc::new(AtomicU64::new(0)),
+        readers_live: Arc::new(AtomicUsize::new(0)),
+        readers_done: Arc::new(Semaphore::new(0)),
         stdout_seq: Arc::new(AtomicU64::new(0)),
         stderr_seq: Arc::new(AtomicU64::new(0)),
         capture_kind: req.capture_kind.clone(),

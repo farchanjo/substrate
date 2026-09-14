@@ -67,6 +67,14 @@ const TERMINAL_HANDLE_RETENTION: Duration = Duration::from_mins(5);
 /// Mirrors `substrate-jobs`' `gc_interval_secs` default (ADR-0040).
 const TERMINAL_GC_INTERVAL: Duration = Duration::from_mins(1);
 
+/// Bound on how long `result()` waits for the capture readers to drain the
+/// child's pipes after the child has been reaped (ADR-0054).
+///
+/// Once the child has exited, everything it wrote is already in the pipe
+/// buffers, so a drain is milliseconds of work — the bound only exists so a
+/// wedged reader can never hang `subprocess.result`.
+const CAPTURE_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 /// Unconditionally banned environment variable keys per ADR-0052 §"Layer 5".
 ///
 /// These keys are injection vectors. Mirroring [`BANNED_ENV_VARS`] in domain
@@ -1539,13 +1547,31 @@ impl SubprocessPort for SubprocessRegistry {
             Arc::clone(&*guard)
         };
 
-        // If still live and wait_ms > 0, poll for exit.
-        if wait_ms > 0 {
-            let _ = tokio::time::timeout(
-                Duration::from_millis(u64::from(wait_ms)),
-                handle.wait_exit(),
-            )
-            .await;
+        // If still live and wait_ms > 0, poll for exit. `Ok(Ok(None))` means a
+        // concurrent waiter (the dispatcher task) got the child first — it too
+        // only returns once the child is reaped. A timeout means it is still
+        // running.
+        let reaped = wait_ms > 0
+            && matches!(
+                tokio::time::timeout(
+                    Duration::from_millis(u64::from(wait_ms)),
+                    handle.wait_exit(),
+                )
+                .await,
+                Ok(Ok(_))
+            );
+
+        // The child being reaped does NOT mean its output has been read: the
+        // last bytes can still sit in the pipe buffer, and a capture reader that
+        // has not been polled yet leaves the aggregates empty. Wait (bounded) for
+        // the readers to drain before snapshotting, so a terminal job never
+        // reports a truncated result and `TmpFile` finalises a complete file.
+        let child_exited = reaped || {
+            let guard = handle.child.lock().await;
+            guard.is_none()
+        };
+        if include_aggregates && child_exited {
+            handle.await_capture_drain(CAPTURE_DRAIN_GRACE).await;
         }
 
         // Build the result from ring buffers.
@@ -1579,11 +1605,8 @@ impl SubprocessPort for SubprocessRegistry {
         // We attempt finalization when the child process has exited (child mutex
         // holds `None`) to ensure the writer has closed its FD before we rename.
         let (stdout_tmp_path, stderr_tmp_path) = if handle.capture_kind == CaptureKind::TmpFile {
-            // Check if the process has exited by peeking at the child mutex.
-            let child_exited = {
-                let guard = handle.child.lock().await;
-                guard.is_none()
-            };
+            // `child_exited` was resolved above (and already gated the capture
+            // drain, so the readers have written every byte before the rename).
             if child_exited {
                 // Finalize stdout writer if present.
                 let stdout_path = if let Some(ref writer) = handle.stdout_tmp_writer {
@@ -2345,6 +2368,106 @@ mod tests {
             substrate_domain::subprocess::state::SubprocessState::Succeeded,
             "snapshot_handle must return Succeeded after /bin/sh -c 'exit 0' exits; got {:?}",
             snapshot.state
+        );
+    }
+
+    /// Regression guard for the capture-drain race: `result()` used to snapshot
+    /// the aggregates as soon as the child was reaped, which is *before* the
+    /// reader tasks have necessarily drained the pipe buffers. A child that
+    /// writes and exits immediately could therefore be reported with 0 bytes —
+    /// reproduced deterministically on loaded CI runners, and (for `TmpFile`)
+    /// with a 0-byte finalised file.
+    ///
+    /// The child here writes 8 KiB and exits at once, which is the worst case:
+    /// every byte is still in the pipe when `wait_exit` returns.
+    #[tokio::test]
+    async fn result_waits_for_capture_drain_before_snapshotting() {
+        use substrate_domain::ports::subprocess::SubprocessPort as _;
+
+        let sh = std::path::PathBuf::from("/bin/sh");
+        assert!(sh.exists(), "/bin/sh must exist on this platform");
+        let tmp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).expect("temp_dir must be canonicalisable");
+        let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
+            .expect("temp_dir must be a valid allowlist root");
+
+        let registry = SubprocessRegistry::new(
+            strict(vec![sh.clone()]),
+            Vec::new(),
+            4,
+            8,
+            DEFAULT_AGGREGATE_BUFFER_BYTES,
+            5,
+            path_allowlist,
+            CancellationToken::new(),
+        );
+
+        // `printf` with a 8 KiB single-quoted argument would be unwieldy; a
+        // `head -c` read of /dev/zero is not available either, so use `dd` on
+        // /dev/zero piped through the shell, then exit immediately.
+        let req = SubprocessRequest {
+            binary_path: sh.clone(),
+            args: vec![
+                "-c".to_owned(),
+                "dd if=/dev/zero bs=1024 count=8 2>/dev/null".to_owned(),
+            ],
+            cwd: tmp_dir,
+            env_allowlist: Vec::new(),
+            env_override: std::collections::BTreeMap::new(),
+            stdin_kind: substrate_domain::subprocess::StdinKind::None,
+            capture_kind: CaptureKind::Stream,
+            timeout_secs: None,
+            idempotency_key: None,
+            elicitation_confirmed: true,
+            name: None,
+            restart_policy: None,
+            health_probe: None,
+            log_rotation: None,
+            parent_death_signal: None,
+        };
+
+        let handle = registry
+            .spawn(req, &NoCancel)
+            .await
+            .expect("spawn must succeed");
+        let job_id = handle.job_id.clone();
+        let live_handle = {
+            let guard = registry.handles.get(&job_id).expect("handle must exist");
+            Arc::clone(&*guard)
+        };
+
+        // Both readers must be on the latch before `spawn` returns, otherwise a
+        // caller could observe a half-counted state and skip a real drain.
+        assert_eq!(
+            live_handle
+                .readers_live
+                .load(std::sync::atomic::Ordering::Acquire),
+            2,
+            "spawn_stream_captures must register both readers on the drain latch"
+        );
+
+        // A single `result` call, immediately after the spawn: no retry loop, no
+        // sleep. It must observe every byte the child wrote.
+        let result = registry
+            .result(&job_id, 10_000, true)
+            .await
+            .expect("result must succeed");
+
+        assert_eq!(
+            result.stdout_bytes_total, 8192,
+            "result() must wait for the capture readers to drain before snapshotting"
+        );
+        assert_eq!(
+            result.stdout_aggregate.len(),
+            8192,
+            "the aggregate must contain every drained byte"
+        );
+        assert_eq!(
+            live_handle
+                .readers_live
+                .load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "result() must have awaited the drain latch to completion"
         );
     }
 

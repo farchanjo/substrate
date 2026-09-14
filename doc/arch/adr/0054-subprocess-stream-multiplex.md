@@ -559,3 +559,35 @@ illustrative only.
 Cross-references: [ADR-0040](0040-async-job-control-plane.md) — `ProgressEvent`
 percentage semantics; [ADR-0057](0057-subprocess-output-pagination-and-search.md)
 — ring buffer as source of truth.
+
+### 2026-09-14 — `result()` waits for the capture readers to drain
+
+`subprocess.result` snapshotted the ring buffers as soon as the child had been
+reaped by `wait_exit`. Reaping is not draining: the child's last bytes can still
+sit in the pipe buffer, and a reader task that the scheduler has not yet polled
+has read nothing at all. On a loaded CI runner the readers lost that race
+deterministically, so a job that wrote 8 KiB was reported with
+`stdout_bytes_total: 0` and an empty `stdout_aggregate_base64`; for
+`capture_kind: tmp_file` the same race finalised a 0-byte file.
+
+`ChildHandle` now carries a drain latch — `readers_live` (a counter,
+incremented by two in `spawn_stream_captures` before the readers are spawned)
+and `readers_done` (a `Semaphore` released one permit per returning reader).
+`result()` awaits both permits, bounded by `CAPTURE_DRAIN_GRACE` (2 s), before
+reading the rings or finalising a `TmpFile`. The bound only exists so a wedged
+reader cannot hang `subprocess.result`; once the child has exited, everything it
+wrote is already in the pipe buffers, so a drain is milliseconds of work.
+
+The latch is awaited only when the child is known to have exited (either this
+call reaped it, or a concurrent waiter already did), so `wait_ms: 0` on a
+still-running child stays non-blocking. Each reader releases its permit
+*before* decrementing the counter, so observing a zero counter proves both
+permits are already available and the latch cannot be missed.
+
+This supersedes the retry loop the `tmp_file` cucumber step had grown as a
+workaround; the reader tasks themselves are unchanged, and the ring buffer
+remains the source of truth for pagination and search.
+
+Cross-references: [ADR-0033](0033-transactional-write-pattern.md) — the
+finalised `TmpFile` must contain every byte before its atomic rename;
+[ADR-0057](0057-subprocess-output-pagination-and-search.md).
