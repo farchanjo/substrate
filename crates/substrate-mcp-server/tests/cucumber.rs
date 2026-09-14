@@ -824,10 +824,54 @@ fn features_dir() -> PathBuf {
         .join("doc/arch/specs/features")
 }
 
-#[tokio::main]
-async fn main() {
-    SubstrateWorld::cucumber()
-        .max_concurrent_scenarios(1)
-        .run_and_exit(features_dir())
-        .await;
+/// Bound on the harness runtime's shutdown, mirroring the detached supervisor's
+/// (`main.rs::SUPERVISOR_SHUTDOWN_GRACE`).
+///
+/// `run_and_exit` does NOT call `process::exit` — it returns once the summary has
+/// been printed (and panics when a step failed) — so the runtime is torn down
+/// with the process still in `main`, and a `Runtime::drop` waits for every
+/// outstanding `spawn_blocking` task. The oversize-control-frame scenario calls
+/// `spawn_control_reader`, whose blocking thread parks in `open(2)` for the next
+/// writer session and never returns, so whether that thread happened to observe
+/// its dropped `Receiver` before parking decided whether the whole suite exited —
+/// a coin flip that once left the macOS CI job alive for three hours with every
+/// scenario already green and the summary already printed. The parked thread has
+/// nothing left to do, so bound the shutdown instead of awaiting it.
+const RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+
+/// Owns the harness runtime and applies [`RUNTIME_SHUTDOWN_GRACE`] on both the
+/// normal and the panicking (`run_and_exit` on a red suite) exit path.
+struct HarnessRuntime(Option<tokio::runtime::Runtime>);
+
+impl HarnessRuntime {
+    fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
+        self.0
+            .as_ref()
+            .expect("runtime is present until Drop")
+            .block_on(future)
+    }
+}
+
+impl Drop for HarnessRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_timeout(RUNTIME_SHUTDOWN_GRACE);
+        }
+    }
+}
+
+fn main() {
+    let runtime = HarnessRuntime(Some(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("build the cucumber harness runtime"),
+    ));
+
+    runtime.block_on(async {
+        SubstrateWorld::cucumber()
+            .max_concurrent_scenarios(1)
+            .run_and_exit(features_dir())
+            .await;
+    });
 }

@@ -866,23 +866,23 @@ async fn given_detached_stack_short_ttl(world: &mut SubstrateWorld) {
 
 #[when(regex = r#"^the orphan TTL elapses with no client re-attachment$"#)]
 async fn when_orphan_ttl_elapses(world: &mut SubstrateWorld) {
+    // Wait for `teardown()`'s `clear_registry()` (the LAST action `check_orphan_
+    // ttl` takes once the TTL fires) to remove the durable registry directory —
+    // the unambiguous, on-disk signal that the TTL fired and teardown ran to
+    // completion. The supervisor's own OS process is asserted to exit right
+    // after: `control_fifo.rs`'s reader task blocks in `File::open()` for the
+    // *next* writer session for the supervisor's entire lifetime by design, and
+    // a plain `Runtime::drop` waits for that blocking task, so without the
+    // bounded shutdown in `main.rs` the process would sit alive forever with its
+    // registry already cleared — a Stack reported down while its supervisor
+    // leaked. Nothing here ever connects a writer, so the parked thread is at
+    // its worst and the exit can only come from the bound.
     let state_home = world
         .context
         .get("launch_ttl_state_home")
         .cloned()
         .expect("Given sets state home");
     let stacks_root = PathBuf::from(state_home).join("substrate").join("stacks");
-    // Wait for `teardown()`'s `clear_registry()` (the LAST action `check_orphan_
-    // ttl` takes once the TTL fires) to remove the durable registry directory —
-    // the unambiguous, on-disk signal that the TTL fired and teardown ran to
-    // completion. This deliberately does NOT wait for the supervisor's own OS
-    // process to exit: `control_fifo.rs`'s reader task blocks in `File::open()`
-    // for the *next* writer session for the supervisor's entire lifetime by
-    // design, and nothing in this scenario ever connects a writer, so the
-    // process can remain alive (parked on that blocking read) even after its
-    // own teardown logic has genuinely completed — an orthogonal property this
-    // scenario's Then steps (which only assert the Stack's own outcome) don't
-    // depend on.
     let down = wait_until(Duration::from_secs(10), Duration::from_millis(200), || {
         std::fs::read_dir(&stacks_root)
             .into_iter()
@@ -896,6 +896,23 @@ async fn when_orphan_ttl_elapses(world: &mut SubstrateWorld) {
         down,
         "the supervisor must clear the durable registry directory once \
          orphan_ttl_secs elapses with no client activity"
+    );
+
+    let supervisor_pid: i32 = world
+        .context
+        .get("launch_ttl_supervisor_pid")
+        .cloned()
+        .expect("Given sets supervisor pid")
+        .parse()
+        .expect("valid pid");
+    let exited = wait_until(Duration::from_secs(10), Duration::from_millis(200), || {
+        !pid_is_alive(supervisor_pid)
+    })
+    .await;
+    assert!(
+        exited,
+        "the supervisor must exit once it has torn its Stack down; a parked \
+         control-FIFO reader thread must not keep the process alive"
     );
 }
 

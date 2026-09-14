@@ -537,3 +537,29 @@ still verified `0600`/owner-owned before every open. It closes the gap
 between "the control FIFO exists and is tested in isolation" (the prior
 amendment) and "the control FIFO is what `launch.down`/`restart`/`reload`
 actually use for a detached Stack" (this one).
+
+### 2026-09-14 — A torn-down supervisor now actually exits
+
+The control-FIFO reader (`control_fifo.rs::spawn_control_reader`) runs on a
+`tokio::task::spawn_blocking` thread and, after every clean `EOF`, reopens the
+FIFO and parks in `open(2)` until the next writer session. That is by design —
+one reader serves the supervisor's whole lifetime — but it made the supervisor
+process unexitable: `Runtime::drop` waits for every outstanding blocking task,
+so once `run_supervisor` returned (TTL expiry, `launch.down`, drain) the process
+sat alive forever with its registry already cleared and its children already
+reaped. Observed directly: a Stack whose TTL fired and whose registry directory
+was removed kept its `substrate --supervise` process alive, its control reader
+thread sampled inside `__open`. The same shape could strand any process that
+holds a control reader, including the cucumber harness, whose own parked reader
+once left a green CI job alive for three hours after its summary had printed.
+
+`main.rs` now bounds the supervisor runtime's shutdown
+(`SUPERVISOR_SHUTDOWN_GRACE`, 500 ms) instead of awaiting it, applied through a
+drop guard so the panicking path is covered too. The abandoned thread has
+nothing left to do: the reactor is finished and no further frame can arrive.
+The `launch-orphan-ttl-expiry-auto-down` scenario — which previously documented
+the survival as an "orthogonal property" it deliberately did not assert — now
+asserts the supervisor process is gone, and fails without the bound.
+
+Cross-references: [ADR-0055](0055-orphan-reaper-on-startup.md) — the reaper
+contract the teardown completes before exit; [ADR-0037](0037-cancellation-token-contract.md).

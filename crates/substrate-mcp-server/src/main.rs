@@ -44,8 +44,20 @@ pub(crate) mod signal_handlers;
 pub(crate) mod stub_ports;
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use substrate_domain::JailTier;
+
+/// Bound on the detached supervisor's runtime shutdown.
+///
+/// The supervisor's control-FIFO reader runs on a `spawn_blocking` thread that
+/// parks in `open(2)` waiting for the next writer session for the supervisor's
+/// entire lifetime (ADR-0068), and a plain `Runtime::drop` waits for every
+/// outstanding blocking task — so a supervisor that finished its teardown (TTL
+/// expiry, `launch.down`, drain) would sit alive forever with its registry
+/// already cleared. The parked thread has nothing left to do at that point, so
+/// the shutdown is bounded rather than awaited.
+const SUPERVISOR_SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
 /// Emits the ADR-0036 startup-error JSON envelope to stderr, then flushes.
 ///
@@ -344,7 +356,25 @@ fn run_supervisor_process(args: substrate_launch::detached::SuperviseArgs) -> Ex
             return ExitCode::from(71);
         },
     };
-    runtime.block_on(supervisor_main(args))
+    let code = runtime.block_on(supervisor_main(args));
+    // Bounded, not awaited: the control-FIFO reader thread is parked in `open(2)`
+    // for the next writer session and would otherwise keep this process alive
+    // forever after its Stack was already torn down. The guard applies the same
+    // bound on the panicking path.
+    let _guard = SupervisorRuntimeGuard(Some(runtime));
+    code
+}
+
+/// Applies [`SUPERVISOR_SHUTDOWN_GRACE`] when the supervisor's runtime is torn
+/// down, on both the normal and the panicking exit path.
+struct SupervisorRuntimeGuard(Option<tokio::runtime::Runtime>);
+
+impl Drop for SupervisorRuntimeGuard {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_timeout(SUPERVISOR_SHUTDOWN_GRACE);
+        }
+    }
 }
 
 /// Async body of the detached supervisor: load config, wire the subprocess port,
