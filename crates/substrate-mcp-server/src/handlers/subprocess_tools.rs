@@ -742,6 +742,36 @@ mod tests {
         );
     }
 
+    /// `args`, `env_allowlist`, and `env_override` are optional on the wire: the
+    /// published `subprocess_spawn` schema declares them with empty defaults and
+    /// omits them from `required`, so the five required keys alone must
+    /// deserialize. Without `#[serde(default)]` the live validator rejected them
+    /// one at a time (`missing field \`args\``, then `env_allowlist`, then
+    /// `env_override`), contradicting the schema the caller read.
+    #[test]
+    fn spawn_request_omitting_collections_defaults_to_empty() {
+        let args = serde_json::json!({
+            "binary_path": "/bin/echo",
+            "cwd": "/tmp",
+            "stdin_kind": "none",
+            "capture_kind": "in_memory",
+            "elicitation_confirmed": true,
+        });
+
+        let req: SubprocessRequest =
+            serde_json::from_value(args).expect("the five required keys must suffice");
+
+        assert!(req.args.is_empty(), "args must default to empty");
+        assert!(
+            req.env_allowlist.is_empty(),
+            "env_allowlist must default to empty"
+        );
+        assert!(
+            req.env_override.is_empty(),
+            "env_override must default to empty"
+        );
+    }
+
     /// Deserialising from `null` must produce `page_size: None` (handler fast-path).
     #[test]
     fn subprocess_list_request_handler_null_page_size_is_none() {

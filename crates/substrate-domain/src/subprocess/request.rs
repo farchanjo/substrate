@@ -92,6 +92,7 @@ pub struct SubprocessRequest {
     pub binary_path: PathBuf,
 
     /// Argument list passed to the binary (`argv[1..]`).
+    #[serde(default)]
     pub args: Vec<String>,
 
     /// Names (not values) of parent-environment variables the child may inherit.
@@ -99,11 +100,13 @@ pub struct SubprocessRequest {
     /// Only keys listed here are forwarded; values are taken from the substrate
     /// process environment at spawn time. Banned keys are unconditionally stripped
     /// regardless of this list.
+    #[serde(default)]
     pub env_allowlist: Vec<String>,
 
     /// Explicit key=value environment overrides in the child environment.
     ///
     /// Banned keys (`LD_PRELOAD` etc.) are rejected at validation time.
+    #[serde(default)]
     pub env_override: BTreeMap<String, String>,
 
     /// Working directory for the child process.
