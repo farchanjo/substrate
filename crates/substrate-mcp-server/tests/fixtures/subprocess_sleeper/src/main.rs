@@ -17,6 +17,7 @@
 //
 // Usage:
 //   subprocess_sleeper --sleep-secs N [--on-sigterm-cleanup] [--watchdog-aware]
+//                       [--clear-pdeath]
 //
 // Arguments:
 //   --sleep-secs N          Required. Sleep for N seconds then exit 0.
@@ -29,6 +30,15 @@
 //                           from that fd until EOF, then calls _exit(0).
 //                           Demonstrates the cooperative macOS watchdog pattern
 //                           from ADR-0053 §"macOS Watchdog Pipe Pattern".
+//   --clear-pdeath          Optional (Linux only; no-op elsewhere). Clear
+//                           PR_SET_PDEATHSIG at startup, undoing the SIGKILL
+//                           parent-death binding substrate installs for every
+//                           spawned child (ADR-0053 §"Linux Death Signal"). The
+//                           process then SURVIVES its parent's death — the only
+//                           way to obtain a genuine live orphan on Linux, where
+//                           the default binding would otherwise take the child
+//                           down with its supervisor (ADR-0068 §"Cross-platform
+//                           parent-death binding").
 //
 // Exit codes:
 //   0   Normal exit (sleep completed, SIGTERM handler invoked, or watchdog EOF).
@@ -47,6 +57,7 @@ fn main() {
     let mut sleep_secs: Option<u64> = None;
     let mut on_sigterm_cleanup = false;
     let mut watchdog_aware = false;
+    let mut clear_pdeath = false;
 
     let mut i = 1usize;
     while i < args.len() {
@@ -70,6 +81,9 @@ fn main() {
             },
             "--watchdog-aware" => {
                 watchdog_aware = true;
+            },
+            "--clear-pdeath" => {
+                clear_pdeath = true;
             },
             other => {
                 eprintln!("subprocess_sleeper: unknown argument: {other}");
@@ -115,6 +129,24 @@ fn main() {
             }
         }
     }
+
+    // --- Clear the parent-death signal (Linux; opt-in) ------------------------
+    //
+    // substrate binds PR_SET_PDEATHSIG(SIGKILL) in `pre_exec` for every child it
+    // spawns, so a killed supervisor takes its Services down with it. Clearing it
+    // here makes this process outlive its parent — a genuine orphan, which is what
+    // the reaper-on-boot scenarios need to exist on Linux (it already survives on
+    // macOS, which has no PR_SET_PDEATHSIG).
+    #[cfg(target_os = "linux")]
+    if clear_pdeath {
+        // SAFETY: prctl(2) takes no pointers for this command; arg2 is a plain
+        // signal number (0 = clear).
+        unsafe {
+            libc::prctl(libc::PR_SET_PDEATHSIG, 0);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = clear_pdeath;
 
     // --- Main sleep -----------------------------------------------------------
 

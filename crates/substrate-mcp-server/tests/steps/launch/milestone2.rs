@@ -195,7 +195,7 @@ fn detach_server_config(root: &Path, binaries: &[&Path]) -> String {
 fn detach_profile_toml(ttl_secs: u32) -> String {
     format!(
         "version = 1\non_client_disconnect = \"detach\"\norphan_ttl_secs = {ttl_secs}\n\n\
-         [services.web]\ncommand = [\"{bin}\", \"--sleep-secs\", \"120\"]\n",
+         [services.web]\ncommand = [\"{bin}\", \"--sleep-secs\", \"120\", \"--clear-pdeath\"]\n",
         bin = sleeper_bin().display(),
     )
 }
@@ -631,12 +631,20 @@ async fn then_consumer_discards_oversize_frame(world: &mut SubstrateWorld) {
 // ---- launch-orphan-adopted-on-boot / launch-orphan-reaped-on-boot (REAL) ----
 //
 // Shared setup: a genuine detached supervisor (plain, non-watchdog-aware
-// sleeper Service) is killed out from under its child, leaving a REAL live
-// orphan on this host — the child never reads `SUBSTRATE_WATCHDOG_FD` and is
-// not bound by `PR_SET_PDEATHSIG` on this platform, so it simply survives.
-// Both scenarios then drive the SAME real `reaper::reconcile_sweep` over that
-// genuine orphan; only the recorded `policy` differs. The production
-// detached-supervisor write path always records `policy: Detach` (a
+// sleeper Service that clears its own `PR_SET_PDEATHSIG` via
+// `--clear-pdeath`) is killed out from under its child, leaving a REAL live
+// orphan on this host. Clearing the binding is what makes the orphan real on
+// Linux: without it the kernel delivers `SIGKILL` to the Service the moment
+// the supervisor dies (ADR-0068 §"Cross-platform parent-death binding" — "no
+// orphan arises from supervisor death for spawned children"), so the child
+// would be a stale registry entry rather than a live orphan, and the
+// adopt-or-reap decision would take its no-live-process branch instead of the
+// reparented-child branch these two scenarios exist to exercise. macOS has no
+// `PR_SET_PDEATHSIG`, so the flag is a no-op there and the child survives
+// anyway. Both scenarios then drive the SAME real
+// `reaper::reconcile_sweep` over that genuine orphan; only the recorded
+// `policy` differs. The production detached-supervisor write path always
+// records `policy: Detach` (a
 // `SupervisorRegistry` only ever exists for a Detach Stack in the first
 // place — `detached.rs::assemble` hardcodes it), so a `shutdown`-policy
 // durable entry is reached by rewriting the genuinely-produced
