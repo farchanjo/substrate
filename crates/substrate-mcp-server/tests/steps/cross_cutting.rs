@@ -1058,6 +1058,19 @@ async fn when_substrate_starts(world: &mut SubstrateWorld) {
         .unwrap_or_else(|| "/nonexistent/path/that/does/not/exist".to_string());
 
     let tmp = tempfile::TempDir::new().expect("TempDir");
+    // `/work/repo` is the Gherkin placeholder for the sandbox root, and every
+    // other step maps it. This step spawns its own child against its own config,
+    // so it has to map it too — otherwise the literal path goes to the server,
+    // which does not exist outside the sandbox, and startup exits 77.
+    let configured_root = if configured_root == "/work/repo" {
+        tmp.path()
+            .canonicalize()
+            .expect("canonicalize tmpdir")
+            .display()
+            .to_string()
+    } else {
+        configured_root
+    };
     let cfg = tmp.path().join("substrate.toml");
     let content = format!(
         "[policy]\nroots = [\"{root}\"]\n\n\
