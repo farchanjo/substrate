@@ -60,11 +60,16 @@ jobs:
         with:
           tool: nextest
 
+      # Three steps, not one: a cucumber failure used to abort the step and the
+      # doctests never ran, so the report hid which suite was actually red.
       - name: cargo nextest run --workspace
-        run: |
-          cargo nextest run --workspace --all-features -E 'not binary(cucumber)' --no-fail-fast
-          cargo test --workspace --all-features --test cucumber -p substrate-mcp-server
-          cargo test --workspace --all-features --doc
+        run: cargo nextest run --workspace --all-features -E 'not binary(cucumber)' --no-fail-fast
+
+      - name: cargo test --test cucumber (nextest cannot list this harness)
+        run: cargo test --workspace --all-features --test cucumber -p substrate-mcp-server
+
+      - name: cargo test --doc (nextest does not run doctests)
+        run: cargo test --workspace --all-features --doc
 
   # ---------------------------------------------------------------------------
   # Required gate: supply-chain audit. deny.toml already exists and is
