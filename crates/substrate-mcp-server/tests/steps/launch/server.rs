@@ -277,10 +277,15 @@ fn task_status_frames(world: &SubstrateWorld) -> Vec<serde_json::Value> {
 
 #[then(regex = r#"^hints\.next_action_suggested is the wire name launch_status$"#)]
 async fn then_hints_next_action_launch_status(world: &mut SubstrateWorld) {
-    let hints = world
-        .hints()
-        .cloned()
-        .expect("response must carry structuredContent.hints");
+    let hints = world.hints().cloned().unwrap_or_else(|| {
+        // The handler emits hints only on its success path, so a missing hints
+        // map means the tool call itself failed. Print the response, otherwise
+        // the failure says nothing about why.
+        panic!(
+            "response must carry structuredContent.hints; got {:?}",
+            world.last_response
+        )
+    });
     assert_eq!(
         hints.get("next_action_suggested").and_then(|v| v.as_str()),
         Some("launch_status")
@@ -289,10 +294,15 @@ async fn then_hints_next_action_launch_status(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^hints\.confirm_destructive is true$"#)]
 async fn then_hints_confirm_destructive_true(world: &mut SubstrateWorld) {
-    let hints = world
-        .hints()
-        .cloned()
-        .expect("response must carry structuredContent.hints");
+    let hints = world.hints().cloned().unwrap_or_else(|| {
+        // The handler emits hints only on its success path, so a missing hints
+        // map means the tool call itself failed. Print the response, otherwise
+        // the failure says nothing about why.
+        panic!(
+            "response must carry structuredContent.hints; got {:?}",
+            world.last_response
+        )
+    });
     assert_eq!(
         hints
             .get("confirm_destructive")
@@ -303,10 +313,15 @@ async fn then_hints_confirm_destructive_true(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^hints\.polling_endpoint is launch\.status$"#)]
 async fn then_hints_polling_endpoint(world: &mut SubstrateWorld) {
-    let hints = world
-        .hints()
-        .cloned()
-        .expect("response must carry structuredContent.hints");
+    let hints = world.hints().cloned().unwrap_or_else(|| {
+        // The handler emits hints only on its success path, so a missing hints
+        // map means the tool call itself failed. Print the response, otherwise
+        // the failure says nothing about why.
+        panic!(
+            "response must carry structuredContent.hints; got {:?}",
+            world.last_response
+        )
+    });
     assert_eq!(
         hints.get("polling_endpoint").and_then(|v| v.as_str()),
         Some("launch.status")
