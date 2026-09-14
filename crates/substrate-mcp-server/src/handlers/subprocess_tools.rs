@@ -746,8 +746,8 @@ mod tests {
     /// published `subprocess_spawn` schema declares them with empty defaults and
     /// omits them from `required`, so the five required keys alone must
     /// deserialize. Without `#[serde(default)]` the live validator rejected them
-    /// one at a time (`missing field \`args\``, then `env_allowlist`, then
-    /// `env_override`), contradicting the schema the caller read.
+    /// one at a time — `args`, then `env_allowlist`, then `env_override` —
+    /// contradicting the schema the caller read.
     #[test]
     fn spawn_request_omitting_collections_defaults_to_empty() {
         let args = serde_json::json!({
