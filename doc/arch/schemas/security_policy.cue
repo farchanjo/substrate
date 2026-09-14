@@ -108,12 +108,22 @@ package schemas
 	subprocess_policy_enforced: bool | *true
 
 	// subprocess_binary_allowlist is the set of absolute binary paths that
-	// subprocess.spawn may execute per ADR-0052. Default deny-all (empty list): a
+	// subprocess.spawn may execute per ADR-0052. It is consulted only when
+	// subprocess_binary_allowlist_mode is "strict"; under the "allow-all" default
+	// the list is inert and any regular executable is admitted. Under "strict" a
 	// binary absent from this list is rejected with
 	// SUBSTRATE_SUBPROCESS_BINARY_NOT_ALLOWED. The recovery hint and ADR prose name
 	// this key security.subprocess_binary_allowlist, while the loaded TOML path is
 	// the [subprocess] section field binary_allowlist; both denote the same gate.
 	subprocess_binary_allowlist: #BinaryPathList
+
+	// subprocess_binary_allowlist_mode selects how the list above is enforced.
+	// "allow-all" (default) admits every regular executable, which suits a
+	// workstation where the operator wants subprocess.spawn to work without
+	// curating a list. "strict" admits only the listed entries, which is the
+	// posture for a locked-down host. Loaded TOML path: [subprocess]
+	// binary_allowlist_mode.
+	subprocess_binary_allowlist_mode: #BinaryAllowlistMode
 
 	// subprocess_env_allowlist names the environment variables (names only) that a
 	// child process may inherit from substrate per ADR-0052. Banned injection

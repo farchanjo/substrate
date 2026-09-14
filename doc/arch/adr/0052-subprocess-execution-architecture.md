@@ -407,3 +407,36 @@ The existing TOCTOU and regular-file protections are preserved unconditionally f
 A glob entry that fails to compile (invalid syntax) is retained as an inert literal path rather than rejected at startup or silently dropped — a typo in a pattern narrows the allowlist (it becomes a literal that will essentially never match a real exec target) rather than ever widening it.
 
 Cross-references: [ADR-0004](0004-security-model.md) §"Layer 5 binary/cwd allowlist"; implemented in `crates/substrate-subprocess/src/registry.rs` (`BinaryAllowlist`, `resolve_binary_allowed`).
+
+## Amendment 2026-09-14: binary allowlist default flipped to allow-all (Layer 1)
+
+The Layer 1 binary allowlist is now **allow-all by default**: a new
+`security.subprocess_binary_allowlist_mode` field (loaded TOML path
+`[subprocess] binary_allowlist_mode`) selects the enforcement, with two values.
+`allow-all` — the default — admits any regular executable and makes the list
+inert. `strict` admits only the configured entries, which is the posture the
+2026-06-30 amendment described.
+
+The flip is a response to how the control actually failed in practice. The
+default-deny list demanded that every operator curate every binary before the
+first spawn worked, and the two states it conflated — "nothing configured yet"
+and "locked down to exactly these binaries" — were both expressed by an empty
+list. An operator who wanted the tool to work out of the box had to enumerate a
+toolchain's worth of paths first; an operator who wanted a locked host had no way
+to say "strict, and therefore nothing" that read differently from "unconfigured".
+
+Under `allow-all` the Layer 1 controls that are not the list are unchanged: the
+requested binary is still canonicalized, the resolved target is still verified to
+be a regular file, and the canonical path — never the caller-supplied one — is
+what gets exec'd, so the check-to-exec TOCTOU window stays closed. `allow-all`
+widens *which* binaries are admitted, not how they are validated. An operator who
+sets `binary_allowlist` without setting the mode keeps the previous behaviour only
+by adding the mode; the list alone is inert.
+
+`BinaryAllowlist::deny_all()` keeps its meaning — empty **and** `strict`, which is
+the "admit nothing" state — and is distinct from the new default.
+
+Cross-references: [ADR-0004](0004-security-model.md) §"Layer 5 binary/cwd
+allowlist"; implemented in `crates/substrate-subprocess/src/registry.rs`
+(`BinaryAllowlist::with_mode`, `resolve_binary_allowed`) and
+`crates/substrate-config/src/model.rs` (`SubprocessConfig::binary_allowlist_mode`).

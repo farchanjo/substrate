@@ -525,7 +525,9 @@ pub struct SimdConfig {
     pub allow_avx512: bool,
 }
 
-// ---- SubprocessConfig --------------------------------------------------------
+// ---- SubprocessConfig -------------------------------------------------------
+
+pub use substrate_domain::subprocess::BinaryAllowlistMode;
 
 /// Subprocess bounded context configuration per ADR-0052.
 ///
@@ -535,7 +537,7 @@ pub struct SimdConfig {
 /// and ADR-0054 §"`TmpFile` Branch". When unset the composition root falls back to the
 /// first entry of `policy.roots`. If neither resolves, startup aborts with
 /// `SUBSTRATE_CONFIG_INVALID`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SubprocessConfig {
     /// Root directory used by `CaptureKind::TmpFile` for transit and final capture files.
@@ -559,20 +561,31 @@ pub struct SubprocessConfig {
     /// Allowlisted absolute binary paths (or glob patterns) permitted for
     /// `subprocess.spawn` per ADR-0052 §"Layer 1".
     ///
-    /// Empty list (default) means deny-all: every spawn request is rejected with
-    /// `SubprocessError::BinaryNotAllowlisted`. Each entry MUST be an absolute path
-    /// to an executable file; relative paths fail validation at startup.
+    /// Interpreted only when [`Self::binary_allowlist_mode`] is `strict`; under the
+    /// `allow-all` default the list is inert and every executable is admitted.
+    ///
+    /// Each entry MUST be an absolute path to an executable file; relative paths
+    /// fail validation at startup.
     ///
     /// An entry containing a glob metacharacter (`*`, `?`, `[`, `{`) is matched as
     /// a pattern against the binary's canonicalized (symlink-resolved) path rather
     /// than compared literally, e.g. `/usr/local/bin/*` or `/Users/me/.cargo/bin/*`.
-    /// This is still default-deny and still operator-configured; it widens what a
-    /// single entry covers, not the security model itself (ADR-0052 amendment
-    /// 2026-06-30).
+    /// This widens what a single entry covers, not the security model itself
+    /// (ADR-0052 amendment 2026-06-30).
     ///
     /// References: ADR-0052 §"Layer 1 — Binary Allowlist".
     #[serde(default)]
     pub binary_allowlist: Vec<PathBuf>,
+
+    /// How [`Self::binary_allowlist`] is enforced.
+    ///
+    /// `allow-all` (default) admits any executable, which suits a workstation where
+    /// the operator wants `subprocess.spawn` to work without curation. `strict`
+    /// admits only the listed entries, which is the posture for a locked-down host.
+    ///
+    /// References: ADR-0052 §"Layer 1 — Binary Allowlist".
+    #[serde(default)]
+    pub binary_allowlist_mode: BinaryAllowlistMode,
 
     /// Maximum active subprocesses per MCP client. Default: 4 per ADR-0052.
     #[serde(default = "default_4_u32")]
@@ -599,6 +612,26 @@ pub struct SubprocessConfig {
     /// Time-based flush interval for stream captures in milliseconds. Default: 100.
     #[serde(default = "default_100_u64")]
     pub stream_flush_interval_ms: u64,
+}
+
+impl Default for SubprocessConfig {
+    /// Mirrors every field's serde default, so an absent `[subprocess]` section
+    /// behaves exactly like one carrying the documented values. The derived
+    /// `Default` zeroed them instead, which silently set both quotas to 0 and
+    /// rejected every spawn on a config that merely omitted the section.
+    fn default() -> Self {
+        Self {
+            tmp_root: None,
+            binary_allowlist: Vec::new(),
+            binary_allowlist_mode: BinaryAllowlistMode::default(),
+            max_per_client: default_4_u32(),
+            max_concurrent: default_8_u32(),
+            aggregate_buffer_bytes: default_65536_usize(),
+            aggregate_buffer_bytes_max: default_1_mib_usize(),
+            shutdown_drain_secs: default_5_u64(),
+            stream_flush_interval_ms: default_100_u64(),
+        }
+    }
 }
 
 const fn default_4_u32() -> u32 {

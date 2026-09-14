@@ -42,6 +42,7 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use substrate_domain::ports::subprocess::SubprocessPort;
+use substrate_domain::subprocess::BinaryAllowlistMode;
 use substrate_domain::subprocess::request::{CaptureKind, StdinKind, SubprocessRequest};
 use substrate_policy::Allowlist;
 use substrate_subprocess::registry::{BinaryAllowlist, SubprocessRegistry};
@@ -125,7 +126,8 @@ async fn when_client_spawns_fifth(world: &mut SubstrateWorld) {
 
     // Build registry with max_concurrent == running_count so that the next
     // spawn is guaranteed to fail with QuotaExceeded.
-    let binary_allowlist = BinaryAllowlist::new(vec![fixture.clone()]);
+    let binary_allowlist =
+        BinaryAllowlist::new(vec![fixture.clone()]).with_mode(BinaryAllowlistMode::Strict);
     let path_allowlist = Allowlist::new(vec![cwd.clone()]).expect("test Allowlist");
     let root_cancel = CancellationToken::new();
     let registry = SubprocessRegistry::new(

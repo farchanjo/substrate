@@ -45,6 +45,7 @@ use cucumber::{given, then, when};
 use tempfile::TempDir;
 
 use substrate_domain::ports::subprocess::SubprocessPort;
+use substrate_domain::subprocess::BinaryAllowlistMode;
 use substrate_domain::subprocess::request::{CaptureKind, StdinKind, SubprocessRequest};
 
 use super::NoCancel;
@@ -802,7 +803,8 @@ fn make_registry_with_fixture_and_tmp_root(
 ) -> std::sync::Arc<substrate_subprocess::registry::SubprocessRegistry> {
     use substrate_subprocess::registry::BinaryAllowlist;
     let fixture_path = super::fixture_binary_path();
-    let binary_allowlist = BinaryAllowlist::new(vec![super::echo_binary_path(), fixture_path]);
+    let binary_allowlist = BinaryAllowlist::new(vec![super::echo_binary_path(), fixture_path])
+        .with_mode(BinaryAllowlistMode::Strict);
     let path_allowlist =
         substrate_policy::Allowlist::new(roots).expect("create test Allowlist for TmpFile");
     let root_cancel = tokio_util::sync::CancellationToken::new();

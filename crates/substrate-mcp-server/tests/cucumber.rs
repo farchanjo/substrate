@@ -180,10 +180,6 @@ impl SubstrateWorld {
             "[policy]\nroots = [\"{root}\"]\n\n\
              [logging]\nlevel = \"error\"\n\n\
              [security]\nrefuse_degraded_jail = false\n\n\
-             [subprocess]\n\
-             # The launch profile fixtures run /bin/echo; the field is\n\
-             # default-deny, so an unset allowlist rejects every binary.\n\
-             binary_allowlist = [\"/bin/echo\"]\n\n\
              [timeouts]\nglobal_default_seconds = 30\nshutdown_drain_secs = 2\n",
             root = root.display()
         );

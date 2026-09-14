@@ -30,7 +30,7 @@ pub use handle::SubprocessHandle;
 pub use pagination::{
     Order, Pagination, SearchMatch, SubprocessSearchRequest, SubprocessSearchResult,
 };
-pub use request::{CaptureKind, StdinKind, SubprocessRequest};
+pub use request::{BinaryAllowlistMode, CaptureKind, StdinKind, SubprocessRequest};
 pub use state::SubprocessState;
 pub use stream::{Stream, StreamChunk};
 pub use supervisor::{HealthProbe, LogRotation, RestartPolicy};

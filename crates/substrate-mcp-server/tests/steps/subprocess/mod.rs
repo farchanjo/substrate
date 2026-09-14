@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use substrate_domain::subprocess::BinaryAllowlistMode;
 use substrate_policy::Allowlist;
 use substrate_subprocess::registry::{BinaryAllowlist, SubprocessRegistry};
 
@@ -57,7 +58,8 @@ pub fn echo_binary_path() -> PathBuf {
 /// The registry uses conservative defaults appropriate for unit-style tests:
 /// max 4 per-client, max 8 global, 64 KiB aggregate buffer, 5 s drain.
 pub fn make_registry_with_echo(roots: Vec<PathBuf>) -> Arc<SubprocessRegistry> {
-    let binary_allowlist = BinaryAllowlist::new(vec![echo_binary_path()]);
+    let binary_allowlist =
+        BinaryAllowlist::new(vec![echo_binary_path()]).with_mode(BinaryAllowlistMode::Strict);
     let path_allowlist = Allowlist::new(roots).expect("create test Allowlist");
     let root_cancel = CancellationToken::new();
     SubprocessRegistry::new(
@@ -86,7 +88,8 @@ pub fn make_deny_all_registry(roots: Vec<PathBuf>) -> Arc<SubprocessRegistry> {
 /// `subprocess_stdout_writer` (resolved from the Cargo-generated env var).
 pub fn make_registry_with_fixture(roots: Vec<PathBuf>) -> Arc<SubprocessRegistry> {
     let fixture_path = fixture_binary_path();
-    let binary_allowlist = BinaryAllowlist::new(vec![echo_binary_path(), fixture_path]);
+    let binary_allowlist = BinaryAllowlist::new(vec![echo_binary_path(), fixture_path])
+        .with_mode(BinaryAllowlistMode::Strict);
     let path_allowlist = Allowlist::new(roots).expect("create test Allowlist");
     let root_cancel = CancellationToken::new();
     SubprocessRegistry::new(

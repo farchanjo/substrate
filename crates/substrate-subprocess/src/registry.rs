@@ -34,6 +34,7 @@ use substrate_domain::ports::stream_observer::StreamChunkObserver;
 use substrate_domain::ports::subprocess::{
     SignalTarget, SubprocessPort, SubprocessResult, SubprocessSignalName,
 };
+use substrate_domain::subprocess::BinaryAllowlistMode;
 use substrate_domain::subprocess::errors::SubprocessError;
 use substrate_domain::subprocess::handle::SubprocessHandle;
 use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
@@ -132,6 +133,10 @@ pub struct BinaryAllowlist {
     /// Compiled glob patterns extracted from configured entries, matched against
     /// the binary's canonical resolved path string.
     globs: Arc<globset::GlobSet>,
+
+    /// Whether the entries narrow admission (`Strict`) or the list is inert
+    /// (`AllowAll`, the default).
+    mode: substrate_domain::subprocess::BinaryAllowlistMode,
 }
 
 /// Returns `true` when `entry` contains a glob metacharacter substrate's glob
@@ -186,15 +191,17 @@ impl BinaryAllowlist {
         Self {
             entries: literals,
             globs: Arc::new(globs),
+            mode: BinaryAllowlistMode::AllowAll,
         }
     }
 
-    /// Constructs an empty (deny-all) allowlist.
+    /// Constructs an empty allowlist in `Strict` mode: nothing is admitted.
     #[must_use]
     pub fn deny_all() -> Self {
         Self {
             entries: Vec::new(),
             globs: Arc::new(globset::GlobSet::empty()),
+            mode: BinaryAllowlistMode::Strict,
         }
     }
 
@@ -208,7 +215,23 @@ impl BinaryAllowlist {
     /// for the cheap literal fast-path and for unit tests.
     #[must_use]
     pub fn allows(&self, path: &std::path::Path) -> bool {
+        if self.mode == BinaryAllowlistMode::AllowAll {
+            return true;
+        }
         self.entries.iter().any(|e| e == path) || self.globs.is_match(path)
+    }
+
+    /// Sets the enforcement mode, consuming and returning the allowlist.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: BinaryAllowlistMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Returns the configured enforcement mode.
+    #[must_use]
+    pub const fn mode(&self) -> BinaryAllowlistMode {
+        self.mode
     }
 
     /// Returns a snapshot of the configured (unresolved) literal allowlist entries.
@@ -1994,10 +2017,15 @@ async fn resolve_binary_allowed(
     // Resolve allowlist entries on a blocking thread; skip unresolvable entries so a
     // broken entry never widens the set. Verify the resolved binary is a regular file.
     let resolved_for_check = resolved.clone();
+    let mode = allowlist.mode();
     let is_member = tokio::task::spawn_blocking(move || {
         let regular_file = std::fs::metadata(&resolved_for_check).is_ok_and(|m| m.is_file());
         if !regular_file {
             return false;
+        }
+        // `allow-all` admits any regular file; only `strict` consults the list.
+        if mode == BinaryAllowlistMode::AllowAll {
+            return true;
         }
         let literal_match = entries
             .iter()
@@ -2053,6 +2081,28 @@ mod tests {
 
     use super::*;
 
+    /// The filtering tests exercise `Strict`; `AllowAll` has its own test below.
+    fn strict(entries: Vec<PathBuf>) -> BinaryAllowlist {
+        BinaryAllowlist::new(entries).with_mode(BinaryAllowlistMode::Strict)
+    }
+
+    #[test]
+    fn allow_all_is_the_default_and_makes_the_list_inert() {
+        let allow_all = BinaryAllowlist::new(vec![PathBuf::from("/usr/bin/true")]);
+        assert_eq!(allow_all.mode(), BinaryAllowlistMode::AllowAll);
+        assert!(
+            allow_all.allows(std::path::Path::new("/usr/bin/false")),
+            "an unlisted binary is admitted under the default"
+        );
+
+        let strict = allow_all.with_mode(BinaryAllowlistMode::Strict);
+        assert_eq!(strict.mode(), BinaryAllowlistMode::Strict);
+        assert!(
+            !strict.allows(std::path::Path::new("/usr/bin/false")),
+            "the same list narrows admission once the mode is strict"
+        );
+    }
+
     #[test]
     fn binary_allowlist_deny_all_rejects_any_path() {
         let al = BinaryAllowlist::deny_all();
@@ -2064,7 +2114,7 @@ mod tests {
 
     #[test]
     fn binary_allowlist_allows_configured_path() {
-        let al = BinaryAllowlist::new(vec![PathBuf::from("/usr/bin/true")]);
+        let al = strict(vec![PathBuf::from("/usr/bin/true")]);
         assert!(
             al.allows(std::path::Path::new("/usr/bin/true")),
             "allowlist must accept the configured binary"
@@ -2077,7 +2127,7 @@ mod tests {
 
     #[test]
     fn binary_allowlist_glob_entry_matches_directory_prefix() {
-        let al = BinaryAllowlist::new(vec![PathBuf::from("/usr/local/bin/*")]);
+        let al = strict(vec![PathBuf::from("/usr/local/bin/*")]);
         assert!(
             al.allows(std::path::Path::new("/usr/local/bin/cargo")),
             "glob entry must match a binary directly under the wildcarded directory"
@@ -2090,7 +2140,7 @@ mod tests {
 
     #[test]
     fn binary_allowlist_glob_entry_matches_name_pattern() {
-        let al = BinaryAllowlist::new(vec![PathBuf::from("/opt/tools/*-cli")]);
+        let al = strict(vec![PathBuf::from("/opt/tools/*-cli")]);
         assert!(al.allows(std::path::Path::new("/opt/tools/foo-cli")));
         assert!(!al.allows(std::path::Path::new("/opt/tools/foo-daemon")));
     }
@@ -2099,7 +2149,7 @@ mod tests {
     fn binary_allowlist_recursive_glob_matches_nested_cargo_workspace() {
         // Mirrors a real operator config: arbitrarily deep cargo workspace
         // nesting under ~/dev, any project, debug or release.
-        let al = BinaryAllowlist::new(vec![
+        let al = strict(vec![
             PathBuf::from("/Users/dev/dev/**/target/debug/*"),
             PathBuf::from("/Users/dev/dev/**/target/release/*"),
         ]);
@@ -2126,7 +2176,7 @@ mod tests {
         // Mirrors a real operator config: Homebrew's per-formula bin dirs
         // (/opt/homebrew/opt/<formula>/bin/<tool>), two independent single-
         // segment wildcards in the same pattern.
-        let al = BinaryAllowlist::new(vec![PathBuf::from("/opt/homebrew/opt/*/bin/*")]);
+        let al = strict(vec![PathBuf::from("/opt/homebrew/opt/*/bin/*")]);
         assert!(al.allows(std::path::Path::new("/opt/homebrew/opt/openjdk/bin/java")));
         assert!(al.allows(std::path::Path::new("/opt/homebrew/opt/go@1.26/bin/go")));
         assert!(
@@ -2147,7 +2197,7 @@ mod tests {
         // to an inert literal path (matching only that exact, never-real string)
         // rather than panicking or silently widening the allowlist into a
         // catch-all wildcard.
-        let al = BinaryAllowlist::new(vec![PathBuf::from("/usr/bin/[unterminated")]);
+        let al = strict(vec![PathBuf::from("/usr/bin/[unterminated")]);
         assert!(
             !al.allows(std::path::Path::new("/usr/bin/anything")),
             "a malformed glob must not act as a wildcard over its prefix"
@@ -2171,7 +2221,7 @@ mod tests {
         // behavior on any merged-usr system.
         let canonical_echo = std::fs::canonicalize("/bin/echo").expect("canonicalize /bin/echo");
         let canonical_dir = canonical_echo.parent().expect("echo has a parent dir");
-        let allowlist = BinaryAllowlist::new(vec![canonical_dir.join("*")]);
+        let allowlist = strict(vec![canonical_dir.join("*")]);
         let resolved = resolve_binary_allowed(&allowlist, std::path::Path::new("/bin/echo"))
             .await
             .expect("a glob covering echo's canonical parent dir must allow /bin/echo");
@@ -2180,7 +2230,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_binary_allowed_rejects_real_binary_outside_glob() {
-        let allowlist = BinaryAllowlist::new(vec![PathBuf::from("/opt/nonexistent-tools/*")]);
+        let allowlist = strict(vec![PathBuf::from("/opt/nonexistent-tools/*")]);
         let err = resolve_binary_allowed(&allowlist, std::path::Path::new("/bin/echo"))
             .await
             .expect_err("a glob that does not cover /bin must reject /bin/echo");
@@ -2240,7 +2290,7 @@ mod tests {
             .expect("temp_dir must be a valid allowlist root");
 
         let registry = SubprocessRegistry::new(
-            BinaryAllowlist::new(vec![sh.clone()]),
+            strict(vec![sh.clone()]),
             Vec::new(),
             4,
             8,
@@ -2327,7 +2377,7 @@ mod tests {
             .expect("temp_dir must be a valid allowlist root");
 
         let registry = SubprocessRegistry::new(
-            BinaryAllowlist::new(vec![sh.clone()]),
+            strict(vec![sh.clone()]),
             Vec::new(),
             MAX_CONCURRENT,
             MAX_CONCURRENT,
@@ -2414,7 +2464,7 @@ mod tests {
         let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
             .expect("temp_dir must be a valid allowlist root");
         let registry = SubprocessRegistry::new(
-            BinaryAllowlist::new(vec![sh]),
+            strict(vec![sh]),
             Vec::new(),
             4,
             8,

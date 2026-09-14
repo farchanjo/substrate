@@ -342,7 +342,8 @@ pub(crate) async fn wire(
         let registry_base = substrate_subprocess::registry::SubprocessRegistry::new(
             substrate_subprocess::registry::BinaryAllowlist::new(
                 subprocess_cfg.binary_allowlist.clone(),
-            ),
+            )
+            .with_mode(subprocess_cfg.binary_allowlist_mode),
             Vec::new(),
             subprocess_cfg.max_per_client,
             subprocess_cfg.max_concurrent,
@@ -493,7 +494,8 @@ pub(crate) fn build_supervisor_subprocess_port(
     let registry = substrate_subprocess::registry::SubprocessRegistry::new(
         substrate_subprocess::registry::BinaryAllowlist::new(
             subprocess_cfg.binary_allowlist.clone(),
-        ),
+        )
+        .with_mode(subprocess_cfg.binary_allowlist_mode),
         Vec::new(),
         subprocess_cfg.max_per_client,
         subprocess_cfg.max_concurrent,

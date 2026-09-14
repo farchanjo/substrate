@@ -15,6 +15,23 @@ use crate::subprocess::errors::SubprocessError;
 use crate::subprocess::supervisor::{HealthProbe, LogRotation, RestartPolicy};
 use crate::value_objects::IdempotencyKey;
 
+/// How the subprocess binary allowlist is enforced.
+///
+/// Mirrors `#BinaryAllowlistMode` in `doc/arch/schemas/subprocess.cue`.
+/// The default admits every executable; `Strict` narrows admission to the
+/// configured allowlist entries, which is the posture for a locked-down host.
+///
+/// References: ADR-0052 §"Layer 1 — Binary Allowlist".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BinaryAllowlistMode {
+    /// Every executable is admitted; the allowlist is inert.
+    #[default]
+    AllowAll,
+    /// Only the configured allowlist entries are admitted.
+    Strict,
+}
+
 /// Unconditionally banned environment variable keys per ADR-0052 §"Layer 5".
 ///
 /// These keys are injection vectors that could compromise the host OS regardless

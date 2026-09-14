@@ -27,6 +27,11 @@ package schemas
 // #BinaryPathList is a list of absolute binary paths eligible for execution.
 #BinaryPathList: [...#AbsolutePath] | *[]
 
+// #BinaryAllowlistMode selects how #BinaryPathList is enforced: "allow-all"
+// (default) admits any regular executable and makes the list inert; "strict"
+// admits only the listed entries.
+#BinaryAllowlistMode: "allow-all" | "strict" | *"allow-all"
+
 // #EnvVarNameList is a list of environment variable names (names only, never
 // values) that a child process may inherit.
 #EnvVarNameList: [...string] | *[]

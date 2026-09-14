@@ -48,6 +48,7 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use substrate_domain::ports::subprocess::SubprocessPort;
+use substrate_domain::subprocess::BinaryAllowlistMode;
 use substrate_domain::subprocess::request::{CaptureKind, StdinKind, SubprocessRequest};
 use substrate_domain::value_objects::JobId;
 use substrate_policy::Allowlist;
@@ -80,7 +81,8 @@ pub fn sleeper_binary_path() -> PathBuf {
 /// Uses a 1-second drain (instead of the default 5 s) so tests finish quickly.
 pub fn make_sleeper_registry(roots: Vec<PathBuf>) -> Arc<SubprocessRegistry> {
     let binary_path = sleeper_binary_path();
-    let binary_allowlist = BinaryAllowlist::new(vec![binary_path]);
+    let binary_allowlist =
+        BinaryAllowlist::new(vec![binary_path]).with_mode(BinaryAllowlistMode::Strict);
     let path_allowlist = Allowlist::new(roots).expect("create Allowlist for sleeper registry");
     let root_cancel = CancellationToken::new();
     SubprocessRegistry::new(
@@ -103,7 +105,8 @@ pub fn make_sleeper_registry_with_n(
     max_concurrent: u32,
 ) -> Arc<SubprocessRegistry> {
     let binary_path = sleeper_binary_path();
-    let binary_allowlist = BinaryAllowlist::new(vec![binary_path]);
+    let binary_allowlist =
+        BinaryAllowlist::new(vec![binary_path]).with_mode(BinaryAllowlistMode::Strict);
     let path_allowlist = Allowlist::new(roots).expect("create Allowlist for sleeper registry");
     let root_cancel = CancellationToken::new();
     SubprocessRegistry::new(

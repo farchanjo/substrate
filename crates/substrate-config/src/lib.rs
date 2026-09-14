@@ -19,7 +19,7 @@ mod model;
 
 pub use loader::{ConfigError, load, load_with};
 pub use model::{
-    CapabilitiesSection, IndexConfig, LogLevel, LogTarget, LogWriteErrorPolicy, LoggingConfig,
-    PolicyConfig, ProtocolConfig, RuntimeConfig, SecurityRuntime, SemaphoreCaps, SimdConfig,
-    StartupConfig, SubprocessConfig, Timeouts,
+    BinaryAllowlistMode, CapabilitiesSection, IndexConfig, LogLevel, LogTarget,
+    LogWriteErrorPolicy, LoggingConfig, PolicyConfig, ProtocolConfig, RuntimeConfig,
+    SecurityRuntime, SemaphoreCaps, SimdConfig, StartupConfig, SubprocessConfig, Timeouts,
 };
