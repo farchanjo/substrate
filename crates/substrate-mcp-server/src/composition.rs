@@ -136,14 +136,12 @@ pub(crate) async fn wire(
     // kernel-jail anchor (e.g. text-processing handlers, ADR-0071 fix).
     // `Allowlist::new` above already fails closed on an empty `policy.roots`,
     // so `allowlist_roots` is guaranteed non-empty at this point.
-    let primary_allowlist_root =
-        allowlist_roots
-            .first()
-            .cloned()
-            .ok_or_else(|| substrate_domain::SubstrateError::ConfigInvalid {
-                offending_field: "policy.roots".to_owned(),
-                correlation_id: None,
-            })?;
+    let primary_allowlist_root = allowlist_roots.first().cloned().ok_or_else(|| {
+        substrate_domain::SubstrateError::ConfigInvalid {
+            offending_field: "policy.roots".to_owned(),
+            correlation_id: None,
+        }
+    })?;
 
     // ---- PathJail (ADR-0035 / ADR-0042) ------------------------------------
     let jail_factory = PathJailFactory::new(allowlist, config.security.refuse_degraded_jail);
@@ -414,18 +412,20 @@ pub(crate) async fn wire(
     #[cfg(feature = "launch")]
     {
         match substrate_launch::supervisor_registry::launch_stacks_root() {
-            Ok(stacks_root) => match substrate_launch::reaper::reconcile_sweep(&stacks_root).await {
-                Ok(report) if !report.is_empty() => tracing::info!(
-                    reattached = report.reattached.len(),
-                    adopted = report.adopted.len(),
-                    reaped = report.reaped.len(),
-                    recycled = report.recycled.len(),
-                    "launch reaper-on-boot reconcile sweep applied"
-                ),
-                Ok(_) => {},
-                Err(e) => {
-                    tracing::warn!(error = %e, "launch reaper-on-boot sweep failed (non-fatal)");
-                },
+            Ok(stacks_root) => {
+                match substrate_launch::reaper::reconcile_sweep(&stacks_root).await {
+                    Ok(report) if !report.is_empty() => tracing::info!(
+                        reattached = report.reattached.len(),
+                        adopted = report.adopted.len(),
+                        reaped = report.reaped.len(),
+                        recycled = report.recycled.len(),
+                        "launch reaper-on-boot reconcile sweep applied"
+                    ),
+                    Ok(_) => {},
+                    Err(e) => {
+                        tracing::warn!(error = %e, "launch reaper-on-boot sweep failed (non-fatal)");
+                    },
+                }
             },
             Err(e) => {
                 tracing::warn!(error = %e, "launch stacks root unresolved; skipping reaper sweep");
@@ -491,7 +491,9 @@ pub(crate) fn build_supervisor_subprocess_port(
         .or_else(|| config.policy.roots.first().cloned());
     let path_allowlist = Allowlist::new(config.policy.roots.clone())?;
     let registry = substrate_subprocess::registry::SubprocessRegistry::new(
-        substrate_subprocess::registry::BinaryAllowlist::new(subprocess_cfg.binary_allowlist.clone()),
+        substrate_subprocess::registry::BinaryAllowlist::new(
+            subprocess_cfg.binary_allowlist.clone(),
+        ),
         Vec::new(),
         subprocess_cfg.max_per_client,
         subprocess_cfg.max_concurrent,

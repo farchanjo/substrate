@@ -208,12 +208,13 @@ pub async fn handle_fs_find(
         let jail_clone = Arc::clone(&jail);
         let raw_clone = raw_root.clone();
         let allowlist_root = deps.allowlist_root.clone();
-        let jail_result = tokio::task::spawn_blocking(move || jail_clone.jail(&allowlist_root, &raw_clone))
-            .await
-            .map_err(|e| SubstrateError::InternalError {
-                reason: format!("spawn_blocking join error: {e}"),
-                correlation_id: None,
-            })?;
+        let jail_result =
+            tokio::task::spawn_blocking(move || jail_clone.jail(&allowlist_root, &raw_clone))
+                .await
+                .map_err(|e| SubstrateError::InternalError {
+                    reason: format!("spawn_blocking join error: {e}"),
+                    correlation_id: None,
+                })?;
 
         match jail_result {
             Ok(j) => j,
@@ -232,7 +233,6 @@ pub async fn handle_fs_find(
             Err(e) => return Err(e),
         }
     };
-
 
     // Compile glob pattern.
     let glob_pattern = req.pattern.clone();
@@ -488,7 +488,13 @@ async fn resolve_root_after_symlink_escape(
                 resolved: raw_clone,
             };
         }
-        symlink_chain_disposition(&raw_clone, jail_clone.as_ref(), &allowlist_root_clone, &lstat, 0)
+        symlink_chain_disposition(
+            &raw_clone,
+            jail_clone.as_ref(),
+            &allowlist_root_clone,
+            &lstat,
+            0,
+        )
     })
     .await
     .map_err(|e| SubstrateError::InternalError {
@@ -505,12 +511,14 @@ async fn resolve_root_after_symlink_escape(
             let jail_clone = Arc::clone(jail);
             let resolved_clone = resolved.clone();
             let allowlist_root_clone = allowlist_root.clone();
-            tokio::task::spawn_blocking(move || jail_clone.jail(&allowlist_root_clone, &resolved_clone))
-                .await
-                .map_err(|e| SubstrateError::InternalError {
-                    reason: format!("spawn_blocking join error: {e}"),
-                    correlation_id: None,
-                })?
+            tokio::task::spawn_blocking(move || {
+                jail_clone.jail(&allowlist_root_clone, &resolved_clone)
+            })
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })?
         },
         SymlinkDisposition::Escape => Err(SubstrateError::SymlinkEscape {
             path: raw_root.to_string_lossy().into_owned(),

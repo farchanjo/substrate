@@ -211,7 +211,9 @@ pub async fn handle_fs_remove(
 /// mid-syscall (ADR-0037).
 fn check_not_cancelled(cancel: &CancellationToken) -> SubstrateResult<()> {
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
     Ok(())
 }
@@ -284,7 +286,9 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_DRY_RUN_REQUIRED");
         assert!(f.exists());
     }
@@ -301,7 +305,9 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CONFIRMATION_REQUIRED");
         assert!(f.exists());
     }
@@ -318,7 +324,9 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.expect("remove");
+        handle_fs_remove(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("remove");
         assert!(!f.exists());
     }
 
@@ -335,7 +343,9 @@ mod tests {
             recursive: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
         assert!(sub.exists());
     }
@@ -397,7 +407,9 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_remove(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
         assert!(f.exists(), "file must not be removed when cancelled");
     }
@@ -419,8 +431,13 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_remove(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_remove(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
-        assert!(sub.exists(), "directory tree must not be removed when cancelled");
+        assert!(
+            sub.exists(),
+            "directory tree must not be removed when cancelled"
+        );
     }
 }

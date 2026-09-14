@@ -395,10 +395,14 @@ impl LaunchRegistry {
         let canonical = canonical_path_string(profile_path);
         let registry = self
             .detach_launcher
-            .launch_detached(&stack_id, Path::new(&canonical), &self.trust_store, &config_hash)
+            .launch_detached(
+                &stack_id,
+                Path::new(&canonical),
+                &self.trust_store,
+                &config_hash,
+            )
             .await?;
-        let mut entry =
-            StackEntry::new(stack_id.clone(), canonical, config_hash, policy, profile);
+        let mut entry = StackEntry::new(stack_id.clone(), canonical, config_hash, policy, profile);
         entry.handle.state = StackState::Detached;
         for child in &registry.children {
             entry.set_service(&child.name, SubprocessState::Running);
@@ -406,7 +410,10 @@ impl LaunchRegistry {
         entry.emit(
             LaunchEventKind::Started,
             None,
-            format!("detached supervisor pid {} owns the stack", registry.supervisor_pid),
+            format!(
+                "detached supervisor pid {} owns the stack",
+                registry.supervisor_pid
+            ),
         );
         entry.handle.supervisor = Some(registry);
         let handle = entry.handle.clone();
@@ -436,19 +443,27 @@ impl LaunchRegistry {
         service_name: &str,
     ) -> Result<StackHandle, LaunchError> {
         {
-            let entry = self.stacks.get(stack_id).ok_or_else(|| LaunchError::SupervisorUnreachable {
-                stack_id: stack_id.to_crockford(),
-            })?;
+            let entry =
+                self.stacks
+                    .get(stack_id)
+                    .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                        stack_id: stack_id.to_crockford(),
+                    })?;
             if !entry.profile.services.contains_key(service_name) {
                 return Err(LaunchError::InvalidProfile {
                     msg: format!("unknown service '{service_name}'"),
                 });
             }
         }
-        self.detached_controller.send_restart(stack_id, service_name).await?;
-        let mut entry = self.stacks.get_mut(stack_id).ok_or_else(|| LaunchError::SupervisorUnreachable {
-            stack_id: stack_id.to_crockford(),
-        })?;
+        self.detached_controller
+            .send_restart(stack_id, service_name)
+            .await?;
+        let mut entry =
+            self.stacks
+                .get_mut(stack_id)
+                .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                })?;
         entry.emit(
             LaunchEventKind::Restarting,
             Some(service_name),
@@ -681,7 +696,8 @@ trait DetachedController: Send + Sync {
 
     /// Commands the supervisor to restart exactly one Service and blocks
     /// until the registry shows it re-spawned (a new pid or start-time).
-    async fn send_restart(&self, stack_id: &StackId, service_name: &str) -> Result<(), LaunchError>;
+    async fn send_restart(&self, stack_id: &StackId, service_name: &str)
+    -> Result<(), LaunchError>;
 
     /// Commands the supervisor to reload (from `profile_path`, always fully
     /// resolved by the caller) and blocks until the registry reflects
@@ -722,7 +738,11 @@ impl DetachedController for ProcessDetachedController {
         await_registry_gone(&stack_dir, stack_id).await
     }
 
-    async fn send_restart(&self, stack_id: &StackId, service_name: &str) -> Result<(), LaunchError> {
+    async fn send_restart(
+        &self,
+        stack_id: &StackId,
+        service_name: &str,
+    ) -> Result<(), LaunchError> {
         let stack_dir = open_stack_registry(stack_id).await?;
         require_supervisor_alive(&stack_dir, stack_id).await?;
         let before = read_supervisor_registry(&stack_dir)
@@ -791,7 +811,9 @@ async fn require_supervisor_alive(stack_dir: &Path, stack_id: &StackId) -> Resul
 async fn await_registry_gone(stack_dir: &Path, stack_id: &StackId) -> Result<(), LaunchError> {
     let deadline = Instant::now() + CONTROL_DOWN_CONFIRM_TIMEOUT;
     loop {
-        if read_supervisor_registry(stack_dir).await.is_err() || !supervisor_reachable(stack_dir).await {
+        if read_supervisor_registry(stack_dir).await.is_err()
+            || !supervisor_reachable(stack_dir).await
+        {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -896,11 +918,10 @@ impl LaunchPort for LaunchRegistry {
         // Safe-open + fstat + content hash, then append a bless record. No spawn
         // (launch-trust-blesses-profile).
         let loaded = load_untrusted(Path::new(profile_path)).await?;
-        let canonical = std::fs::canonicalize(profile_path).map_err(|_| {
-            LaunchError::ConfigUntrustedDir {
+        let canonical =
+            std::fs::canonicalize(profile_path).map_err(|_| LaunchError::ConfigUntrustedDir {
                 path: profile_path.to_owned(),
-            }
-        })?;
+            })?;
         let record = build_trust_record(
             &canonical.display().to_string(),
             loaded.identity,
@@ -917,7 +938,8 @@ impl LaunchPort for LaunchRegistry {
         _orphan_ttl_secs: Option<u32>,
         cancel: &dyn CancelSignal,
     ) -> Result<StackHandle, LaunchError> {
-        let loaded = load_trusted(Path::new(profile_path), &self.trust_store, &self.op_config).await?;
+        let loaded =
+            load_trusted(Path::new(profile_path), &self.trust_store, &self.op_config).await?;
         loaded.profile.validate()?;
         let policy = on_client_disconnect.unwrap_or(loaded.profile.on_client_disconnect);
         if policy == DisconnectPolicy::Detach {
@@ -975,7 +997,12 @@ impl LaunchPort for LaunchRegistry {
 
     async fn status(&self, stack_id: Option<&StackId>) -> SubstrateResult<Vec<StackHandle>> {
         let handles: Vec<StackHandle> = stack_id.map_or_else(
-            || self.stacks.iter().map(|e| e.value().handle.clone()).collect(),
+            || {
+                self.stacks
+                    .iter()
+                    .map(|e| e.value().handle.clone())
+                    .collect()
+            },
             |id| {
                 self.stacks
                     .get(id)
@@ -1021,9 +1048,12 @@ impl LaunchPort for LaunchRegistry {
         cancel: &dyn CancelSignal,
     ) -> Result<StackHandle, LaunchError> {
         let is_detached = {
-            let entry = self.stacks.get(stack_id).ok_or_else(|| LaunchError::SupervisorUnreachable {
-                stack_id: stack_id.to_crockford(),
-            })?;
+            let entry =
+                self.stacks
+                    .get(stack_id)
+                    .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                        stack_id: stack_id.to_crockford(),
+                    })?;
             entry.handle.state == StackState::Detached
         };
         if is_detached {
@@ -1034,16 +1064,20 @@ impl LaunchPort for LaunchRegistry {
         }
 
         let (service, old_job, client_id, stored_path) = {
-            let entry = self.stacks.get(stack_id).ok_or_else(|| {
-                LaunchError::SupervisorUnreachable {
-                    stack_id: stack_id.to_crockford(),
-                }
-            })?;
-            let service = entry.profile.services.get(service_name).cloned().ok_or_else(|| {
-                LaunchError::InvalidProfile {
+            let entry =
+                self.stacks
+                    .get(stack_id)
+                    .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                        stack_id: stack_id.to_crockford(),
+                    })?;
+            let service = entry
+                .profile
+                .services
+                .get(service_name)
+                .cloned()
+                .ok_or_else(|| LaunchError::InvalidProfile {
                     msg: format!("unknown service '{service_name}'"),
-                }
-            })?;
+                })?;
             (
                 service,
                 entry.job_ids.get(service_name).cloned(),
@@ -1075,11 +1109,12 @@ impl LaunchPort for LaunchRegistry {
         )
         .await?;
 
-        let mut entry = self.stacks.get_mut(stack_id).ok_or_else(|| {
-            LaunchError::SupervisorUnreachable {
-                stack_id: stack_id.to_crockford(),
-            }
-        })?;
+        let mut entry =
+            self.stacks
+                .get_mut(stack_id)
+                .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                    stack_id: stack_id.to_crockford(),
+                })?;
         entry.job_ids.insert(service_name.to_owned(), handle.job_id);
         entry.emit(
             LaunchEventKind::Restarting,
@@ -1097,11 +1132,12 @@ impl LaunchPort for LaunchRegistry {
         cancel: &dyn CancelSignal,
     ) -> Result<ReloadReport, LaunchError> {
         let (old_profile, stored_path, job_ids, is_detached) = {
-            let entry = self.stacks.get(stack_id).ok_or_else(|| {
-                LaunchError::SupervisorUnreachable {
-                    stack_id: stack_id.to_crockford(),
-                }
-            })?;
+            let entry =
+                self.stacks
+                    .get(stack_id)
+                    .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                        stack_id: stack_id.to_crockford(),
+                    })?;
             (
                 entry.profile.clone(),
                 entry.handle.profile_path.clone(),
@@ -1166,11 +1202,12 @@ impl LaunchPort for LaunchRegistry {
         _cancel: &dyn CancelSignal,
     ) -> Result<StackState, LaunchError> {
         let (profile, job_ids, is_detached) = {
-            let entry = self.stacks.get(stack_id).ok_or_else(|| {
-                LaunchError::SupervisorUnreachable {
-                    stack_id: stack_id.to_crockford(),
-                }
-            })?;
+            let entry =
+                self.stacks
+                    .get(stack_id)
+                    .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                        stack_id: stack_id.to_crockford(),
+                    })?;
             (
                 entry.profile.clone(),
                 entry.job_ids.clone(),
@@ -1224,12 +1261,16 @@ impl LaunchPort for LaunchRegistry {
 
     async fn forget(&self, stack_id: &StackId) -> Result<(), LaunchError> {
         let (state, is_detached) = {
-            let entry = self.stacks.get(stack_id).ok_or_else(|| {
-                LaunchError::SupervisorUnreachable {
-                    stack_id: stack_id.to_crockford(),
-                }
-            })?;
-            (entry.handle.state, entry.handle.state == StackState::Detached)
+            let entry =
+                self.stacks
+                    .get(stack_id)
+                    .ok_or_else(|| LaunchError::SupervisorUnreachable {
+                        stack_id: stack_id.to_crockford(),
+                    })?;
+            (
+                entry.handle.state,
+                entry.handle.state == StackState::Detached,
+            )
         };
         if state != StackState::Down {
             // A detached Stack whose supervisor has already exited on its own
@@ -1314,8 +1355,14 @@ pub(crate) fn compute_reload_report(old: &LaunchProfile, new: &LaunchProfile) ->
     let old_keys: BTreeSet<&String> = old.services.keys().collect();
     let new_keys: BTreeSet<&String> = new.services.keys().collect();
 
-    let added: Vec<String> = new_keys.difference(&old_keys).map(|s| (*s).clone()).collect();
-    let removed: Vec<String> = old_keys.difference(&new_keys).map(|s| (*s).clone()).collect();
+    let added: Vec<String> = new_keys
+        .difference(&old_keys)
+        .map(|s| (*s).clone())
+        .collect();
+    let removed: Vec<String> = old_keys
+        .difference(&new_keys)
+        .map(|s| (*s).clone())
+        .collect();
 
     let mut direct_changed: Vec<String> = Vec::new();
     let mut edge_only: Vec<String> = Vec::new();
@@ -1452,7 +1499,10 @@ mod tests {
 
         /// Scripts `binary` to resolve to `state` on the next readiness poll.
         fn script(&self, binary: &str, state: SubprocessState) {
-            self.outcomes.lock().unwrap().insert(binary.to_owned(), state);
+            self.outcomes
+                .lock()
+                .unwrap()
+                .insert(binary.to_owned(), state);
         }
 
         fn spawns(&self) -> Vec<String> {
@@ -1735,7 +1785,10 @@ mod tests {
     #[async_trait]
     impl DetachedController for FakeDetachedController {
         async fn send_down(&self, stack_id: &StackId) -> Result<(), LaunchError> {
-            self.down_calls.lock().unwrap().push(stack_id.to_crockford());
+            self.down_calls
+                .lock()
+                .unwrap()
+                .push(stack_id.to_crockford());
             let verdict = *self.down_verdict.lock().unwrap();
             match verdict {
                 ControllerVerdict::Succeed => Ok(()),
@@ -1745,7 +1798,11 @@ mod tests {
             }
         }
 
-        async fn send_restart(&self, stack_id: &StackId, service_name: &str) -> Result<(), LaunchError> {
+        async fn send_restart(
+            &self,
+            stack_id: &StackId,
+            service_name: &str,
+        ) -> Result<(), LaunchError> {
             self.restart_calls
                 .lock()
                 .unwrap()
@@ -1838,7 +1895,10 @@ mod tests {
             .await
             .expect_err("required dep failure");
         match err {
-            LaunchError::DependencyFailed { service, dependency } => {
+            LaunchError::DependencyFailed {
+                service,
+                dependency,
+            } => {
                 assert_eq!(service, "api");
                 assert_eq!(dependency, "db");
             },
@@ -1926,8 +1986,14 @@ mod tests {
             .up(&profile, None, None, &NeverCancel)
             .await
             .expect_err("cycle rejected");
-        assert!(matches!(err, LaunchError::CycleDetected { .. }), "got {err:?}");
-        assert!(fake.spawns().is_empty(), "no service may spawn on a cyclic graph");
+        assert!(
+            matches!(err, LaunchError::CycleDetected { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            fake.spawns().is_empty(),
+            "no service may spawn on a cyclic graph"
+        );
     }
 
     #[tokio::test]
@@ -1948,7 +2014,10 @@ mod tests {
 
         assert_eq!(handle.state, StackState::Detached);
         assert_eq!(handle.policy, DisconnectPolicy::Detach);
-        assert!(handle.supervisor.is_some(), "detached handle carries the supervisor registry");
+        assert!(
+            handle.supervisor.is_some(),
+            "detached handle carries the supervisor registry"
+        );
         assert_eq!(handle.services.get("web"), Some(&SubprocessState::Running));
         // The detached supervisor process owns the children; the in-process
         // subprocess port spawns nothing for a detach bring-up.
@@ -1956,7 +2025,11 @@ mod tests {
             fake.spawns().is_empty(),
             "detach delegates spawning to the supervisor process, not the in-session port"
         );
-        assert_eq!(launcher.call_count(), 1, "the supervisor is launched exactly once");
+        assert_eq!(
+            launcher.call_count(),
+            1,
+            "the supervisor is launched exactly once"
+        );
     }
 
     #[tokio::test]
@@ -1974,7 +2047,10 @@ mod tests {
             .up(&profile, Some(DisconnectPolicy::Detach), None, &NeverCancel)
             .await
             .expect_err("a supervisor that never comes up is unreachable");
-        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::SupervisorUnreachable { .. }),
+            "got {err:?}"
+        );
         assert!(fake.spawns().is_empty());
     }
 
@@ -1988,7 +2064,12 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let fake = FakeSubprocessPort::new();
         let controller = FakeDetachedController::alive();
-        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let reg = registry_detached(
+            fake.clone(),
+            dir.path(),
+            &["db", "api", "web"],
+            controller.clone(),
+        );
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
@@ -2003,7 +2084,10 @@ mod tests {
             .expect("down routes to the supervisor and confirms teardown");
 
         assert_eq!(state, StackState::Down);
-        assert_eq!(controller.down_calls(), vec![handle.stack_id.to_crockford()]);
+        assert_eq!(
+            controller.down_calls(),
+            vec![handle.stack_id.to_crockford()]
+        );
         assert!(
             fake.cancels().is_empty(),
             "the detached supervisor owns teardown; the in-session port must never be told to cancel"
@@ -2037,7 +2121,10 @@ mod tests {
             .down(&handle.stack_id, &NeverCancel)
             .await
             .expect_err("an unreachable supervisor must not be silently reported as torn down");
-        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::SupervisorUnreachable { .. }),
+            "got {err:?}"
+        );
 
         let after = reg
             .status(Some(&handle.stack_id))
@@ -2045,7 +2132,11 @@ mod tests {
             .expect("status")
             .pop()
             .expect("stack present");
-        assert_eq!(after.state, StackState::Detached, "state must be untouched on a failed down");
+        assert_eq!(
+            after.state,
+            StackState::Detached,
+            "state must be untouched on a failed down"
+        );
     }
 
     #[tokio::test]
@@ -2056,7 +2147,12 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let fake = FakeSubprocessPort::new();
         let controller = FakeDetachedController::alive();
-        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let reg = registry_detached(
+            fake.clone(),
+            dir.path(),
+            &["db", "api", "web"],
+            controller.clone(),
+        );
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
@@ -2074,7 +2170,10 @@ mod tests {
             controller.restart_calls(),
             vec![(handle.stack_id.to_crockford(), "api".to_owned())]
         );
-        assert!(fake.spawns().is_empty(), "restart must never spawn in-session for a detached stack");
+        assert!(
+            fake.spawns().is_empty(),
+            "restart must never spawn in-session for a detached stack"
+        );
         assert_eq!(updated.services.get("api"), Some(&SubprocessState::Running));
     }
 
@@ -2096,8 +2195,14 @@ mod tests {
             .restart(&handle.stack_id, "api", &NeverCancel)
             .await
             .expect_err("an unreachable supervisor must fail restart, not double-spawn");
-        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
-        assert!(fake.spawns().is_empty(), "an unreachable supervisor must never trigger an in-session spawn");
+        assert!(
+            matches!(err, LaunchError::SupervisorUnreachable { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            fake.spawns().is_empty(),
+            "an unreachable supervisor must never trigger an in-session spawn"
+        );
     }
 
     #[tokio::test]
@@ -2105,7 +2210,12 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let fake = FakeSubprocessPort::new();
         let controller = FakeDetachedController::alive();
-        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let reg = registry_detached(
+            fake.clone(),
+            dir.path(),
+            &["db", "api", "web"],
+            controller.clone(),
+        );
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
@@ -2118,8 +2228,14 @@ mod tests {
             .restart(&handle.stack_id, "ghost", &NeverCancel)
             .await
             .expect_err("unknown service rejected");
-        assert!(matches!(err, LaunchError::InvalidProfile { .. }), "got {err:?}");
-        assert!(controller.restart_calls().is_empty(), "an unknown service must never reach the supervisor");
+        assert!(
+            matches!(err, LaunchError::InvalidProfile { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            controller.restart_calls().is_empty(),
+            "an unknown service must never reach the supervisor"
+        );
     }
 
     #[tokio::test]
@@ -2130,7 +2246,12 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let fake = FakeSubprocessPort::new();
         let controller = FakeDetachedController::alive();
-        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let reg = registry_detached(
+            fake.clone(),
+            dir.path(),
+            &["db", "api", "web"],
+            controller.clone(),
+        );
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
@@ -2150,8 +2271,15 @@ mod tests {
 
         assert!(report.restarted.contains(&"api".to_owned()));
         assert!(report.restarted.contains(&"web".to_owned()));
-        assert_eq!(controller.reload_calls().len(), 1, "the supervisor is commanded exactly once");
-        assert!(fake.spawns().is_empty(), "reload must never spawn in-session for a detached stack");
+        assert_eq!(
+            controller.reload_calls().len(),
+            1,
+            "the supervisor is commanded exactly once"
+        );
+        assert!(
+            fake.spawns().is_empty(),
+            "reload must never spawn in-session for a detached stack"
+        );
 
         let after = reg
             .status(Some(&handle.stack_id))
@@ -2184,8 +2312,14 @@ mod tests {
             .reload(&handle.stack_id, None, &NeverCancel)
             .await
             .expect_err("an unreachable supervisor must fail reload, not double-spawn");
-        assert!(matches!(err, LaunchError::SupervisorUnreachable { .. }), "got {err:?}");
-        assert!(fake.spawns().is_empty(), "an unreachable supervisor must never trigger an in-session spawn");
+        assert!(
+            matches!(err, LaunchError::SupervisorUnreachable { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            fake.spawns().is_empty(),
+            "an unreachable supervisor must never trigger an in-session spawn"
+        );
     }
 
     #[tokio::test]
@@ -2210,7 +2344,10 @@ mod tests {
             .forget(&handle.stack_id)
             .await
             .expect_err("a live detached supervisor must never be silently forgotten");
-        assert!(matches!(err, LaunchError::StackNotTerminal { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::StackNotTerminal { .. }),
+            "got {err:?}"
+        );
 
         let after = reg
             .status(Some(&handle.stack_id))
@@ -2229,7 +2366,12 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let fake = FakeSubprocessPort::new();
         let controller = FakeDetachedController::alive();
-        let reg = registry_detached(fake.clone(), dir.path(), &["db", "api", "web"], controller.clone());
+        let reg = registry_detached(
+            fake.clone(),
+            dir.path(),
+            &["db", "api", "web"],
+            controller.clone(),
+        );
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
@@ -2247,7 +2389,10 @@ mod tests {
             .expect("a genuinely-dead detached supervisor's stale entry may be forgotten");
 
         let after = reg.status(Some(&handle.stack_id)).await.expect("status");
-        assert!(after.is_empty(), "forgotten stack must not appear in status");
+        assert!(
+            after.is_empty(),
+            "forgotten stack must not appear in status"
+        );
     }
 
     #[tokio::test]
@@ -2259,8 +2404,14 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
-        let state = reg.down(&handle.stack_id, &NeverCancel).await.expect("down");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
+        let state = reg
+            .down(&handle.stack_id, &NeverCancel)
+            .await
+            .expect("down");
 
         assert_eq!(state, StackState::Down);
         assert_eq!(fake.cancels().len(), 3, "every service must be cancelled");
@@ -2282,13 +2433,23 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
-        reg.down(&handle.stack_id, &NeverCancel).await.expect("down");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
+        reg.down(&handle.stack_id, &NeverCancel)
+            .await
+            .expect("down");
 
-        reg.forget(&handle.stack_id).await.expect("forget a Down stack");
+        reg.forget(&handle.stack_id)
+            .await
+            .expect("forget a Down stack");
 
         let after = reg.status(Some(&handle.stack_id)).await.expect("status");
-        assert!(after.is_empty(), "forgotten stack must not appear in status");
+        assert!(
+            after.is_empty(),
+            "forgotten stack must not appear in status"
+        );
     }
 
     #[tokio::test]
@@ -2299,13 +2460,19 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
 
         let err = reg
             .forget(&handle.stack_id)
             .await
             .expect_err("forget on a Running stack must be rejected");
-        assert!(matches!(err, LaunchError::StackNotTerminal { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::StackNotTerminal { .. }),
+            "got {err:?}"
+        );
 
         let after = reg
             .status(Some(&handle.stack_id))
@@ -2325,7 +2492,10 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
         let before = fake.spawns().len();
 
         // Change only api's args, then re-bless the edited profile.
@@ -2338,8 +2508,14 @@ mod tests {
             .await
             .expect("reload");
 
-        assert!(report.restarted.contains(&"api".to_owned()), "api restarted");
-        assert!(report.restarted.contains(&"web".to_owned()), "web cascade-restarted");
+        assert!(
+            report.restarted.contains(&"api".to_owned()),
+            "api restarted"
+        );
+        assert!(
+            report.restarted.contains(&"web".to_owned()),
+            "web cascade-restarted"
+        );
         assert!(!report.restarted.contains(&"db".to_owned()), "db untouched");
 
         let delta: Vec<String> = fake.spawns()[before..].to_vec();
@@ -2356,7 +2532,10 @@ mod tests {
         let profile = write_profile(dir.path(), base).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
         let before = fake.spawns().len();
 
         let edited = "version = 1\n\n[services.app]\ncommand = [\"app\"]\n\n[services.app.restart_policy]\nkind = \"OnFailure\"\nmax_retries = 5\nbackoff_ms = 1000\n";
@@ -2368,7 +2547,10 @@ mod tests {
             .await
             .expect("reload");
 
-        assert!(report.restarted.is_empty(), "metadata-only change restarts nothing");
+        assert!(
+            report.restarted.is_empty(),
+            "metadata-only change restarts nothing"
+        );
         assert_eq!(fake.spawns().len(), before, "no child re-spawns");
     }
 
@@ -2380,7 +2562,10 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
         let before = fake.spawns().len();
 
         let updated = reg
@@ -2402,12 +2587,12 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
-
-        let (events, cursor) = reg
-            .logs(&handle.stack_id, None, None)
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
             .await
-            .expect("logs");
+            .expect("up");
+
+        let (events, cursor) = reg.logs(&handle.stack_id, None, None).await.expect("logs");
         assert!(!events.is_empty(), "lifecycle events must be present");
         assert!(events.iter().any(|e| e.kind == LaunchEventKind::Started));
         assert!(events.iter().any(|e| e.kind == LaunchEventKind::Ready));
@@ -2429,7 +2614,10 @@ mod tests {
         let profile = write_profile(dir.path(), THREE_TIER).await;
 
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
 
         let (events, _) = reg
             .logs(&handle.stack_id, Some("db"), None)
@@ -2505,13 +2693,20 @@ mod tests {
         let reg = registry(fake.clone(), dir.path());
         let profile = write_profile(dir.path(), THREE_TIER).await;
         reg.trust(&profile).await.expect("trust");
-        let handle = reg.up(&profile, None, None, &NeverCancel).await.expect("up");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up");
 
         // Drive the redaction seam directly: a Semantic event built from a line
         // carrying a secret must store only the masked form.
         {
             let mut entry = reg.stacks.get_mut(&handle.stack_id).expect("entry");
-            entry.emit_semantic("api", "token=s3cr3t-value here", &["s3cr3t-value".to_owned()]);
+            entry.emit_semantic(
+                "api",
+                "token=s3cr3t-value here",
+                &["s3cr3t-value".to_owned()],
+            );
         }
         let (events, _) = reg
             .logs(&handle.stack_id, Some("api"), None)
@@ -2521,7 +2716,10 @@ mod tests {
             .iter()
             .find(|e| e.kind == LaunchEventKind::Semantic)
             .expect("semantic event present");
-        assert!(!semantic.message.contains("s3cr3t-value"), "secret must be redacted");
+        assert!(
+            !semantic.message.contains("s3cr3t-value"),
+            "secret must be redacted"
+        );
         assert!(semantic.message.contains("[REDACTED]"));
     }
 }

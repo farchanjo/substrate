@@ -292,7 +292,8 @@ impl SubstrateWorld {
     /// binary -- not covered by the default empty allowlist.
     pub fn spawn_and_initialize_with_config(&mut self, config_toml: &str, root: &Path) {
         let tmp = TempDir::new().expect("TempDir");
-        std::fs::write(tmp.path().join("substrate.toml"), config_toml).expect("write substrate.toml");
+        std::fs::write(tmp.path().join("substrate.toml"), config_toml)
+            .expect("write substrate.toml");
         let mut child = Self::spawn_server(tmp.path());
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");

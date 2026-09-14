@@ -441,7 +441,10 @@ mod tests {
         s.command = CommandSpec::Shell("echo hi".to_owned());
         services.insert("web".to_owned(), s);
         let p = profile(services);
-        assert!(matches!(p.validate(), Err(LaunchError::InvalidProfile { .. })));
+        assert!(matches!(
+            p.validate(),
+            Err(LaunchError::InvalidProfile { .. })
+        ));
     }
 
     #[test]
@@ -465,7 +468,10 @@ mod tests {
         s.command = CommandSpec::Argv(Vec::new());
         services.insert("web".to_owned(), s);
         let p = profile(services);
-        assert!(matches!(p.validate(), Err(LaunchError::InvalidProfile { .. })));
+        assert!(matches!(
+            p.validate(),
+            Err(LaunchError::InvalidProfile { .. })
+        ));
     }
 
     #[test]
@@ -473,14 +479,20 @@ mod tests {
         let mut services = BTreeMap::new();
         services.insert("api".to_owned(), svc(&["ghost"]));
         let p = profile(services);
-        assert!(matches!(p.validate(), Err(LaunchError::InvalidProfile { .. })));
+        assert!(matches!(
+            p.validate(),
+            Err(LaunchError::InvalidProfile { .. })
+        ));
     }
 
     #[test]
     fn validate_rejects_orphan_ttl_out_of_range() {
         let mut p = profile(BTreeMap::new());
         p.orphan_ttl_secs = ORPHAN_TTL_MAX_SECS + 1;
-        assert!(matches!(p.validate(), Err(LaunchError::InvalidProfile { .. })));
+        assert!(matches!(
+            p.validate(),
+            Err(LaunchError::InvalidProfile { .. })
+        ));
     }
 
     #[test]

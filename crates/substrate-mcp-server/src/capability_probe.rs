@@ -216,8 +216,14 @@ fn darwin_release_major() -> Option<u64> {
         tracing::warn!("uname(2) probe failed; assuming macOS major version 0 (fail-safe)");
         return None;
     };
-    let release = resp.structured_content.get("release").and_then(|v| v.as_str());
-    let Some(major) = release.and_then(|r| r.split('.').next()).and_then(|s| s.parse().ok()) else {
+    let release = resp
+        .structured_content
+        .get("release")
+        .and_then(|v| v.as_str());
+    let Some(major) = release
+        .and_then(|r| r.split('.').next())
+        .and_then(|s| s.parse().ok())
+    else {
         tracing::warn!(
             release = ?release,
             "could not parse Darwin major release from uname(2) output; assuming macOS major version 0 (fail-safe)"

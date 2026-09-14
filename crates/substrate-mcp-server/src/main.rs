@@ -319,7 +319,10 @@ fn run_supervisor_process(args: substrate_launch::detached::SuperviseArgs) -> Ex
         return ExitCode::from(70);
     }
     if let Err(e) = signal_handlers::ignore_sigpipe() {
-        tracing::warn!(?e, "supervise: SIGPIPE SIG_IGN installation failed; continuing");
+        tracing::warn!(
+            ?e,
+            "supervise: SIGPIPE SIG_IGN installation failed; continuing"
+        );
     }
     // setsid MUST precede the runtime (ADR-0068); failure is non-fatal.
     if let Err(e) = substrate_launch::detached::detach_session() {
@@ -359,7 +362,10 @@ async fn supervisor_main(args: substrate_launch::detached::SuperviseArgs) -> Exi
     let subprocess = match composition::build_supervisor_subprocess_port(&config, &root_cancel) {
         Ok(port) => port,
         Err(e) => {
-            tracing::error!(code = e.code(), "supervise: subprocess port wiring failed: {e}");
+            tracing::error!(
+                code = e.code(),
+                "supervise: subprocess port wiring failed: {e}"
+            );
             return ExitCode::from(73);
         },
     };
@@ -369,7 +375,11 @@ async fn supervisor_main(args: substrate_launch::detached::SuperviseArgs) -> Exi
             ExitCode::SUCCESS
         },
         Err(e) => {
-            tracing::error!(code = e.code(), recovery_hint = e.recovery_hint(), "supervise: {e}");
+            tracing::error!(
+                code = e.code(),
+                recovery_hint = e.recovery_hint(),
+                "supervise: {e}"
+            );
             ExitCode::from(74)
         },
     }

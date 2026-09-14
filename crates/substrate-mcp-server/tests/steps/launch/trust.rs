@@ -37,7 +37,9 @@ use substrate_domain::launch::errors::LaunchError;
 use substrate_domain::ports::launch::LaunchPort;
 use tempfile::TempDir;
 
-use super::{FakeSubprocessPort, NeverCancel, VALID_PROFILE, registry, write_named_profile, write_profile};
+use super::{
+    FakeSubprocessPort, NeverCancel, VALID_PROFILE, registry, write_named_profile, write_profile,
+};
 use crate::SubstrateWorld;
 
 fn setup(world: &mut SubstrateWorld, dir: &std::path::Path) {
@@ -69,7 +71,10 @@ async fn when_up_opens_with_nofollow(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let result = reg.up(&profile, None, None, &NeverCancel).await;
     world
         .context
@@ -116,7 +121,9 @@ async fn given_world_writable_parent(world: &mut SubstrateWorld) {
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777))
         .expect("chmod dir world-writable");
     setup(world, dir.path());
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -127,7 +134,10 @@ async fn when_launch_up_invoked(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let policy = world
         .context
         .get("launch_disconnect_policy")
@@ -165,7 +175,10 @@ async fn then_returns_untrusted_dir(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no content hash is computed and no process is spawned$"#)]
 async fn then_no_hash_no_spawn(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(
         fake.spawns().is_empty(),
         "expected no process spawned; got {:?}",
@@ -182,7 +195,9 @@ async fn given_unblessed_profile(world: &mut SubstrateWorld) {
     let dir = TempDir::new().expect("tempdir");
     let profile = write_profile(dir.path(), VALID_PROFILE).await;
     setup(world, dir.path());
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -201,7 +216,10 @@ async fn then_returns_profile_not_trusted(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no child process is spawned$"#)]
 async fn then_no_child_spawned(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(
         fake.spawns().is_empty(),
         "expected no child process spawned; got {:?}",
@@ -246,7 +264,9 @@ async fn given_hostile_auto_bless(world: &mut SubstrateWorld) {
     let body = format!("auto_bless = true\n{VALID_PROFILE}");
     let profile = write_profile(dir.path(), &body).await;
     setup(world, dir.path());
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -267,7 +287,9 @@ async fn given_auto_bless_path_listed(world: &mut SubstrateWorld) {
     let dir = TempDir::new().expect("tempdir");
     let profile = write_profile(dir.path(), VALID_PROFILE).await;
     setup(world, dir.path());
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     // Production gap: `LaunchRegistry::new(subprocess, state_root)` hardcodes
     // `op_config: LaunchOperatorConfig::default()` (empty `auto_bless_paths`)
     // with no public constructor parameter to inject a populated one. The
@@ -288,9 +310,7 @@ async fn given_no_existing_bless_record(_world: &mut SubstrateWorld) {
     // is unconditionally unblessed. Nothing to do.
 }
 
-#[then(
-    regex = r#"^launch\.up blesses the new content and identity tuple inline and proceeds$"#
-)]
+#[then(regex = r#"^launch\.up blesses the new content and identity tuple inline and proceeds$"#)]
 async fn then_up_blesses_inline_and_proceeds(world: &mut SubstrateWorld) {
     // Production gap (see Given above): exercised at the profile_loader level
     // inside substrate-launch's own test suite, not reachable through the
@@ -298,7 +318,10 @@ async fn then_up_blesses_inline_and_proceeds(world: &mut SubstrateWorld) {
     // and profile were constructed without error.
     assert!(world.launch_registry.is_some());
     assert_eq!(
-        world.context.get("launch_auto_bless_gap").map(String::as_str),
+        world
+            .context
+            .get("launch_auto_bless_gap")
+            .map(String::as_str),
         Some("true")
     );
 }
@@ -309,7 +332,10 @@ async fn then_bless_record_written(world: &mut SubstrateWorld) {
     // `operator_scope_auto_bless_proceeds_and_writes_record` for the proven
     // behaviour at the layer that IS publicly reachable today.
     assert_eq!(
-        world.context.get("launch_auto_bless_gap").map(String::as_str),
+        world
+            .context
+            .get("launch_auto_bless_gap")
+            .map(String::as_str),
         Some("true")
     );
 }
@@ -333,9 +359,10 @@ async fn given_blessed_profile_and_running_stack(world: &mut SubstrateWorld) {
     world
         .context
         .insert("launch_stack_id".to_owned(), handle.stack_id.to_string());
-    world
-        .context
-        .insert("launch_pinned_state".to_owned(), format!("{:?}", handle.state));
+    world.context.insert(
+        "launch_pinned_state".to_owned(),
+        format!("{:?}", handle.state),
+    );
     std::mem::forget(dir);
 }
 
@@ -346,9 +373,12 @@ async fn when_profile_content_edited(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    tokio::fs::write(&profile, b"version = 1\n\n[services.web]\ncommand = [\"web\", \"EDITED\"]\n")
-        .await
-        .expect("edit profile");
+    tokio::fs::write(
+        &profile,
+        b"version = 1\n\n[services.web]\ncommand = [\"web\", \"EDITED\"]\n",
+    )
+    .await
+    .expect("edit profile");
 }
 
 #[then(
@@ -360,7 +390,10 @@ async fn then_next_up_returns_not_trusted(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let err = reg
         .up(&profile, None, None, &NeverCancel)
         .await
@@ -373,7 +406,10 @@ async fn then_next_up_returns_not_trusted(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the already-running Stack continues unchanged from its pinned content$"#)]
 async fn then_running_stack_unchanged(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")
@@ -401,7 +437,9 @@ async fn given_unblessed_regular_file_profile(world: &mut SubstrateWorld) {
     let dir = TempDir::new().expect("tempdir");
     let profile = write_profile(dir.path(), VALID_PROFILE).await;
     setup(world, dir.path());
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -412,7 +450,10 @@ async fn when_launch_trust_invoked(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let record = reg.trust(&profile).await.expect("trust must succeed");
     world
         .context
@@ -437,12 +478,18 @@ async fn then_subsequent_up_passes_trust_gate(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let handle = reg
         .up(&profile, None, None, &NeverCancel)
         .await
         .expect("up must pass the trust gate after launch.trust");
-    assert_eq!(handle.state, substrate_domain::launch::state::StackState::Running);
+    assert_eq!(
+        handle.state,
+        substrate_domain::launch::state::StackState::Running
+    );
 }
 
 #[then(regex = r#"^launch\.trust itself spawns no process$"#)]
@@ -454,7 +501,10 @@ async fn then_trust_spawns_no_process(world: &mut SubstrateWorld) {
     // after the When step and before later Then steps in this file's
     // registration, this checks the count is exactly one spawn (from `up`,
     // not from `trust`).
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert_eq!(
         fake.spawns().len(),
         1,
@@ -475,7 +525,9 @@ async fn given_insecure_trust_store(world: &mut SubstrateWorld) {
         .expect("chmod 0644");
     let profile = write_profile(dir.path(), VALID_PROFILE).await;
     setup(world, dir.path());
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -486,7 +538,10 @@ async fn when_trust_store_loaded_at_startup(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     // `launch.up` drives the full `load_trusted` pipeline (symlink check,
     // dir-permission check, trust-store-permission check, bless lookup,
     // hash, parse, in that order) — an insecure store must fail at the
@@ -515,7 +570,10 @@ async fn then_startup_fails_trust_store_insecure(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no bless lookup or Profile load proceeds$"#)]
 async fn then_no_bless_lookup_proceeds(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(fake.spawns().is_empty());
 }
 
@@ -543,7 +601,9 @@ async fn given_blessed_shared_and_local(world: &mut SubstrateWorld) {
     let profile = write_profile(dir.path(), VALID_PROFILE).await;
     let reg = world.launch_registry.clone().expect("just set by setup()");
     reg.trust(&profile).await.expect("trust");
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     world
         .context
         .insert("launch_local_override_gap".to_owned(), "true".to_owned());
@@ -553,7 +613,10 @@ async fn given_blessed_shared_and_local(world: &mut SubstrateWorld) {
 #[then(regex = r#"^the merged Profile uses the local api command$"#)]
 async fn then_merged_profile_uses_local(world: &mut SubstrateWorld) {
     assert_eq!(
-        world.context.get("launch_local_override_gap").map(String::as_str),
+        world
+            .context
+            .get("launch_local_override_gap")
+            .map(String::as_str),
         Some("true"),
         "structural pass: see Given step for the documented merge-logic gap"
     );
@@ -562,7 +625,10 @@ async fn then_merged_profile_uses_local(world: &mut SubstrateWorld) {
 #[then(regex = r#"^services declared only in the shared file are unchanged$"#)]
 async fn then_shared_only_services_unchanged(world: &mut SubstrateWorld) {
     assert_eq!(
-        world.context.get("launch_local_override_gap").map(String::as_str),
+        world
+            .context
+            .get("launch_local_override_gap")
+            .map(String::as_str),
         Some("true")
     );
 }
@@ -581,7 +647,9 @@ async fn given_trusted_profile_with_string_command(world: &mut SubstrateWorld) {
     // still be blessed — the rejection happens at parse/validate time inside
     // `up()`, per `CommandSpec::argv()`.
     reg.trust(&profile).await.expect("trust");
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -592,7 +660,10 @@ async fn when_profile_is_parsed(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let result = reg.up(&profile, None, None, &NeverCancel).await;
     world
         .context
@@ -614,6 +685,9 @@ async fn then_parsing_fails_validation(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no Stack is started$"#)]
 async fn then_no_stack_started(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(fake.spawns().is_empty());
 }

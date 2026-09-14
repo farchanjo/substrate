@@ -153,14 +153,20 @@ mod tests {
         // b declares Ignore, so changing a restarts nothing reachable through b.
         let p = chain(DependencyRestartMode::Ignore);
         let closure = restart_closure(&p, &["a".to_owned()]);
-        assert!(closure.is_empty(), "Ignore on b must cut the cascade; got {closure:?}");
+        assert!(
+            closure.is_empty(),
+            "Ignore on b must cut the cascade; got {closure:?}"
+        );
     }
 
     #[test]
     fn restart_closure_empty_when_changed_has_no_dependents() {
         let p = chain(DependencyRestartMode::Restart);
         let closure = restart_closure(&p, &["c".to_owned()]);
-        assert!(closure.is_empty(), "leaf change restarts nothing; got {closure:?}");
+        assert!(
+            closure.is_empty(),
+            "leaf change restarts nothing; got {closure:?}"
+        );
     }
 
     #[test]
@@ -174,6 +180,9 @@ mod tests {
             orphan_ttl_secs: 3600,
             services,
         };
-        assert!(matches!(reverse_topo(&p), Err(LaunchError::CycleDetected { .. })));
+        assert!(matches!(
+            reverse_topo(&p),
+            Err(LaunchError::CycleDetected { .. })
+        ));
     }
 }

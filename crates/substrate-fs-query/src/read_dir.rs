@@ -117,14 +117,13 @@ pub async fn handle_fs_read_dir(
     // `skip_count` is large enough that adding `page_size` (or the +1
     // lookahead) would overflow `usize`. Treated the same way as malformed
     // base64 below: both are caller input errors, not internal errors.
-    let skip_plus_page =
-        skip_count
-            .checked_add(page_size as usize)
-            .ok_or_else(|| SubstrateError::InvalidArgument {
-                offending_field: "page_cursor".to_owned(),
-                reason: "page_cursor combined with page_size overflows usize".to_owned(),
-                correlation_id: Some(uuid::Uuid::now_v7()),
-            })?;
+    let skip_plus_page = skip_count.checked_add(page_size as usize).ok_or_else(|| {
+        SubstrateError::InvalidArgument {
+            offending_field: "page_cursor".to_owned(),
+            reason: "page_cursor combined with page_size overflows usize".to_owned(),
+            correlation_id: Some(uuid::Uuid::now_v7()),
+        }
+    })?;
     let target = skip_plus_page
         .checked_add(1)
         .ok_or_else(|| SubstrateError::InvalidArgument {
@@ -140,14 +139,13 @@ pub async fn handle_fs_read_dir(
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
     let allowlist_root = deps.allowlist_root.clone();
-    let jailed: JailedPath = tokio::task::spawn_blocking(move || {
-        jail.jail(&allowlist_root, &raw_clone)
-    })
-    .await
-    .map_err(|e| SubstrateError::InternalError {
-        reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
-    })??;
+    let jailed: JailedPath =
+        tokio::task::spawn_blocking(move || jail.jail(&allowlist_root, &raw_clone))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })??;
 
     // Zone A: async read_dir.
     let mut read_dir = tokio::fs::read_dir(jailed.as_path())

@@ -110,14 +110,13 @@ pub async fn handle_fs_hash(
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
     let allowlist_root = deps.allowlist_root.clone();
-    let jailed: JailedPath = tokio::task::spawn_blocking(move || {
-        jail.jail(&allowlist_root, &raw_clone)
-    })
-    .await
-    .map_err(|e| SubstrateError::InternalError {
-        reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
-    })??;
+    let jailed: JailedPath =
+        tokio::task::spawn_blocking(move || jail.jail(&allowlist_root, &raw_clone))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })??;
 
     // Acquire CPU permit (owned so it survives the .await below).
     let _permit = hash_semaphore()
@@ -418,14 +417,15 @@ mod tests {
 
         let mut expected_hasher = sha2::Sha256::new();
         expected_hasher.update(&data);
-        let expected_hex = expected_hasher
-            .finalize()
-            .iter()
-            .fold(String::with_capacity(64), |mut s, b| {
-                use std::fmt::Write as _;
-                let _ = write!(s, "{b:02x}");
-                s
-            });
+        let expected_hex =
+            expected_hasher
+                .finalize()
+                .iter()
+                .fold(String::with_capacity(64), |mut s, b| {
+                    use std::fmt::Write as _;
+                    let _ = write!(s, "{b:02x}");
+                    s
+                });
 
         assert_eq!(
             resp.structured_content["digest"].as_str().unwrap(),

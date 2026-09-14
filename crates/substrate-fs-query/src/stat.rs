@@ -56,14 +56,13 @@ pub async fn handle_fs_stat(
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
     let allowlist_root = deps.allowlist_root.clone();
-    let jail_result: SubstrateResult<JailedPath> = tokio::task::spawn_blocking(move || {
-        jail.jail(&allowlist_root, &raw_clone)
-    })
-    .await
-    .map_err(|e| SubstrateError::InternalError {
-        reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
-    })?;
+    let jail_result: SubstrateResult<JailedPath> =
+        tokio::task::spawn_blocking(move || jail.jail(&allowlist_root, &raw_clone))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })?;
 
     // On macOS, ONoFollowAnyJail uses O_NOFOLLOW_ANY which returns SymlinkEscape
     // (ELOOP) for ANY symlink component — including:

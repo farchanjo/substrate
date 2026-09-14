@@ -167,7 +167,10 @@ pub fn spawn_control_reader(stack_dir: PathBuf) -> mpsc::Receiver<ControlFrame> 
 /// or the write fails. Returns [`LaunchError::InvalidProfile`] if `frame`
 /// somehow fails to serialize (infallible for the current variants, kept as a
 /// typed error rather than a panic).
-pub async fn write_control_frame(stack_dir: &Path, frame: &ControlFrame) -> Result<(), LaunchError> {
+pub async fn write_control_frame(
+    stack_dir: &Path,
+    frame: &ControlFrame,
+) -> Result<(), LaunchError> {
     let stack_dir = stack_dir.to_path_buf();
     let frame = frame.clone();
     run_blocking(move || write_control_frame_at(&stack_dir, &frame)).await
@@ -234,7 +237,10 @@ fn write_control_frame_at(stack_dir: &Path, frame: &ControlFrame) -> Result<(), 
     buf.push(b'\n');
 
     let path = ensure_control_fifo_at(stack_dir)?;
-    let mut file = std::fs::OpenOptions::new().write(true).open(&path).map_err(|_| insecure(&path))?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .map_err(|_| insecure(&path))?;
     file.write_all(&buf).map_err(|_| insecure(&path))
 }
 
@@ -401,7 +407,9 @@ mod tests {
             let sent = ControlFrame::Down {
                 stack_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
             };
-            write_control_frame(&stack_dir, &sent).await.expect("write frame");
+            write_control_frame(&stack_dir, &sent)
+                .await
+                .expect("write frame");
 
             let received = timeout(Duration::from_secs(5), rx.recv())
                 .await
@@ -424,7 +432,9 @@ mod tests {
                 stack_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
                 profile_path: None,
             };
-            write_control_frame(&stack_dir, &sent).await.expect("write frame");
+            write_control_frame(&stack_dir, &sent)
+                .await
+                .expect("write frame");
 
             let received = timeout(Duration::from_secs(5), rx.recv())
                 .await
@@ -447,7 +457,9 @@ mod tests {
                 stack_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
                 service_name: "web".to_owned(),
             };
-            write_control_frame(&stack_dir, &sent).await.expect("write frame");
+            write_control_frame(&stack_dir, &sent)
+                .await
+                .expect("write frame");
 
             let received = timeout(Duration::from_secs(5), rx.recv())
                 .await
@@ -468,8 +480,13 @@ mod tests {
             profile_path: Some(huge_path),
         };
 
-        let err = write_control_frame(&stack_dir, &frame).await.expect_err("oversize frame rejected");
-        assert!(matches!(err, LaunchError::FrameTooLarge { .. }), "got {err:?}");
+        let err = write_control_frame(&stack_dir, &frame)
+            .await
+            .expect_err("oversize frame rejected");
+        assert!(
+            matches!(err, LaunchError::FrameTooLarge { .. }),
+            "got {err:?}"
+        );
         assert!(
             !stack_dir.join(CONTROL_FIFO_FILE).exists(),
             "oversize rejection must happen before the FIFO is even required to exist for the write"
@@ -482,8 +499,15 @@ mod tests {
         let path = ensure_control_fifo(dir.path()).await.expect("create fifo");
 
         let meta = std::fs::metadata(&path).expect("stat fifo");
-        assert!(meta.file_type().is_fifo(), "control.fifo must be a real FIFO");
-        assert_eq!(meta.permissions().mode() & 0o777, SECURE_FIFO_MODE, "control.fifo must be 0600");
+        assert!(
+            meta.file_type().is_fifo(),
+            "control.fifo must be a real FIFO"
+        );
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            SECURE_FIFO_MODE,
+            "control.fifo must be 0600"
+        );
     }
 
     #[test]
@@ -494,10 +518,14 @@ mod tests {
         // mkfifo(2) masks the mode with the process umask, so the call alone is not
         // enough: under a 077 umask it yields 0600, which is secure, and the
         // assertion below inverts. Set the mode explicitly.
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod 0644");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod 0644");
 
         let err = verify_fifo_secure(&path).expect_err("0644 fifo rejected");
-        assert!(matches!(err, LaunchError::RegistryInsecure { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::RegistryInsecure { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -505,9 +533,13 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join(CONTROL_FIFO_FILE);
         std::fs::write(&path, b"not a fifo").expect("write regular file");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(SECURE_FIFO_MODE)).expect("chmod 0600");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(SECURE_FIFO_MODE))
+            .expect("chmod 0600");
 
         let err = verify_fifo_secure(&path).expect_err("regular file rejected");
-        assert!(matches!(err, LaunchError::RegistryInsecure { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::RegistryInsecure { .. }),
+            "got {err:?}"
+        );
     }
 }

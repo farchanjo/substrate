@@ -38,9 +38,7 @@ const METADATA_EDITED: &str = "version = 1\n\n[services.app]\ncommand = [\"app\"
 
 // ---- launch-reload-cascade-restart -------------------------------------------
 
-#[given(
-    regex = r#"^a running Stack with services db, api depends_on db, and web depends_on api$"#
-)]
+#[given(regex = r#"^a running Stack with services db, api depends_on db, and web depends_on api$"#)]
 async fn given_running_three_tier_stack(world: &mut SubstrateWorld) {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let profile = write_profile(dir.path(), THREE_TIER).await;
@@ -53,7 +51,9 @@ async fn given_running_three_tier_stack(world: &mut SubstrateWorld) {
         .expect("up succeeds");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     world
         .context
         .insert("launch_stack_id".to_owned(), handle.stack_id.to_string());
@@ -70,7 +70,10 @@ async fn when_api_args_changed_and_reloaded(world: &mut SubstrateWorld) {
     tokio::fs::write(&profile, CASCADE_EDITED.as_bytes())
         .await
         .expect("write edited profile");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     // Editing the Profile changes its content hash, so the TOFU pin from the
     // Given step's `trust()` no longer matches (ADR-0064) — re-bless the
     // edited content before reload, mirroring an operator re-running
@@ -87,9 +90,10 @@ async fn when_api_args_changed_and_reloaded(world: &mut SubstrateWorld) {
         .reload(&stack_id, Some(&profile), &NeverCancel)
         .await
         .expect("reload succeeds");
-    world
-        .context
-        .insert("launch_reload_restarted".to_owned(), report.restarted.join(","));
+    world.context.insert(
+        "launch_reload_restarted".to_owned(),
+        report.restarted.join(","),
+    );
 }
 
 #[then(
@@ -148,7 +152,9 @@ async fn given_running_stack_onfailure(world: &mut SubstrateWorld) {
         .expect("up succeeds");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     world
         .context
         .insert("launch_stack_id".to_owned(), handle.stack_id.to_string());
@@ -167,7 +173,10 @@ async fn when_max_retries_edited_and_reloaded(world: &mut SubstrateWorld) {
     tokio::fs::write(&profile, METADATA_EDITED.as_bytes())
         .await
         .expect("write edited profile");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     // See the cascade-restart When step above: editing changes the content
     // hash, so the Profile must be re-blessed before reload (ADR-0064).
     reg.trust(&profile).await.expect("re-trust edited profile");
@@ -182,12 +191,14 @@ async fn when_max_retries_edited_and_reloaded(world: &mut SubstrateWorld) {
         .reload(&stack_id, Some(&profile), &NeverCancel)
         .await
         .expect("reload succeeds");
-    world
-        .context
-        .insert("launch_reload_restarted".to_owned(), report.restarted.join(","));
-    world
-        .context
-        .insert("launch_reload_edge_only".to_owned(), report.edge_only.join(","));
+    world.context.insert(
+        "launch_reload_restarted".to_owned(),
+        report.restarted.join(","),
+    );
+    world.context.insert(
+        "launch_reload_edge_only".to_owned(),
+        report.edge_only.join(","),
+    );
 }
 
 #[then(regex = r#"^the reconciler applies the new policy to the live supervisor$"#)]

@@ -331,7 +331,9 @@ async fn then_by_state_values_nonneg(world: &mut SubstrateWorld) {
     };
 
     for (key, val) in map {
-        let n = val.as_u64().or_else(|| val.as_i64().map(i64::cast_unsigned));
+        let n = val
+            .as_u64()
+            .or_else(|| val.as_i64().map(i64::cast_unsigned));
         assert!(
             n.is_some(),
             "by_state['{key}'] is not a non-negative integer: {val}"

@@ -85,7 +85,10 @@ async fn when_client_disconnects_server_exits(world: &mut SubstrateWorld) {
     // integration coverage elsewhere in this suite. Here we drive the same
     // public registry call the composition root makes, to verify the
     // cascade-kill / registry-clear behaviour `down()` itself guarantees.
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")
@@ -93,7 +96,10 @@ async fn when_client_disconnects_server_exits(world: &mut SubstrateWorld) {
         .expect("Given must set launch_stack_id");
     let stack_id: substrate_domain::value_objects::stack_id::StackId =
         stack_id_str.parse().expect("valid StackId");
-    let state = reg.down(&stack_id, &NeverCancel).await.expect("down succeeds");
+    let state = reg
+        .down(&stack_id, &NeverCancel)
+        .await
+        .expect("down succeeds");
     world
         .context
         .insert("launch_down_state".to_owned(), format!("{state:?}"));
@@ -101,7 +107,10 @@ async fn when_client_disconnects_server_exits(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the supervisor cascade-kills every Service via killpg$"#)]
 async fn then_supervisor_cascade_kills(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert_eq!(
         fake.cancels().len(),
         3,
@@ -124,12 +133,18 @@ async fn then_registry_entry_cleared(world: &mut SubstrateWorld) {
         .get("launch_down_state")
         .cloned()
         .expect("When must set launch_down_state");
-    assert!(state.contains("Down"), "expected StackState::Down; got {state}");
+    assert!(
+        state.contains("Down"),
+        "expected StackState::Down; got {state}"
+    );
 }
 
 #[then(regex = r#"^no supervised process remains running$"#)]
 async fn then_no_supervised_process_remains(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")
@@ -163,7 +178,9 @@ async fn given_profile_db_api_web_no_bless(world: &mut SubstrateWorld) {
     let reg = registry(fake.clone(), dir.path());
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -174,8 +191,14 @@ async fn when_launch_list_invoked(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
-    let entries = reg.list(&profile).await.expect("list succeeds without a trust gate");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
+    let entries = reg
+        .list(&profile)
+        .await
+        .expect("list succeeds without a trust gate");
     let names: Vec<String> = entries.into_iter().map(|e| e.name).collect();
     world
         .context
@@ -202,7 +225,10 @@ async fn then_no_trust_gate_no_spawn(world: &mut SubstrateWorld) {
     // The When step's `list()` call succeeded with zero bless records present
     // (Given step never calls `trust()`) — that IS the "no trust gate"
     // assertion; a trust-gated call would have returned ProfileNotTrusted.
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(fake.spawns().is_empty(), "list must spawn no process");
 }
 
@@ -223,7 +249,10 @@ async fn then_response_hint_suggests_launch_up(_world: &mut SubstrateWorld) {
 
 #[given(regex = r#"^the Stack has been brought down via launch\.down$"#)]
 async fn given_stack_brought_down(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")
@@ -231,12 +260,17 @@ async fn given_stack_brought_down(world: &mut SubstrateWorld) {
         .expect("Given must set launch_stack_id");
     let stack_id: substrate_domain::value_objects::stack_id::StackId =
         stack_id_str.parse().expect("valid StackId");
-    reg.down(&stack_id, &NeverCancel).await.expect("down succeeds");
+    reg.down(&stack_id, &NeverCancel)
+        .await
+        .expect("down succeeds");
 }
 
 #[when(regex = r#"^launch\.forget is invoked for that stack_id$"#)]
 async fn when_launch_forget_invoked(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")
@@ -258,7 +292,10 @@ async fn then_forget_call_succeeds(world: &mut SubstrateWorld) {
         .get("launch_forget_result")
         .cloned()
         .expect("When must set launch_forget_result");
-    assert_eq!(result, "Ok", "expected launch.forget to succeed; got {result}");
+    assert_eq!(
+        result, "Ok",
+        "expected launch.forget to succeed; got {result}"
+    );
 }
 
 #[then(regex = r#"^the forget call fails with SUBSTRATE_LAUNCH_STACK_NOT_TERMINAL$"#)]
@@ -276,7 +313,10 @@ async fn then_forget_call_fails_not_terminal(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^launch\.status no longer lists that stack_id$"#)]
 async fn then_status_no_longer_lists_stack(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")
@@ -285,12 +325,18 @@ async fn then_status_no_longer_lists_stack(world: &mut SubstrateWorld) {
     let stack_id: substrate_domain::value_objects::stack_id::StackId =
         stack_id_str.parse().expect("valid StackId");
     let handles = reg.status(Some(&stack_id)).await.expect("status");
-    assert!(handles.is_empty(), "forgotten stack must not appear in status");
+    assert!(
+        handles.is_empty(),
+        "forgotten stack must not appear in status"
+    );
 }
 
 #[then(regex = r#"^launch\.status still lists that stack_id$"#)]
 async fn then_status_still_lists_stack(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")

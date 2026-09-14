@@ -57,7 +57,9 @@ async fn given_cyclic_profile(world: &mut SubstrateWorld) {
     reg.trust(&profile).await.expect("trust");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -68,7 +70,10 @@ async fn when_up_validates_dependency_graph(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let result = reg.up(&profile, None, None, &NeverCancel).await;
     world
         .context
@@ -90,7 +95,10 @@ async fn then_returns_cycle_detected(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^no Service is spawned$"#)]
 async fn then_no_service_spawned(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(fake.spawns().is_empty());
 }
 
@@ -101,8 +109,7 @@ async fn then_no_service_spawned(world: &mut SubstrateWorld) {
 )]
 async fn given_required_dependency_fails(world: &mut SubstrateWorld) {
     let dir = TempDir::new().expect("tempdir");
-    let body =
-        "version = 1\n\n[services.db]\ncommand = [\"db\"]\n\n[services.api]\ncommand = [\"api\"]\ndepends_on = [\"db\"]\nrequired = true\n";
+    let body = "version = 1\n\n[services.db]\ncommand = [\"db\"]\n\n[services.api]\ncommand = [\"api\"]\ndepends_on = [\"db\"]\nrequired = true\n";
     let profile = write_profile(dir.path(), body).await;
     let fake = FakeSubprocessPort::new();
     fake.script("db", SubprocessState::Failed);
@@ -110,13 +117,13 @@ async fn given_required_dependency_fails(world: &mut SubstrateWorld) {
     reg.trust(&profile).await.expect("trust");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
-#[then(
-    regex = r#"^api is not started and the call returns SUBSTRATE_LAUNCH_DEPENDENCY_FAILED$"#
-)]
+#[then(regex = r#"^api is not started and the call returns SUBSTRATE_LAUNCH_DEPENDENCY_FAILED$"#)]
 async fn then_api_not_started_dependency_failed(world: &mut SubstrateWorld) {
     let result = world
         .context
@@ -127,7 +134,10 @@ async fn then_api_not_started_dependency_failed(world: &mut SubstrateWorld) {
         result.contains("DependencyFailed"),
         "expected SUBSTRATE_LAUNCH_DEPENDENCY_FAILED; got {result}"
     );
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(
         !fake.spawns().contains(&"api".to_owned()),
         "api must not be started when its required dependency db failed readiness; spawns={:?}",
@@ -150,9 +160,7 @@ async fn then_error_names_db(world: &mut SubstrateWorld) {
 
 // ---- launch-optional-dependency-fails-without-blocking ----------------------
 
-#[given(
-    regex = r#"^service web depends_on cache with required=false and cache fails readiness$"#
-)]
+#[given(regex = r#"^service web depends_on cache with required=false and cache fails readiness$"#)]
 async fn given_optional_dependency_fails(world: &mut SubstrateWorld) {
     let dir = TempDir::new().expect("tempdir");
     let body = "version = 1\n\n[services.cache]\ncommand = [\"cache\"]\nrequired = false\n\n[services.web]\ncommand = [\"web\"]\ndepends_on = [\"cache\"]\n";
@@ -163,7 +171,9 @@ async fn given_optional_dependency_fails(world: &mut SubstrateWorld) {
     reg.trust(&profile).await.expect("trust");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -178,7 +188,10 @@ async fn then_web_still_starts(world: &mut SubstrateWorld) {
         result.starts_with("Ok"),
         "expected launch.up to succeed (degraded, not failed); got {result}"
     );
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert!(
         fake.spawns().contains(&"web".to_owned()),
         "web must still be started; spawns={:?}",
@@ -215,15 +228,18 @@ async fn given_trusted_three_tier_profile(world: &mut SubstrateWorld) {
     reg.trust(&profile).await.expect("trust");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
-#[then(
-    regex = r#"^db is started first and api waits until db reaches the Ready state$"#
-)]
+#[then(regex = r#"^db is started first and api waits until db reaches the Ready state$"#)]
 async fn then_db_started_first(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     let spawns = fake.spawns();
     assert_eq!(
         spawns.first().map(String::as_str),
@@ -232,11 +248,12 @@ async fn then_db_started_first(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^api is started next and web waits until api reaches the Ready state$"#
-)]
+#[then(regex = r#"^api is started next and web waits until api reaches the Ready state$"#)]
 async fn then_api_started_next(world: &mut SubstrateWorld) {
-    let fake = world.launch_fake.clone().expect("Given must set launch_fake");
+    let fake = world
+        .launch_fake
+        .clone()
+        .expect("Given must set launch_fake");
     assert_eq!(
         fake.spawns(),
         vec!["db".to_owned(), "api".to_owned(), "web".to_owned()],
@@ -244,9 +261,7 @@ async fn then_api_started_next(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the launch\.up Task reports the Stack Running once every Service is Ready$"#
-)]
+#[then(regex = r#"^the launch\.up Task reports the Stack Running once every Service is Ready$"#)]
 async fn then_stack_reports_running(world: &mut SubstrateWorld) {
     let result = world
         .context

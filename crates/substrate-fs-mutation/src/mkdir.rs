@@ -179,7 +179,9 @@ pub async fn handle_fs_mkdir(
     // already-cancelled token could still start `create_dir` before the cancel
     // arm is polled. The select! below still handles mid-flight cancellation.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     // Zone A: async-native directory creation, raced against cancellation
@@ -294,7 +296,9 @@ mod tests {
             dry_run: true,
             elicitation_confirmed: false,
         };
-        let resp = handle_fs_mkdir(req, &deps, &root, CancellationToken::new()).await.expect("dry run");
+        let resp = handle_fs_mkdir(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
         assert!(!target.exists(), "dir must not exist after dry run");
     }
@@ -329,9 +333,14 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_mkdir(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_mkdir(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
-        assert!(!target.exists(), "directory must not be created when cancelled");
+        assert!(
+            !target.exists(),
+            "directory must not be created when cancelled"
+        );
     }
 
     #[tokio::test]
@@ -343,7 +352,9 @@ mod tests {
             dry_run: false,
             elicitation_confirmed: false,
         };
-        let err = handle_fs_mkdir(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
+        let err = handle_fs_mkdir(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert!(
             err.code() == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || err.code() == "SUBSTRATE_NOT_FOUND",
             "unexpected code: {}",

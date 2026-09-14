@@ -142,7 +142,9 @@ pub async fn handle_fs_write(
     // pre-cancelled path deterministic (no tmp file is ever created); the
     // select! below still handles cancellation that arrives mid-flight.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     // Transactional write: tmp → rename, raced against cancellation (ADR-0033
@@ -165,7 +167,9 @@ pub async fn handle_fs_write(
     // completing and this point. Catching it here avoids renaming a file the
     // caller no longer wants committed.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     tmp.commit()
@@ -333,7 +337,9 @@ mod tests {
             fail_if_exists: false,
             dry_run: false,
         };
-        handle_fs_write(req, &deps, &root, CancellationToken::new()).await.expect("write");
+        handle_fs_write(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("write");
         let written = std::fs::read_to_string(&target).expect("read back");
         assert_eq!(written, "hello world");
     }
@@ -367,7 +373,9 @@ mod tests {
             fail_if_exists: false,
             dry_run: true,
         };
-        let resp = handle_fs_write(req, &deps, &root, CancellationToken::new()).await.expect("dry run");
+        let resp = handle_fs_write(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
         assert!(!target.exists());
     }
@@ -384,7 +392,9 @@ mod tests {
             fail_if_exists: true,
             dry_run: false,
         };
-        let err = handle_fs_write(req, &deps, &root, CancellationToken::new()).await.unwrap_err();
+        let err = handle_fs_write(req, &deps, &root, CancellationToken::new())
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_INVALID_ARGUMENT");
         // Original content preserved.
         let still_old = std::fs::read_to_string(&target).expect("read");
@@ -404,7 +414,9 @@ mod tests {
             fail_if_exists: false,
             dry_run: false,
         };
-        handle_fs_write(req, &deps, &root, CancellationToken::new()).await.expect("write");
+        handle_fs_write(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("write");
         // The parent directory must contain only the target file, no temp files.
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .expect("read dir")
@@ -468,9 +480,14 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_write(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_write(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
-        assert!(!target.exists(), "target must not be created when cancelled");
+        assert!(
+            !target.exists(),
+            "target must not be created when cancelled"
+        );
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .expect("read dir")
             .filter_map(std::result::Result::ok)

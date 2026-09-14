@@ -121,7 +121,9 @@ pub async fn handle_fs_rename(
     // token could still start the rename before the cancel arm is polled. The
     // select! below still handles mid-flight cancellation.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     // Zone A: atomic rename, raced against cancellation (ADR-0037). `biased`
@@ -364,9 +366,14 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_rename(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_rename(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
         assert!(src.exists(), "source must still exist when cancelled");
-        assert!(!dst.exists(), "destination must not be created when cancelled");
+        assert!(
+            !dst.exists(),
+            "destination must not be created when cancelled"
+        );
     }
 }

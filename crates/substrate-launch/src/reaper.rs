@@ -44,7 +44,9 @@ use substrate_domain::launch::stack::{StackChild, SupervisorRegistry};
 use substrate_domain::launch::state::DisconnectPolicy;
 
 use crate::pid_probe::{PidStat, read_pid_stat};
-use crate::supervisor_registry::{read_supervisor_registry, run_blocking, write_supervisor_registry};
+use crate::supervisor_registry::{
+    read_supervisor_registry, run_blocking, write_supervisor_registry,
+};
 
 /// File name of the durable per-Stack registry document under each `stacks/<id>/`.
 const SUPERVISOR_FILE: &str = "supervisor.json";
@@ -130,7 +132,10 @@ fn list_stack_dirs_blocking(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Reconciles one Stack registry, appending its actions to `report`.
-async fn reconcile_stack(stack_dir: &Path, report: &mut ReconcileReport) -> Result<(), LaunchError> {
+async fn reconcile_stack(
+    stack_dir: &Path,
+    report: &mut ReconcileReport,
+) -> Result<(), LaunchError> {
     let mut registry = read_supervisor_registry(stack_dir).await?;
     let label = stack_label(stack_dir);
 
@@ -146,7 +151,15 @@ async fn reconcile_stack(stack_dir: &Path, report: &mut ReconcileReport) -> Resu
     let children = std::mem::take(&mut registry.children);
     let mut survivors: Vec<StackChild> = Vec::new();
     for child in children {
-        apply_verdict(&child, policy, supervisor_pid, &label, report, &mut survivors).await;
+        apply_verdict(
+            &child,
+            policy,
+            supervisor_pid,
+            &label,
+            report,
+            &mut survivors,
+        )
+        .await;
     }
     registry.children = survivors;
     finalize(stack_dir, &registry).await
@@ -162,13 +175,20 @@ async fn apply_verdict(
     survivors: &mut Vec<StackChild>,
 ) {
     let entry = format!("{label}/{}", child.name);
-    match decide(probe(child.pid).await, child.start_epoch, policy, supervisor_pid) {
+    match decide(
+        probe(child.pid).await,
+        child.start_epoch,
+        policy,
+        supervisor_pid,
+    ) {
         Verdict::Reattach => {
             report.reattached.push(entry);
             survivors.push(child.clone());
         },
         Verdict::Adopt => {
-            record(&LaunchError::OrphanAdopted { name: child.name.clone() });
+            record(&LaunchError::OrphanAdopted {
+                name: child.name.clone(),
+            });
             report.adopted.push(entry);
             survivors.push(child.clone());
         },
@@ -176,7 +196,9 @@ async fn apply_verdict(
             if signal {
                 reap_group(child).await;
             }
-            record(&LaunchError::OrphanReaped { name: child.name.clone() });
+            record(&LaunchError::OrphanReaped {
+                name: child.name.clone(),
+            });
             report.reaped.push(entry);
         },
         Verdict::Recycled => {
@@ -261,7 +283,9 @@ async fn reap_group(child: &StackChild) {
 
 /// Returns `true` when `pgid`'s leader is live with the recorded start-time.
 async fn leader_matches(pgid: i32, recorded_start: u64) -> bool {
-    probe(pgid).await.is_some_and(|stat| stat.start_time == recorded_start)
+    probe(pgid)
+        .await
+        .is_some_and(|stat| stat.start_time == recorded_start)
 }
 
 /// Sends `signal` to process group `pgid`, treating `ESRCH` (group already gone)
@@ -280,7 +304,10 @@ fn send_group_signal(pgid: i32, signal: Signal) {
 
 /// Reads `pid`'s start-time + ppid on the blocking pool (zone B per ADR-0003).
 async fn probe(pid: i32) -> Option<PidStat> {
-    run_blocking(move || Ok(read_pid_stat(pid))).await.ok().flatten()
+    run_blocking(move || Ok(read_pid_stat(pid)))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Rewrites the surviving registry, or removes the directory when none survive.
@@ -305,9 +332,10 @@ async fn remove_stack_dir(stack_dir: &Path) {
 
 /// Derives a human-readable Stack label from its registry directory name.
 fn stack_label(stack_dir: &Path) -> String {
-    stack_dir
-        .file_name()
-        .map_or_else(|| "<unknown-stack>".to_owned(), |name| name.to_string_lossy().into_owned())
+    stack_dir.file_name().map_or_else(
+        || "<unknown-stack>".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// Records one reconcile action with its stable [`LaunchError`] code and a fresh
@@ -342,14 +370,26 @@ mod tests {
     }
 
     fn own_start_time() -> u64 {
-        read_pid_stat(own_pid()).expect("own process readable").start_time
+        read_pid_stat(own_pid())
+            .expect("own process readable")
+            .start_time
     }
 
     fn child(name: &str, pid: i32, start_epoch: u64) -> StackChild {
-        StackChild { name: name.to_owned(), pid, pgid: pid, start_epoch }
+        StackChild {
+            name: name.to_owned(),
+            pid,
+            pgid: pid,
+            start_epoch,
+        }
     }
 
-    fn registry(supervisor_pid: i32, start_epoch: u64, policy: DisconnectPolicy, children: Vec<StackChild>) -> SupervisorRegistry {
+    fn registry(
+        supervisor_pid: i32,
+        start_epoch: u64,
+        policy: DisconnectPolicy,
+        children: Vec<StackChild>,
+    ) -> SupervisorRegistry {
         SupervisorRegistry {
             supervisor_pid,
             start_epoch,
@@ -362,7 +402,9 @@ mod tests {
     async fn write_stack(stacks_root: &Path, reg: &SupervisorRegistry) -> PathBuf {
         let dir = stacks_root.join(StackId::now_v7().to_crockford());
         std::fs::create_dir_all(&dir).expect("create stack dir");
-        write_supervisor_registry(&dir, reg).await.expect("write supervisor.json");
+        write_supervisor_registry(&dir, reg)
+            .await
+            .expect("write supervisor.json");
         dir
     }
 
@@ -376,26 +418,50 @@ mod tests {
 
     #[test]
     fn decide_clears_recycled_pid() {
-        let probe = Some(PidStat { start_time: 222, ppid: 1 });
-        assert_eq!(decide(probe, 111, DisconnectPolicy::Detach, 999), Verdict::Recycled);
+        let probe = Some(PidStat {
+            start_time: 222,
+            ppid: 1,
+        });
+        assert_eq!(
+            decide(probe, 111, DisconnectPolicy::Detach, 999),
+            Verdict::Recycled
+        );
     }
 
     #[test]
     fn decide_reattaches_child_still_parented_to_supervisor() {
-        let probe = Some(PidStat { start_time: 111, ppid: 4242 });
-        assert_eq!(decide(probe, 111, DisconnectPolicy::Shutdown, 4242), Verdict::Reattach);
+        let probe = Some(PidStat {
+            start_time: 111,
+            ppid: 4242,
+        });
+        assert_eq!(
+            decide(probe, 111, DisconnectPolicy::Shutdown, 4242),
+            Verdict::Reattach
+        );
     }
 
     #[test]
     fn decide_adopts_orphan_under_detach() {
-        let probe = Some(PidStat { start_time: 111, ppid: 1 });
-        assert_eq!(decide(probe, 111, DisconnectPolicy::Detach, 4242), Verdict::Adopt);
+        let probe = Some(PidStat {
+            start_time: 111,
+            ppid: 1,
+        });
+        assert_eq!(
+            decide(probe, 111, DisconnectPolicy::Detach, 4242),
+            Verdict::Adopt
+        );
     }
 
     #[test]
     fn decide_reaps_orphan_under_shutdown() {
-        let probe = Some(PidStat { start_time: 111, ppid: 1 });
-        assert_eq!(decide(probe, 111, DisconnectPolicy::Shutdown, 4242), Verdict::Reap { signal: true });
+        let probe = Some(PidStat {
+            start_time: 111,
+            ppid: 1,
+        });
+        assert_eq!(
+            decide(probe, 111, DisconnectPolicy::Shutdown, 4242),
+            Verdict::Reap { signal: true }
+        );
     }
 
     // ---- End-to-end registry tests ----
@@ -413,9 +479,18 @@ mod tests {
 
         let report = reconcile_sweep(root.path()).await.expect("sweep");
 
-        assert_eq!(report.reattached.len(), 1, "live-supervisor child re-attached");
-        assert!(report.adopted.is_empty() && report.reaped.is_empty() && report.recycled.is_empty());
-        assert!(dir.join(SUPERVISOR_FILE).is_file(), "a live supervisor's registry is left intact");
+        assert_eq!(
+            report.reattached.len(),
+            1,
+            "live-supervisor child re-attached"
+        );
+        assert!(
+            report.adopted.is_empty() && report.reaped.is_empty() && report.recycled.is_empty()
+        );
+        assert!(
+            dir.join(SUPERVISOR_FILE).is_file(),
+            "a live supervisor's registry is left intact"
+        );
     }
 
     #[tokio::test]
@@ -433,7 +508,10 @@ mod tests {
         let report = reconcile_sweep(root.path()).await.expect("sweep");
 
         assert_eq!(report.reaped.len(), 1, "a stale entry is reaped");
-        assert!(!dir.exists(), "a fully-drained stack registry dir is removed");
+        assert!(
+            !dir.exists(),
+            "a fully-drained stack registry dir is removed"
+        );
     }
 
     #[tokio::test]
@@ -453,7 +531,10 @@ mod tests {
         let report = reconcile_sweep(root.path()).await.expect("sweep");
 
         assert_eq!(report.recycled.len(), 1, "a pid-recycled entry is cleared");
-        assert!(report.reaped.is_empty(), "recycle path must not enter the reap/signal path");
+        assert!(
+            report.reaped.is_empty(),
+            "recycle path must not enter the reap/signal path"
+        );
         assert!(!dir.exists(), "no survivors -> registry dir removed");
     }
 
@@ -468,6 +549,9 @@ mod tests {
     async fn empty_root_is_a_no_op() {
         let root = TempDir::new().expect("tempdir");
         let report = reconcile_sweep(root.path()).await.expect("sweep");
-        assert!(report.is_empty(), "an empty stacks root yields an empty report");
+        assert!(
+            report.is_empty(),
+            "an empty stacks root yields an empty report"
+        );
     }
 }

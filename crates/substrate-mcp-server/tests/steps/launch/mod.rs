@@ -132,7 +132,10 @@ impl SubprocessPort for FakeSubprocessPort {
         _cancel: &dyn CancelSignal,
     ) -> Result<SubprocessHandle, SubprocessError> {
         let binary = req.binary_path.display().to_string();
-        self.spawn_log.lock().expect("spawn_log lock").push(binary.clone());
+        self.spawn_log
+            .lock()
+            .expect("spawn_log lock")
+            .push(binary.clone());
         let state = self
             .outcomes
             .lock()
@@ -182,7 +185,10 @@ impl SubprocessPort for FakeSubprocessPort {
 
     async fn cancel(&self, job_id: &JobId, _force: bool) -> SubstrateResult<SubprocessState> {
         let key = job_id.to_crockford();
-        self.cancel_log.lock().expect("cancel_log lock").push(key.clone());
+        self.cancel_log
+            .lock()
+            .expect("cancel_log lock")
+            .push(key.clone());
         let mut handles = self.handles.lock().expect("handles lock");
         handles.get_mut(&key).map_or_else(
             || {

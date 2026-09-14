@@ -123,7 +123,11 @@ mod tests {
     fn round_trip_crockford() {
         let id = StackId::now_v7();
         let s = id.to_crockford();
-        assert_eq!(s.len(), 26, "Crockford encoding must produce exactly 26 chars");
+        assert_eq!(
+            s.len(),
+            26,
+            "Crockford encoding must produce exactly 26 chars"
+        );
         #[expect(
             clippy::expect_used,
             reason = "test assertion: parse_crockford of a freshly encoded string is infallible"

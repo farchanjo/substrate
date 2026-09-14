@@ -189,7 +189,10 @@ pub(crate) async fn handle_launch_init(
 ) -> SubstrateResult<DispatchedResponse> {
     let req: LaunchInitRequest = parse_args(args)?;
     let written = port
-        .init(req.profile_path.as_deref(), req.project_type_hint.as_deref())
+        .init(
+            req.profile_path.as_deref(),
+            req.project_type_hint.as_deref(),
+        )
         .await
         .map_err(|e| launch_err(&e))?;
 
@@ -266,7 +269,10 @@ pub(crate) async fn handle_launch_trust(
         .await
         .map_err(|e| launch_err(&e))?;
 
-    let content = format!("launch.trust: blessed {} ({}).", record.path, record.content);
+    let content = format!(
+        "launch.trust: blessed {} ({}).",
+        record.path, record.content
+    );
     let structured = serde_json::to_value(&record).unwrap_or(Value::Null);
     let hints = destructive_hints("launch_up", None);
     Ok(DispatchedResponse {
@@ -504,10 +510,7 @@ pub(crate) async fn handle_launch_reload(
     );
     let mut structured = serde_json::to_value(&report).unwrap_or(Value::Null);
     if let Value::Object(ref mut map) = structured {
-        map.insert(
-            "stack_id".to_owned(),
-            Value::String(req.stack_id.clone()),
-        );
+        map.insert("stack_id".to_owned(), Value::String(req.stack_id.clone()));
     }
     let hints = destructive_hints("launch_status", Some(&req.stack_id));
     Ok(DispatchedResponse {
@@ -574,7 +577,10 @@ pub(crate) async fn handle_launch_forget(
     let stack_id = StackId::parse_crockford(&req.stack_id)?;
     port.forget(&stack_id).await.map_err(|e| launch_err(&e))?;
 
-    let content = format!("launch.forget: stack {} removed from the registry.", req.stack_id);
+    let content = format!(
+        "launch.forget: stack {} removed from the registry.",
+        req.stack_id
+    );
     let structured = json!({ "stack_id": req.stack_id });
     let hints = substrate_domain::Hints {
         next_action_suggested: Some("launch_status".to_owned()),
@@ -605,13 +611,30 @@ mod tests {
     #[test]
     fn rpc_codes_cover_reserved_band() {
         let cases = [
-            (LaunchError::ProfileNotTrusted { path: "p".to_owned() }, -32044),
             (
-                LaunchError::ConfigSymlinkRejected { path: "p".to_owned() },
+                LaunchError::ProfileNotTrusted {
+                    path: "p".to_owned(),
+                },
+                -32044,
+            ),
+            (
+                LaunchError::ConfigSymlinkRejected {
+                    path: "p".to_owned(),
+                },
                 -32045,
             ),
-            (LaunchError::ConfigUntrustedDir { path: "p".to_owned() }, -32046),
-            (LaunchError::TrustStoreInsecure { path: "p".to_owned() }, -32047),
+            (
+                LaunchError::ConfigUntrustedDir {
+                    path: "p".to_owned(),
+                },
+                -32046,
+            ),
+            (
+                LaunchError::TrustStoreInsecure {
+                    path: "p".to_owned(),
+                },
+                -32047,
+            ),
             (LaunchError::CycleDetected { nodes: vec![] }, -32048),
             (
                 LaunchError::DependencyFailed {
@@ -620,20 +643,50 @@ mod tests {
                 },
                 -32049,
             ),
-            (LaunchError::OrphanReaped { name: "n".to_owned() }, -32050),
-            (LaunchError::OrphanAdopted { name: "n".to_owned() }, -32051),
-            (LaunchError::StackTtlExpired { stack_id: "s".to_owned() }, -32052),
             (
-                LaunchError::SupervisorUnreachable { stack_id: "s".to_owned() },
+                LaunchError::OrphanReaped {
+                    name: "n".to_owned(),
+                },
+                -32050,
+            ),
+            (
+                LaunchError::OrphanAdopted {
+                    name: "n".to_owned(),
+                },
+                -32051,
+            ),
+            (
+                LaunchError::StackTtlExpired {
+                    stack_id: "s".to_owned(),
+                },
+                -32052,
+            ),
+            (
+                LaunchError::SupervisorUnreachable {
+                    stack_id: "s".to_owned(),
+                },
                 -32053,
             ),
-            (LaunchError::RegistryInsecure { path: "p".to_owned() }, -32054),
+            (
+                LaunchError::RegistryInsecure {
+                    path: "p".to_owned(),
+                },
+                -32054,
+            ),
             (LaunchError::FrameTooLarge { size: 1 }, -32055),
             (
-                LaunchError::ChildPidRecycled { name: "n".to_owned(), pid: 1 },
+                LaunchError::ChildPidRecycled {
+                    name: "n".to_owned(),
+                    pid: 1,
+                },
                 -32056,
             ),
-            (LaunchError::InvalidProfile { msg: "m".to_owned() }, -32009),
+            (
+                LaunchError::InvalidProfile {
+                    msg: "m".to_owned(),
+                },
+                -32009,
+            ),
             (
                 LaunchError::StackNotTerminal {
                     stack_id: "s".to_owned(),
@@ -651,11 +704,15 @@ mod tests {
     /// in the surfaced reason rather than collapsing it.
     #[test]
     fn launch_err_preserves_code_in_reason() {
-        let err = LaunchError::ProfileNotTrusted { path: "/p".to_owned() };
+        let err = LaunchError::ProfileNotTrusted {
+            path: "/p".to_owned(),
+        };
         let mapped = launch_err(&err);
         assert_eq!(mapped.code(), "SUBSTRATE_PERMISSION_DENIED");
         assert!(
-            mapped.to_string().contains("SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED"),
+            mapped
+                .to_string()
+                .contains("SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED"),
             "mapped reason must carry the launch code: {mapped}"
         );
     }
@@ -663,7 +720,9 @@ mod tests {
     /// `InvalidProfile` maps to the base invalid-argument variant.
     #[test]
     fn invalid_profile_maps_to_invalid_argument() {
-        let err = LaunchError::InvalidProfile { msg: "bad".to_owned() };
+        let err = LaunchError::InvalidProfile {
+            msg: "bad".to_owned(),
+        };
         let mapped = launch_err(&err);
         assert_eq!(mapped.code(), "SUBSTRATE_INVALID_ARGUMENT");
     }

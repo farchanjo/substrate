@@ -166,7 +166,8 @@ async fn given_subprocess_with_watchdog_pipe(world: &mut SubstrateWorld) {
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-        parent_death_signal: None,    };
+        parent_death_signal: None,
+    };
 
     match registry.spawn(req, &NoCancel).await {
         Ok(handle) => {

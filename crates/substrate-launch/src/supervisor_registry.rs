@@ -112,9 +112,11 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, LaunchError> + Send + 'static,
 {
-    tokio::task::spawn_blocking(f).await.map_err(|_| LaunchError::RegistryInsecure {
-        path: "supervisor registry blocking task panicked or was cancelled".to_owned(),
-    })?
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| LaunchError::RegistryInsecure {
+            path: "supervisor registry blocking task panicked or was cancelled".to_owned(),
+        })?
 }
 
 /// Resolves the launch stacks root,
@@ -234,16 +236,20 @@ fn read_supervisor_registry_at(stack_dir: &Path) -> Result<SupervisorRegistry, L
     let path = stack_dir.join(SUPERVISOR_FILE);
     let bytes = std::fs::read(&path).map_err(|_| insecure(&path))?;
     serde_json::from_slice(&bytes).map_err(|e| LaunchError::InvalidProfile {
-        msg: format!("supervisor registry {} is not valid JSON: {e}", path.display()),
+        msg: format!(
+            "supervisor registry {} is not valid JSON: {e}",
+            path.display()
+        ),
     })
 }
 
 /// Builds a sibling temp path `<dir>/.<name>.tmp.<uuid7>` next to `path`.
 fn tmp_sibling(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let base = path
-        .file_name()
-        .map_or_else(|| SUPERVISOR_FILE.to_owned(), |n| n.to_string_lossy().into_owned());
+    let base = path.file_name().map_or_else(
+        || SUPERVISOR_FILE.to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     parent.join(format!(".{base}.tmp.{}", Uuid::now_v7().simple()))
 }
 
@@ -295,8 +301,15 @@ mod tests {
         let stack_id = StackId::now_v7();
 
         let stack_dir = open_stack_registry_at(root.path(), &stack_id).expect("open registry");
-        let mode = std::fs::metadata(&stack_dir).expect("stat").permissions().mode();
-        assert_eq!(mode & 0o777, SECURE_DIR_MODE, "fresh stack dir must be 0700");
+        let mode = std::fs::metadata(&stack_dir)
+            .expect("stat")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            SECURE_DIR_MODE,
+            "fresh stack dir must be 0700"
+        );
 
         let registry = sample_registry();
         write_supervisor_registry(&stack_dir, &registry)
@@ -307,9 +320,15 @@ mod tests {
             .expect("stat supervisor.json")
             .permissions()
             .mode();
-        assert_eq!(file_mode & 0o777, SECURE_FILE_MODE, "supervisor.json must be 0600");
+        assert_eq!(
+            file_mode & 0o777,
+            SECURE_FILE_MODE,
+            "supervisor.json must be 0600"
+        );
 
-        let read_back = read_supervisor_registry(&stack_dir).await.expect("read supervisor.json");
+        let read_back = read_supervisor_registry(&stack_dir)
+            .await
+            .expect("read supervisor.json");
         assert_eq!(read_back, registry);
     }
 
@@ -328,7 +347,10 @@ mod tests {
         std::fs::set_permissions(&stack_dir, Permissions::from_mode(0o755)).expect("chmod 0755");
 
         let err = open_stack_registry_at(root.path(), &stack_id).expect_err("0755 dir rejected");
-        assert!(matches!(err, LaunchError::RegistryInsecure { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::RegistryInsecure { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -338,9 +360,12 @@ mod tests {
             .expect("chmod root world-writable");
         let stack_id = StackId::now_v7();
 
-        let err =
-            open_stack_registry_at(root.path(), &stack_id).expect_err("world-writable ancestor rejected");
-        assert!(matches!(err, LaunchError::RegistryInsecure { .. }), "got {err:?}");
+        let err = open_stack_registry_at(root.path(), &stack_id)
+            .expect_err("world-writable ancestor rejected");
+        assert!(
+            matches!(err, LaunchError::RegistryInsecure { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -363,6 +388,9 @@ mod tests {
         // asserts the function exists and is callable, not a specific value,
         // since the live $HOME/$XDG_STATE_HOME are outside test control.
         let resolved = state_root();
-        assert!(resolved.is_ok() || resolved.is_err(), "state_root must not panic");
+        assert!(
+            resolved.is_ok() || resolved.is_err(),
+            "state_root must not panic"
+        );
     }
 }

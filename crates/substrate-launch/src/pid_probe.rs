@@ -107,8 +107,7 @@ mod macos {
     /// Fetches one fixed-size `kinfo_proc` for `pid`. Returns `None` when the
     /// process does not exist (the kernel reports fewer than one full entry).
     fn sysctl_kinfo_proc(pid: i32) -> Option<Vec<u8>> {
-        let mut mib: [libc::c_int; 4] =
-            [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+        let mut mib: [libc::c_int; 4] = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
         let mut buf = vec![0u8; KINFO_PROC_SIZE];
         let mut size: libc::size_t = KINFO_PROC_SIZE;
 
@@ -163,15 +162,26 @@ mod tests {
     fn reads_own_process_start_time_and_ppid() {
         let pid = i32::try_from(std::process::id()).expect("test pid fits in i32");
         let stat = read_pid_stat(pid).expect("current process must be readable");
-        assert!(stat.start_time > 0, "start_time must be non-zero; got {}", stat.start_time);
-        assert!(stat.ppid > 0, "ppid must be a real parent pid; got {}", stat.ppid);
+        assert!(
+            stat.start_time > 0,
+            "start_time must be non-zero; got {}",
+            stat.start_time
+        );
+        assert!(
+            stat.ppid > 0,
+            "ppid must be a real parent pid; got {}",
+            stat.ppid
+        );
     }
 
     #[test]
     fn unlikely_pid_reads_as_gone() {
         // A pid near i32::MAX is overwhelmingly unlikely to be live; the probe
         // must report it as gone (None) rather than fabricating a value.
-        assert!(read_pid_stat(i32::MAX).is_none(), "i32::MAX pid must read as gone");
+        assert!(
+            read_pid_stat(i32::MAX).is_none(),
+            "i32::MAX pid must read as gone"
+        );
     }
 
     #[test]
@@ -189,7 +199,10 @@ mod tests {
     async fn is_pid_alive_true_for_own_process_with_matching_epoch() {
         let pid = i32::try_from(std::process::id()).expect("test pid fits in i32");
         let start = read_pid_stat(pid).expect("own process readable").start_time;
-        assert!(is_pid_alive(pid, start).await, "own live process with matching epoch must be alive");
+        assert!(
+            is_pid_alive(pid, start).await,
+            "own live process with matching epoch must be alive"
+        );
     }
 
     #[tokio::test]
@@ -206,6 +219,9 @@ mod tests {
 
     #[tokio::test]
     async fn is_pid_alive_false_for_gone_pid() {
-        assert!(!is_pid_alive(i32::MAX, 123).await, "a gone pid must never read as alive");
+        assert!(
+            !is_pid_alive(i32::MAX, 123).await,
+            "a gone pid must never read as alive"
+        );
     }
 }

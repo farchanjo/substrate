@@ -126,7 +126,13 @@ pub(crate) fn symlink_chain_disposition(
         Err(_) => SymlinkDisposition::Broken,
         Ok(target_meta) if target_meta.file_type().is_symlink() => {
             // Target is itself a symlink — recurse.
-            symlink_chain_disposition(&resolved_target, jail, allowlist_root, lstat_of_start, depth + 1)
+            symlink_chain_disposition(
+                &resolved_target,
+                jail,
+                allowlist_root,
+                lstat_of_start,
+                depth + 1,
+            )
         },
         Ok(_) => SymlinkDisposition::Internal {
             lstat: lstat_of_start.clone(),

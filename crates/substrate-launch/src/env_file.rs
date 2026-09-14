@@ -42,17 +42,17 @@ pub(crate) async fn merge_env_files(
 }
 
 /// Reads and parses one `.env` file, jailed to `profile_dir`.
-async fn load_one(
-    rel: &str,
-    profile_dir: &Path,
-) -> Result<BTreeMap<String, String>, LaunchError> {
+async fn load_one(rel: &str, profile_dir: &Path) -> Result<BTreeMap<String, String>, LaunchError> {
     let rel_path = PathBuf::from(rel);
     if rel_path.is_absolute() {
         return Err(LaunchError::InvalidProfile {
             msg: format!("env_file '{rel}' must be relative to the profile directory"),
         });
     }
-    if rel_path.components().any(|c| matches!(c, Component::ParentDir)) {
+    if rel_path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
         return Err(LaunchError::InvalidProfile {
             msg: format!("env_file '{rel}' must not contain '..'"),
         });

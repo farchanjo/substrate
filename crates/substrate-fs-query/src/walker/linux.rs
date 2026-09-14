@@ -162,7 +162,11 @@ fn walk_dir_recursive(
             },
             |meta| {
                 let is_dir = meta.is_dir();
-                let size = if meta.is_file() { Some(meta.len()) } else { None };
+                let size = if meta.is_file() {
+                    Some(meta.len())
+                } else {
+                    None
+                };
                 (is_dir, size)
             },
         );

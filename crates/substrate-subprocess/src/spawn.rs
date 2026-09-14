@@ -94,9 +94,7 @@ pub(crate) const fn initial_state(probe: Option<&HealthProbe>) -> SubprocessStat
         Some(HealthProbe::PortOpen { .. } | HealthProbe::HttpGet { .. }) => {
             SubprocessState::Starting
         },
-        Some(HealthProbe::None | HealthProbe::LogPattern { .. }) | None => {
-            SubprocessState::Running
-        },
+        Some(HealthProbe::None | HealthProbe::LogPattern { .. }) | None => SubprocessState::Running,
     }
 }
 
@@ -635,11 +633,17 @@ mod tests {
         // From Starting: promotion succeeds and lands on Ready.
         let s = AtomicU8::new(state_to_u8(SubprocessState::Starting));
         assert!(promote_starting_to_ready(&s));
-        assert_eq!(u8_to_state(s.load(Ordering::SeqCst)), SubprocessState::Ready);
+        assert_eq!(
+            u8_to_state(s.load(Ordering::SeqCst)),
+            SubprocessState::Ready
+        );
 
         // A second promotion is a no-op (state is no longer Starting).
         assert!(!promote_starting_to_ready(&s));
-        assert_eq!(u8_to_state(s.load(Ordering::SeqCst)), SubprocessState::Ready);
+        assert_eq!(
+            u8_to_state(s.load(Ordering::SeqCst)),
+            SubprocessState::Ready
+        );
     }
 
     #[test]

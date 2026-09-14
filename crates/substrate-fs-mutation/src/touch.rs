@@ -70,7 +70,9 @@ pub async fn handle_fs_touch(
     // Entry-check tier (ADR-0037): both branches below are a single fast
     // syscall, so a pre-dispatch cancellation check is sufficient.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     let path = jailed.as_path().to_path_buf();
@@ -251,7 +253,9 @@ mod tests {
         let req = FsTouchRequest {
             path: f.display().to_string(),
         };
-        handle_fs_touch(req, &deps, &root, CancellationToken::new()).await.expect("touch");
+        handle_fs_touch(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("touch");
         assert!(f.exists());
         assert_eq!(std::fs::read(&f).expect("read"), b"");
     }
@@ -272,7 +276,9 @@ mod tests {
         let req = FsTouchRequest {
             path: f.display().to_string(),
         };
-        handle_fs_touch(req, &deps, &root, CancellationToken::new()).await.expect("touch");
+        handle_fs_touch(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("touch");
 
         let after_mtime = std::fs::metadata(&f)
             .expect("meta")
@@ -296,7 +302,9 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_touch(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_touch(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
         assert!(!f.exists(), "file must not be created when cancelled");
     }
@@ -315,7 +323,9 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_touch(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_touch(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
         let after_mtime = std::fs::metadata(&f)
             .expect("meta")

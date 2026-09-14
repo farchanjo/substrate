@@ -120,7 +120,9 @@ pub async fn load_trusted(
             );
             append_bless(trust_store, record).await?;
         } else {
-            return Err(LaunchError::ProfileNotTrusted { path: canonical_str });
+            return Err(LaunchError::ProfileNotTrusted {
+                path: canonical_str,
+            });
         }
     }
 
@@ -198,7 +200,10 @@ pub async fn write_scaffold(
 ) -> Result<PathBuf, LaunchError> {
     if tokio::fs::try_exists(profile_path).await.unwrap_or(false) {
         return Err(LaunchError::InvalidProfile {
-            msg: format!("{} already exists; refusing to overwrite", profile_path.display()),
+            msg: format!(
+                "{} already exists; refusing to overwrite",
+                profile_path.display()
+            ),
         });
     }
     let body = scaffold_body(hint);
@@ -228,13 +233,22 @@ async fn safe_open(profile_path: &Path) -> Result<SafeOpen, LaunchError> {
     reject_symlink_leaf(profile_path).await?;
 
     let file = open_nofollow(profile_path).await?;
-    let meta = file.metadata().await.map_err(|_| LaunchError::ConfigSymlinkRejected {
-        path: profile_path.display().to_string(),
-    })?;
+    let meta = file
+        .metadata()
+        .await
+        .map_err(|_| LaunchError::ConfigSymlinkRejected {
+            path: profile_path.display().to_string(),
+        })?;
     let (dev, ino, uid, mode) = (meta.dev(), meta.ino(), meta.uid(), meta.mode());
 
     let bytes = read_all(file, profile_path).await?;
-    Ok(SafeOpen { bytes, dev, ino, uid, mode })
+    Ok(SafeOpen {
+        bytes,
+        dev,
+        ino,
+        uid,
+        mode,
+    })
 }
 
 /// Rejects a Profile whose parent directory has the world-write bit set.
@@ -245,9 +259,11 @@ async fn reject_world_writable_parent(profile_path: &Path) -> Result<(), LaunchE
     if parent.as_os_str().is_empty() {
         return Ok(());
     }
-    let meta = tokio::fs::metadata(parent).await.map_err(|_| LaunchError::ConfigUntrustedDir {
-        path: parent.display().to_string(),
-    })?;
+    let meta = tokio::fs::metadata(parent)
+        .await
+        .map_err(|_| LaunchError::ConfigUntrustedDir {
+            path: parent.display().to_string(),
+        })?;
     if meta.mode() & WORLD_WRITE_BIT != 0 {
         return Err(LaunchError::ConfigUntrustedDir {
             path: parent.display().to_string(),
@@ -258,11 +274,11 @@ async fn reject_world_writable_parent(profile_path: &Path) -> Result<(), LaunchE
 
 /// Deterministically rejects a symlinked config leaf via `lstat`.
 async fn reject_symlink_leaf(profile_path: &Path) -> Result<(), LaunchError> {
-    let meta = tokio::fs::symlink_metadata(profile_path).await.map_err(|_| {
-        LaunchError::ConfigSymlinkRejected {
+    let meta = tokio::fs::symlink_metadata(profile_path)
+        .await
+        .map_err(|_| LaunchError::ConfigSymlinkRejected {
             path: profile_path.display().to_string(),
-        }
-    })?;
+        })?;
     if meta.file_type().is_symlink() {
         return Err(LaunchError::ConfigSymlinkRejected {
             path: profile_path.display().to_string(),
@@ -288,9 +304,11 @@ async fn open_nofollow(profile_path: &Path) -> Result<tokio::fs::File, LaunchErr
 async fn read_all(mut file: tokio::fs::File, profile_path: &Path) -> Result<Vec<u8>, LaunchError> {
     use tokio::io::AsyncReadExt as _;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).await.map_err(|e| LaunchError::InvalidProfile {
-        msg: format!("failed to read {}: {e}", profile_path.display()),
-    })?;
+    file.read_to_end(&mut bytes)
+        .await
+        .map_err(|e| LaunchError::InvalidProfile {
+            msg: format!("failed to read {}: {e}", profile_path.display()),
+        })?;
     Ok(bytes)
 }
 
@@ -324,9 +342,7 @@ fn scaffold_body(hint: Option<&str>) -> String {
         Some("python") => r#"["python", "-m", "app"]"#,
         _ => r#"["echo", "configure your service command"]"#,
     };
-    format!(
-        "version = 1\n\n[services.app]\ncommand = {command}\nrequired = true\n"
-    )
+    format!("version = 1\n\n[services.app]\ncommand = {command}\nrequired = true\n")
 }
 
 #[cfg(test)]
@@ -351,7 +367,9 @@ mod tests {
     async fn fixture(body: &str) -> (TempDir, PathBuf, PathBuf) {
         let dir = TempDir::new().expect("tempdir");
         let profile = dir.path().join(".substrate.toml");
-        tokio::fs::write(&profile, body.as_bytes()).await.expect("write profile");
+        tokio::fs::write(&profile, body.as_bytes())
+            .await
+            .expect("write profile");
         let store = dir.path().join("launch-trust.toml");
         (dir, profile, store)
     }
@@ -361,14 +379,21 @@ mod tests {
         // launch-profile-symlink-rejected
         let dir = TempDir::new().expect("tempdir");
         let real = dir.path().join("real.toml");
-        tokio::fs::write(&real, VALID_PROFILE.as_bytes()).await.expect("write real");
+        tokio::fs::write(&real, VALID_PROFILE.as_bytes())
+            .await
+            .expect("write real");
         let link = dir.path().join(".substrate.toml");
         std::os::unix::fs::symlink(&real, &link).expect("symlink");
 
         let store = dir.path().join("launch-trust.toml");
         let cfg = LaunchOperatorConfig::default();
-        let err = load_trusted(&link, &store, &cfg).await.expect_err("symlink rejected");
-        assert!(matches!(err, LaunchError::ConfigSymlinkRejected { .. }), "got {err:?}");
+        let err = load_trusted(&link, &store, &cfg)
+            .await
+            .expect_err("symlink rejected");
+        assert!(
+            matches!(err, LaunchError::ConfigSymlinkRejected { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -379,8 +404,13 @@ mod tests {
             .await
             .expect("chmod dir world-writable");
         let cfg = LaunchOperatorConfig::default();
-        let err = load_trusted(&profile, &store, &cfg).await.expect_err("untrusted dir");
-        assert!(matches!(err, LaunchError::ConfigUntrustedDir { .. }), "got {err:?}");
+        let err = load_trusted(&profile, &store, &cfg)
+            .await
+            .expect_err("untrusted dir");
+        assert!(
+            matches!(err, LaunchError::ConfigUntrustedDir { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -388,8 +418,13 @@ mod tests {
         // launch-profile-untrusted-rejected
         let (_dir, profile, store) = fixture(VALID_PROFILE).await;
         let cfg = LaunchOperatorConfig::default();
-        let err = load_trusted(&profile, &store, &cfg).await.expect_err("not trusted");
-        assert!(matches!(err, LaunchError::ProfileNotTrusted { .. }), "got {err:?}");
+        let err = load_trusted(&profile, &store, &cfg)
+            .await
+            .expect_err("not trusted");
+        assert!(
+            matches!(err, LaunchError::ProfileNotTrusted { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -398,11 +433,18 @@ mod tests {
         // still requires the same TOFU bless on first load.
         let dir = TempDir::new().expect("tempdir");
         let local = dir.path().join(".substrate.local.toml");
-        tokio::fs::write(&local, VALID_PROFILE.as_bytes()).await.expect("write local");
+        tokio::fs::write(&local, VALID_PROFILE.as_bytes())
+            .await
+            .expect("write local");
         let store = dir.path().join("launch-trust.toml");
         let cfg = LaunchOperatorConfig::default();
-        let err = load_trusted(&local, &store, &cfg).await.expect_err("local not trusted");
-        assert!(matches!(err, LaunchError::ProfileNotTrusted { .. }), "got {err:?}");
+        let err = load_trusted(&local, &store, &cfg)
+            .await
+            .expect_err("local not trusted");
+        assert!(
+            matches!(err, LaunchError::ProfileNotTrusted { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -412,8 +454,13 @@ mod tests {
         let body = format!("auto_bless = true\n{VALID_PROFILE}");
         let (_dir, profile, store) = fixture(&body).await;
         let cfg = LaunchOperatorConfig::default();
-        let err = load_trusted(&profile, &store, &cfg).await.expect_err("hostile auto_bless");
-        assert!(matches!(err, LaunchError::ProfileNotTrusted { .. }), "got {err:?}");
+        let err = load_trusted(&profile, &store, &cfg)
+            .await
+            .expect_err("hostile auto_bless");
+        assert!(
+            matches!(err, LaunchError::ProfileNotTrusted { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -424,7 +471,9 @@ mod tests {
         let cfg = LaunchOperatorConfig {
             auto_bless_paths: vec![canonical.display().to_string()],
         };
-        let loaded = load_trusted(&profile, &store, &cfg).await.expect("auto-bless proceeds");
+        let loaded = load_trusted(&profile, &store, &cfg)
+            .await
+            .expect("auto-bless proceeds");
         assert!(loaded.profile.services.contains_key("web"));
         // The bless record is now persisted in the user-scope trust store.
         let records = load_trust_store(&store).await.expect("load store");
@@ -443,20 +492,30 @@ mod tests {
             auto_bless_paths: vec![canonical.display().to_string()],
         };
         // First load auto-blesses and pins the current content.
-        load_trusted(&profile, &store, &cfg).await.expect("initial bless");
+        load_trusted(&profile, &store, &cfg)
+            .await
+            .expect("initial bless");
 
         // A second load with an empty op-config must still be trusted (record matches).
         let empty_cfg = LaunchOperatorConfig::default();
-        load_trusted(&profile, &store, &empty_cfg).await.expect("still trusted after bless");
+        load_trusted(&profile, &store, &empty_cfg)
+            .await
+            .expect("still trusted after bless");
 
         // Editing the content changes the BLAKE3 hash -> tuple no longer matches.
-        tokio::fs::write(&profile, b"version = 1\n\n[services.web]\ncommand = [\"echo\", \"EDITED\"]\n")
-            .await
-            .expect("edit profile");
+        tokio::fs::write(
+            &profile,
+            b"version = 1\n\n[services.web]\ncommand = [\"echo\", \"EDITED\"]\n",
+        )
+        .await
+        .expect("edit profile");
         let err = load_trusted(&profile, &store, &empty_cfg)
             .await
             .expect_err("edited profile is untrusted");
-        assert!(matches!(err, LaunchError::ProfileNotTrusted { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::ProfileNotTrusted { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -464,7 +523,9 @@ mod tests {
         // launch-list-no-trust-required
         let profile_body = "version = 1\n\n[services.db]\ncommand = [\"dbd\"]\n\n[services.api]\ncommand = [\"apid\"]\ndepends_on = [\"db\"]\n\n[services.web]\ncommand = [\"webd\"]\ndepends_on = [\"api\"]\n";
         let (_dir, profile, _store) = fixture(profile_body).await;
-        let loaded = load_untrusted(&profile).await.expect("list loads read-only");
+        let loaded = load_untrusted(&profile)
+            .await
+            .expect("list loads read-only");
         assert!(loaded.profile.services.contains_key("db"));
         assert!(loaded.profile.services.contains_key("api"));
         assert!(loaded.profile.services.contains_key("web"));
@@ -474,19 +535,28 @@ mod tests {
     async fn invalid_toml_is_invalid_profile() {
         let (_dir, profile, _store) = fixture("this is = = not toml").await;
         let err = load_untrusted(&profile).await.expect_err("invalid toml");
-        assert!(matches!(err, LaunchError::InvalidProfile { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::InvalidProfile { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn write_scaffold_creates_then_refuses_overwrite() {
         let dir = TempDir::new().expect("tempdir");
         let profile = dir.path().join(".substrate.toml");
-        let written = write_scaffold(&profile, Some("rust")).await.expect("scaffold");
+        let written = write_scaffold(&profile, Some("rust"))
+            .await
+            .expect("scaffold");
         assert_eq!(written, profile);
-        let text = tokio::fs::read_to_string(&profile).await.expect("read back");
+        let text = tokio::fs::read_to_string(&profile)
+            .await
+            .expect("read back");
         assert!(text.contains("cargo"), "rust hint seeds a cargo command");
         // A second call must not clobber.
-        let err = write_scaffold(&profile, None).await.expect_err("no overwrite");
+        let err = write_scaffold(&profile, None)
+            .await
+            .expect_err("no overwrite");
         assert!(matches!(err, LaunchError::InvalidProfile { .. }));
     }
 }

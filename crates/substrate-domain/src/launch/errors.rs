@@ -264,23 +264,48 @@ mod tests {
     /// Every variant, used to drive exhaustive code/hint checks.
     fn all_variants() -> Vec<LaunchError> {
         vec![
-            LaunchError::ProfileNotTrusted { path: "p".to_owned() },
-            LaunchError::ConfigSymlinkRejected { path: "p".to_owned() },
-            LaunchError::ConfigUntrustedDir { path: "p".to_owned() },
-            LaunchError::TrustStoreInsecure { path: "p".to_owned() },
-            LaunchError::CycleDetected { nodes: vec!["a".to_owned()] },
+            LaunchError::ProfileNotTrusted {
+                path: "p".to_owned(),
+            },
+            LaunchError::ConfigSymlinkRejected {
+                path: "p".to_owned(),
+            },
+            LaunchError::ConfigUntrustedDir {
+                path: "p".to_owned(),
+            },
+            LaunchError::TrustStoreInsecure {
+                path: "p".to_owned(),
+            },
+            LaunchError::CycleDetected {
+                nodes: vec!["a".to_owned()],
+            },
             LaunchError::DependencyFailed {
                 service: "s".to_owned(),
                 dependency: "d".to_owned(),
             },
-            LaunchError::OrphanReaped { name: "n".to_owned() },
-            LaunchError::OrphanAdopted { name: "n".to_owned() },
-            LaunchError::StackTtlExpired { stack_id: "s".to_owned() },
-            LaunchError::SupervisorUnreachable { stack_id: "s".to_owned() },
-            LaunchError::RegistryInsecure { path: "p".to_owned() },
+            LaunchError::OrphanReaped {
+                name: "n".to_owned(),
+            },
+            LaunchError::OrphanAdopted {
+                name: "n".to_owned(),
+            },
+            LaunchError::StackTtlExpired {
+                stack_id: "s".to_owned(),
+            },
+            LaunchError::SupervisorUnreachable {
+                stack_id: "s".to_owned(),
+            },
+            LaunchError::RegistryInsecure {
+                path: "p".to_owned(),
+            },
             LaunchError::FrameTooLarge { size: 99 },
-            LaunchError::ChildPidRecycled { name: "n".to_owned(), pid: 42 },
-            LaunchError::InvalidProfile { msg: "m".to_owned() },
+            LaunchError::ChildPidRecycled {
+                name: "n".to_owned(),
+                pid: 42,
+            },
+            LaunchError::InvalidProfile {
+                msg: "m".to_owned(),
+            },
             LaunchError::SpawnFailed {
                 source: io::Error::new(io::ErrorKind::NotFound, "x"),
             },
@@ -295,19 +320,27 @@ mod tests {
     fn codes_match_expected_literals() {
         let pairs = [
             (
-                LaunchError::ProfileNotTrusted { path: "p".to_owned() },
+                LaunchError::ProfileNotTrusted {
+                    path: "p".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_PROFILE_NOT_TRUSTED",
             ),
             (
-                LaunchError::ConfigSymlinkRejected { path: "p".to_owned() },
+                LaunchError::ConfigSymlinkRejected {
+                    path: "p".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_CONFIG_SYMLINK_REJECTED",
             ),
             (
-                LaunchError::ConfigUntrustedDir { path: "p".to_owned() },
+                LaunchError::ConfigUntrustedDir {
+                    path: "p".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_CONFIG_UNTRUSTED_DIR",
             ),
             (
-                LaunchError::TrustStoreInsecure { path: "p".to_owned() },
+                LaunchError::TrustStoreInsecure {
+                    path: "p".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_TRUST_STORE_INSECURE",
             ),
             (
@@ -322,23 +355,33 @@ mod tests {
                 "SUBSTRATE_LAUNCH_DEPENDENCY_FAILED",
             ),
             (
-                LaunchError::OrphanReaped { name: "n".to_owned() },
+                LaunchError::OrphanReaped {
+                    name: "n".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_ORPHAN_REAPED",
             ),
             (
-                LaunchError::OrphanAdopted { name: "n".to_owned() },
+                LaunchError::OrphanAdopted {
+                    name: "n".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_ORPHAN_ADOPTED",
             ),
             (
-                LaunchError::StackTtlExpired { stack_id: "s".to_owned() },
+                LaunchError::StackTtlExpired {
+                    stack_id: "s".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_STACK_TTL_EXPIRED",
             ),
             (
-                LaunchError::SupervisorUnreachable { stack_id: "s".to_owned() },
+                LaunchError::SupervisorUnreachable {
+                    stack_id: "s".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_SUPERVISOR_UNREACHABLE",
             ),
             (
-                LaunchError::RegistryInsecure { path: "p".to_owned() },
+                LaunchError::RegistryInsecure {
+                    path: "p".to_owned(),
+                },
                 "SUBSTRATE_LAUNCH_REGISTRY_INSECURE",
             ),
             (
@@ -346,11 +389,16 @@ mod tests {
                 "SUBSTRATE_LAUNCH_FRAME_TOO_LARGE",
             ),
             (
-                LaunchError::ChildPidRecycled { name: "n".to_owned(), pid: 1 },
+                LaunchError::ChildPidRecycled {
+                    name: "n".to_owned(),
+                    pid: 1,
+                },
                 "SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED",
             ),
             (
-                LaunchError::InvalidProfile { msg: "m".to_owned() },
+                LaunchError::InvalidProfile {
+                    msg: "m".to_owned(),
+                },
                 "SUBSTRATE_INVALID_ARGUMENT",
             ),
             (

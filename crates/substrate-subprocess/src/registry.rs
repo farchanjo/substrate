@@ -532,8 +532,7 @@ impl SubprocessRegistry {
             .handles
             .iter()
             .filter(|entry| {
-                !crate::spawn::u8_to_state(entry.value().state.load(Ordering::SeqCst))
-                    .is_terminal()
+                !crate::spawn::u8_to_state(entry.value().state.load(Ordering::SeqCst)).is_terminal()
             })
             .count() as u32;
         count
@@ -750,7 +749,10 @@ async fn terminal_gc_loop(
             TERMINAL_HANDLE_RETENTION,
         );
         if evicted > 0 {
-            tracing::debug!(evicted, "terminal_gc_loop sweep evicted expired subprocess handles");
+            tracing::debug!(
+                evicted,
+                "terminal_gc_loop sweep evicted expired subprocess handles"
+            );
         }
     }
 }
@@ -1124,8 +1126,14 @@ impl SubprocessPort for SubprocessRegistry {
             let probe_observers = Arc::clone(&self.state_observers);
             let probe_job_id = job_id.clone();
             tokio::spawn(async move {
-                run_startup_probe(probe, probe_state, probe_cancel, probe_observers, probe_job_id)
-                    .await;
+                run_startup_probe(
+                    probe,
+                    probe_state,
+                    probe_cancel,
+                    probe_observers,
+                    probe_job_id,
+                )
+                .await;
             });
         }
 
@@ -1793,10 +1801,7 @@ pub fn paginate_lines(
                           the usize truncation point even on 32-bit targets"
             )]
             let start = (offset as usize).min(lines.len());
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "see start above"
-            )]
+            #[expect(clippy::cast_possible_truncation, reason = "see start above")]
             let end = (start + page_size as usize).min(lines.len());
             let page: Vec<String> = lines[start..end].iter().map(|s| (*s).to_owned()).collect();
             let next_offset = if end < lines.len() {
@@ -1814,10 +1819,7 @@ pub fn paginate_lines(
                           the usize truncation point even on 32-bit targets"
             )]
             let start = (offset as usize).min(lines.len());
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "see start above"
-            )]
+            #[expect(clippy::cast_possible_truncation, reason = "see start above")]
             let end = (start + page_size as usize).min(lines.len());
             let page: Vec<String> = lines[start..end].iter().map(|s| (*s).to_owned()).collect();
             let next_offset = if end < lines.len() {
@@ -2111,7 +2113,9 @@ mod tests {
             "/Users/dev/dev/simple-crate/target/debug/simple-crate"
         )));
         assert!(
-            !al.allows(std::path::Path::new("/Users/dev/dev/rhodes/target/debug/build/foo")),
+            !al.allows(std::path::Path::new(
+                "/Users/dev/dev/rhodes/target/debug/build/foo"
+            )),
             "must not match inside a target/debug/build subdirectory (extra path segment)"
         );
         assert!(!al.allows(std::path::Path::new("/etc/passwd")));
@@ -2126,7 +2130,9 @@ mod tests {
         assert!(al.allows(std::path::Path::new("/opt/homebrew/opt/openjdk/bin/java")));
         assert!(al.allows(std::path::Path::new("/opt/homebrew/opt/go@1.26/bin/go")));
         assert!(
-            !al.allows(std::path::Path::new("/opt/homebrew/opt/openjdk/bin/sub/java")),
+            !al.allows(std::path::Path::new(
+                "/opt/homebrew/opt/openjdk/bin/sub/java"
+            )),
             "must not cross an extra path segment under bin/"
         );
         assert!(
@@ -2261,7 +2267,8 @@ mod tests {
             restart_policy: None,
             health_probe: None,
             log_rotation: None,
-            parent_death_signal: None,        };
+            parent_death_signal: None,
+        };
 
         let handle_snapshot = registry
             .spawn(req, &NoCancel)
@@ -2314,8 +2321,8 @@ mod tests {
 
         let sh = std::path::PathBuf::from("/bin/sh");
         assert!(sh.exists(), "/bin/sh must exist on this platform");
-        let tmp_dir = std::fs::canonicalize(std::env::temp_dir())
-            .expect("temp_dir must be canonicalisable");
+        let tmp_dir =
+            std::fs::canonicalize(std::env::temp_dir()).expect("temp_dir must be canonicalisable");
         let path_allowlist = substrate_policy::Allowlist::new(vec![tmp_dir.clone()])
             .expect("temp_dir must be a valid allowlist root");
 

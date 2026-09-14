@@ -769,8 +769,8 @@ mod tests {
             "None maps to PageSize::default() = 50"
         );
 
-        let explicit_ps = Some(200_u32)
-            .map_or_else(PageSize::default, |n| PageSize::try_from(n).expect("valid"));
+        let explicit_ps =
+            Some(200_u32).map_or_else(PageSize::default, |n| PageSize::try_from(n).expect("valid"));
         assert_eq!(explicit_ps.get(), 200);
 
         let zero_result: Result<PageSize, _> =

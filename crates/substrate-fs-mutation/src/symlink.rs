@@ -88,7 +88,9 @@ pub async fn handle_fs_symlink(
     // Entry-check tier (ADR-0037): symlink(2) is a single fast syscall, so a
     // pre-dispatch cancellation check is sufficient.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     // Zone A: symlink creation.
@@ -226,7 +228,9 @@ mod tests {
             link_target: target_file.display().to_string(),
             dry_run: false,
         };
-        handle_fs_symlink(req, &deps, &root, CancellationToken::new()).await.expect("symlink");
+        handle_fs_symlink(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("symlink");
         assert!(link.exists());
         assert!(link.is_symlink());
     }
@@ -243,7 +247,9 @@ mod tests {
             link_target: target_file.display().to_string(),
             dry_run: true,
         };
-        let resp = handle_fs_symlink(req, &deps, &root, CancellationToken::new()).await.expect("dry run");
+        let resp = handle_fs_symlink(req, &deps, &root, CancellationToken::new())
+            .await
+            .expect("dry run");
         assert_eq!(resp.hints.confirm_destructive, Some(true));
         assert!(!link.exists());
     }
@@ -283,7 +289,9 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let err = handle_fs_symlink(req, &deps, &root, cancel).await.unwrap_err();
+        let err = handle_fs_symlink(req, &deps, &root, cancel)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "SUBSTRATE_CANCELLED");
         assert!(!link.exists(), "symlink must not be created when cancelled");
     }

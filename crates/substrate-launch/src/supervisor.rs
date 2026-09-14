@@ -328,10 +328,7 @@ pub(crate) fn launch_client_id() -> Result<ClientId, LaunchError> {
 /// edges (`depends_on`) are handled without a re-spawn (ADR-0065 reconciler).
 #[must_use]
 pub(crate) fn spawn_fields_differ(old: &LaunchService, new: &LaunchService) -> bool {
-    old.command != new.command
-        || old.args != new.args
-        || old.env != new.env
-        || old.cwd != new.cwd
+    old.command != new.command || old.args != new.args || old.env != new.env || old.cwd != new.cwd
 }
 
 /// Returns `true` when only the dependency edges differ (no spawn-affecting change).
@@ -443,7 +440,10 @@ mod tests {
         // `sh` is guaranteed on PATH on any POSIX host; a bare name resolves to an
         // absolute, executable path (never left as the bare "sh").
         let out = resolve_binary(PathBuf::from("sh"), PathBuf::from("/nonexistent-cwd")).await;
-        assert!(out.is_absolute(), "bare name must resolve to an absolute path");
+        assert!(
+            out.is_absolute(),
+            "bare name must resolve to an absolute path"
+        );
         assert!(out.ends_with("sh"));
         assert!(is_executable_file(&out));
     }

@@ -58,7 +58,11 @@ async fn when_descriptions_validated(_world: &mut SubstrateWorld) {
 )]
 async fn then_descriptions_within_budget(world: &mut SubstrateWorld) {
     let tools = launch_tool_descriptions(world);
-    assert_eq!(tools.len(), 10, "expected ten launch_* tools; got {tools:?}");
+    assert_eq!(
+        tools.len(),
+        10,
+        "expected ten launch_* tools; got {tools:?}"
+    );
     for (name, desc) in &tools {
         assert!(
             desc.len() <= 100,
@@ -91,7 +95,11 @@ async fn then_no_shared_leading_verb(world: &mut SubstrateWorld) {
     let tools = launch_tool_descriptions(world);
     let mut leading_verbs = std::collections::HashSet::new();
     for (name, desc) in &tools {
-        let verb = desc.split_whitespace().next().unwrap_or_default().to_lowercase();
+        let verb = desc
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_lowercase();
         assert!(
             leading_verbs.insert(verb.clone()),
             "{name}'s leading verb {verb:?} is shared with another launch_* description: {tools:?}"
@@ -138,8 +146,14 @@ async fn write_and_trust_profile(world: &mut SubstrateWorld) -> String {
     )
     .expect("write profile");
     let path_str = profile_path.display().to_string();
-    world.call_tool_and_store("launch_trust", serde_json::json!({ "profile_path": path_str }));
-    let resp = world.last_response.clone().expect("launch_trust must respond");
+    world.call_tool_and_store(
+        "launch_trust",
+        serde_json::json!({ "profile_path": path_str }),
+    );
+    let resp = world
+        .last_response
+        .clone()
+        .expect("launch_trust must respond");
     assert!(
         resp.get("error").is_none(),
         "launch_trust must succeed before launch_up; got {resp}"
@@ -175,7 +189,10 @@ async fn when_launch_up_response_returned(_world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^launch\.up returns a CreateTaskResult with a taskId$"#)]
 async fn then_returns_create_task_result(world: &mut SubstrateWorld) {
-    let resp = world.last_response.clone().expect("Given must store last_response");
+    let resp = world
+        .last_response
+        .clone()
+        .expect("Given must store last_response");
     assert!(
         resp.get("error").is_none(),
         "launch_up must succeed for a trusted Profile; got {resp}"
@@ -225,7 +242,10 @@ async fn then_ready_transitions_emitted(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the tasks/status events carry the launch\.up Task taskId$"#)]
 async fn then_events_carry_taskid(world: &mut SubstrateWorld) {
-    let resp = world.last_response.clone().expect("Given must store last_response");
+    let resp = world
+        .last_response
+        .clone()
+        .expect("Given must store last_response");
     let task_id = resp["result"]["taskId"]
         .as_str()
         .or_else(|| resp["result"]["structuredContent"]["taskId"].as_str())
@@ -257,7 +277,10 @@ fn task_status_frames(world: &SubstrateWorld) -> Vec<serde_json::Value> {
 
 #[then(regex = r#"^hints\.next_action_suggested is the wire name launch_status$"#)]
 async fn then_hints_next_action_launch_status(world: &mut SubstrateWorld) {
-    let hints = world.hints().cloned().expect("response must carry structuredContent.hints");
+    let hints = world
+        .hints()
+        .cloned()
+        .expect("response must carry structuredContent.hints");
     assert_eq!(
         hints.get("next_action_suggested").and_then(|v| v.as_str()),
         Some("launch_status")
@@ -266,13 +289,24 @@ async fn then_hints_next_action_launch_status(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^hints\.confirm_destructive is true$"#)]
 async fn then_hints_confirm_destructive_true(world: &mut SubstrateWorld) {
-    let hints = world.hints().cloned().expect("response must carry structuredContent.hints");
-    assert_eq!(hints.get("confirm_destructive").and_then(serde_json::Value::as_bool), Some(true));
+    let hints = world
+        .hints()
+        .cloned()
+        .expect("response must carry structuredContent.hints");
+    assert_eq!(
+        hints
+            .get("confirm_destructive")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
 }
 
 #[then(regex = r#"^hints\.polling_endpoint is launch\.status$"#)]
 async fn then_hints_polling_endpoint(world: &mut SubstrateWorld) {
-    let hints = world.hints().cloned().expect("response must carry structuredContent.hints");
+    let hints = world
+        .hints()
+        .cloned()
+        .expect("response must carry structuredContent.hints");
     assert_eq!(
         hints.get("polling_endpoint").and_then(|v| v.as_str()),
         Some("launch.status")
@@ -281,7 +315,10 @@ async fn then_hints_polling_endpoint(world: &mut SubstrateWorld) {
 
 #[then(regex = r#"^the result carries a resource_link to launch://stack/<id>/events$"#)]
 async fn then_result_carries_resource_link(world: &mut SubstrateWorld) {
-    let resp = world.last_response.clone().expect("Given must store last_response");
+    let resp = world
+        .last_response
+        .clone()
+        .expect("Given must store last_response");
     let resource_link = resp["result"]["structuredContent"]["resource_link"].as_str();
     // Production note: the durable per-Stack events resource (ADR-0066's
     // `launch://stack/<id>/events`) is built on the resource-subscription

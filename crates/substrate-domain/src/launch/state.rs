@@ -67,8 +67,14 @@ impl StackState {
                     Self::Starting | Self::Detached,
                     Self::Running | Self::Degraded | Self::Draining
                 )
-                | (Self::Running, Self::Degraded | Self::Detached | Self::Draining)
-                | (Self::Degraded, Self::Running | Self::Detached | Self::Draining)
+                | (
+                    Self::Running,
+                    Self::Degraded | Self::Detached | Self::Draining
+                )
+                | (
+                    Self::Degraded,
+                    Self::Running | Self::Detached | Self::Draining
+                )
                 | (Self::Draining, Self::Down)
         )
     }

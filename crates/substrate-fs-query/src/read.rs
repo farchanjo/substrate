@@ -123,14 +123,13 @@ pub async fn handle_fs_read(
     let jail: Arc<dyn PathJailPort> = Arc::clone(&deps.jail);
     let raw_clone = raw.clone();
     let allowlist_root = deps.allowlist_root.clone();
-    let jailed: JailedPath = tokio::task::spawn_blocking(move || {
-        jail.jail(&allowlist_root, &raw_clone)
-    })
-    .await
-    .map_err(|e| SubstrateError::InternalError {
-        reason: format!("spawn_blocking join error: {e}"),
-        correlation_id: None,
-    })??;
+    let jailed: JailedPath =
+        tokio::task::spawn_blocking(move || jail.jail(&allowlist_root, &raw_clone))
+            .await
+            .map_err(|e| SubstrateError::InternalError {
+                reason: format!("spawn_blocking join error: {e}"),
+                correlation_id: None,
+            })??;
 
     // Use symlink_metadata (lstat semantics) so that FIFOs and sockets are
     // detected without following them — following a FIFO blocks indefinitely.

@@ -492,7 +492,10 @@ mod tests {
         let (dir, jail, root_jailed) = make_jail();
         let escape = dir.path().join("..").join("outside_marker");
         let result = jail.jail(&root_jailed, &escape);
-        assert!(result.is_err(), "dotdot escape must be rejected, got {result:?}");
+        assert!(
+            result.is_err(),
+            "dotdot escape must be rejected, got {result:?}"
+        );
         let code = result.unwrap_err().code();
         assert!(
             code == "SUBSTRATE_PATH_OUTSIDE_ALLOWLIST" || code == "SUBSTRATE_INTERNAL_ERROR",

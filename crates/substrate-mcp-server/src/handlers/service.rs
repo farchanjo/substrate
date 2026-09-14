@@ -1057,7 +1057,11 @@ fn schema_launch_forget() -> std::sync::Arc<serde_json::Map<String, serde_json::
 #[cfg(feature = "launch")]
 fn registry_launch() -> Vec<Tool> {
     vec![
-        Tool::new("launch_init", descriptions::launch_init(), schema_launch_init()),
+        Tool::new(
+            "launch_init",
+            descriptions::launch_init(),
+            schema_launch_init(),
+        ),
         Tool::new(
             "launch_list",
             descriptions::launch_list(),
@@ -1074,7 +1078,11 @@ fn registry_launch() -> Vec<Tool> {
             descriptions::launch_status(),
             schema_launch_status(),
         ),
-        Tool::new("launch_logs", descriptions::launch_logs(), schema_launch_logs()),
+        Tool::new(
+            "launch_logs",
+            descriptions::launch_logs(),
+            schema_launch_logs(),
+        ),
         Tool::new(
             "launch_restart",
             descriptions::launch_restart(),
@@ -1085,7 +1093,11 @@ fn registry_launch() -> Vec<Tool> {
             descriptions::launch_reload(),
             schema_launch_reload(),
         ),
-        Tool::new("launch_down", descriptions::launch_down(), schema_launch_down()),
+        Tool::new(
+            "launch_down",
+            descriptions::launch_down(),
+            schema_launch_down(),
+        ),
         Tool::new(
             "launch_forget",
             descriptions::launch_forget(),

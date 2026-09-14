@@ -55,7 +55,11 @@ async fn when_child_prints_secret_line(world: &mut SubstrateWorld) {
         .get("launch_redact_per_service")
         .cloned()
         .unwrap_or_default();
-    let global = world.context.get("launch_redact_global").cloned().unwrap_or_default();
+    let global = world
+        .context
+        .get("launch_redact_global")
+        .cloned()
+        .unwrap_or_default();
     let per_service_list: Vec<String> = per_service
         .split(',')
         .filter(|s| !s.is_empty())
@@ -74,8 +78,12 @@ async fn when_child_prints_secret_line(world: &mut SubstrateWorld) {
         .unwrap_or_default();
     let raw_line = format!("connecting with {needle} now");
     let redacted = redactor.redact_line(&raw_line);
-    world.context.insert("launch_redact_raw".to_owned(), raw_line);
-    world.context.insert("launch_redact_needle".to_owned(), needle);
+    world
+        .context
+        .insert("launch_redact_raw".to_owned(), raw_line);
+    world
+        .context
+        .insert("launch_redact_needle".to_owned(), needle);
     world
         .context
         .insert("launch_redact_output".to_owned(), redacted);
@@ -139,7 +147,9 @@ async fn when_service_prints_api_key_line(world: &mut SubstrateWorld) {
     let redactor = Redactor::new(&[global.clone()], &[]);
     let raw_line = format!("API_KEY={global}");
     let redacted = redactor.redact_line(&raw_line);
-    world.context.insert("launch_redact_needle".to_owned(), global);
+    world
+        .context
+        .insert("launch_redact_needle".to_owned(), global);
     world
         .context
         .insert("launch_redact_output".to_owned(), redacted);
@@ -181,7 +191,9 @@ async fn given_client_without_subscribe(world: &mut SubstrateWorld) {
     reg.trust(&profile).await.expect("trust");
     world.launch_registry = Some(reg);
     world.launch_fake = Some(fake);
-    world.context.insert("launch_profile_path".to_owned(), profile);
+    world
+        .context
+        .insert("launch_profile_path".to_owned(), profile);
     std::mem::forget(dir);
 }
 
@@ -192,7 +204,10 @@ async fn when_stack_emits_events(world: &mut SubstrateWorld) {
         .get("launch_profile_path")
         .cloned()
         .expect("Given must set launch_profile_path");
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let handle = reg
         .up(&profile, None, None, &NeverCancel)
         .await
@@ -212,11 +227,12 @@ async fn then_no_resources_updated_poke(_world: &mut SubstrateWorld) {
     // step's confirmation that the pull path works.
 }
 
-#[then(
-    regex = r#"^the events remain readable via launch\.status and launch\.logs polling$"#
-)]
+#[then(regex = r#"^the events remain readable via launch\.status and launch\.logs polling$"#)]
 async fn then_events_readable_via_polling(world: &mut SubstrateWorld) {
-    let reg = world.launch_registry.clone().expect("Given must set launch_registry");
+    let reg = world
+        .launch_registry
+        .clone()
+        .expect("Given must set launch_registry");
     let stack_id_str = world
         .context
         .get("launch_stack_id")

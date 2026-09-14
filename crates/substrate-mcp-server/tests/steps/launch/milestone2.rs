@@ -126,7 +126,11 @@ fn kill_pid(pid: i32, signal: libc::c_int) {
 
 /// Polls `condition` every `interval` until it returns `true` or `timeout`
 /// elapses. Returns `true` when the condition was observed in time.
-async fn wait_until(timeout: Duration, interval: Duration, mut condition: impl FnMut() -> bool) -> bool {
+async fn wait_until(
+    timeout: Duration,
+    interval: Duration,
+    mut condition: impl FnMut() -> bool,
+) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
         if condition() {
@@ -243,7 +247,10 @@ async fn spawn_real_detached_stack(world: &mut SubstrateWorld, ttl_secs: u32) ->
     std::fs::write(&profile_path, detach_profile_toml(ttl_secs)).expect("write detach profile");
     let profile_str = profile_path.display().to_string();
 
-    world.call_tool_and_store("launch_trust", serde_json::json!({ "profile_path": profile_str }));
+    world.call_tool_and_store(
+        "launch_trust",
+        serde_json::json!({ "profile_path": profile_str }),
+    );
     let trust_resp = world.last_response.clone().expect("launch_trust responds");
     assert_tool_ok(&trust_resp, "launch_trust");
 
@@ -340,9 +347,10 @@ async fn given_recorded_child_pid_recycled(world: &mut SubstrateWorld) {
         .await
         .expect("write fabricated supervisor.json");
 
-    world
-        .context
-        .insert("launch_stacks_root".to_owned(), root_path.display().to_string());
+    world.context.insert(
+        "launch_stacks_root".to_owned(),
+        root_path.display().to_string(),
+    );
     world
         .context
         .insert("launch_stack_label".to_owned(), stack_id.to_crockford());
@@ -355,15 +363,22 @@ async fn when_reaper_on_boot_evaluates(world: &mut SubstrateWorld) {
         .get("launch_stacks_root")
         .cloned()
         .expect("Given must set launch_stacks_root");
-    let report = reaper::reconcile_sweep(Path::new(&root)).await.expect("reconcile sweep");
-    world
-        .context
-        .insert("launch_recycled_count".to_owned(), report.recycled.len().to_string());
+    let report = reaper::reconcile_sweep(Path::new(&root))
+        .await
+        .expect("reconcile sweep");
+    world.context.insert(
+        "launch_recycled_count".to_owned(),
+        report.recycled.len().to_string(),
+    );
 }
 
 #[then(regex = r#"^the live start-time does not match the recorded start_epoch$"#)]
 async fn then_start_time_mismatch(world: &mut SubstrateWorld) {
-    let recycled = world.context.get("launch_recycled_count").cloned().unwrap_or_default();
+    let recycled = world
+        .context
+        .get("launch_recycled_count")
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(
         recycled, "1",
         "the reaper must classify the mismatched-epoch entry as recycled, not reaped/adopted"
@@ -377,8 +392,16 @@ async fn then_no_signal_entry_cleared(world: &mut SubstrateWorld) {
     // classification asserted in the previous Then step already proves no
     // signal was sent; verified independently here: the entry is cleared
     // (the registry directory was removed, since no survivors remain).
-    let root = world.context.get("launch_stacks_root").cloned().expect("Given sets stacks root");
-    let label = world.context.get("launch_stack_label").cloned().expect("Given sets stack label");
+    let root = world
+        .context
+        .get("launch_stacks_root")
+        .cloned()
+        .expect("Given sets stacks root");
+    let label = world
+        .context
+        .get("launch_stack_label")
+        .cloned()
+        .expect("Given sets stack label");
     let stack_dir = Path::new(&root).join(&label);
     assert!(
         !stack_dir.exists(),
@@ -391,7 +414,11 @@ async fn then_child_pid_recycled_recorded(world: &mut SubstrateWorld) {
     // `reaper.rs::apply_verdict` constructs exactly `LaunchError::ChildPidRecycled`
     // (code SUBSTRATE_LAUNCH_CHILD_PID_RECYCLED) for every `Verdict::Recycled`
     // outcome — the count asserted above is that construction site firing once.
-    let recycled = world.context.get("launch_recycled_count").cloned().unwrap_or_default();
+    let recycled = world
+        .context
+        .get("launch_recycled_count")
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(recycled, "1");
 }
 
@@ -419,9 +446,10 @@ async fn given_stack_with_detach_policy(world: &mut SubstrateWorld) {
         "launch_detach_supervisor_pid".to_owned(),
         stack.supervisor_pid.to_string(),
     );
-    world
-        .context
-        .insert("launch_detach_child_pid".to_owned(), stack.child_pid.to_string());
+    world.context.insert(
+        "launch_detach_child_pid".to_owned(),
+        stack.child_pid.to_string(),
+    );
 }
 
 #[then(regex = r#"^the detached supervisor keeps owning and supervising the children$"#)]
@@ -487,9 +515,10 @@ async fn given_oversize_control_frame(world: &mut SubstrateWorld) {
     let stack_dir = dir.path().to_path_buf();
     std::mem::forget(dir);
     let oversize_path = "x".repeat(MAX_COMMAND_FRAME_SIZE * 2);
-    world
-        .context
-        .insert("launch_frame_stack_dir".to_owned(), stack_dir.display().to_string());
+    world.context.insert(
+        "launch_frame_stack_dir".to_owned(),
+        stack_dir.display().to_string(),
+    );
     world
         .context
         .insert("launch_frame_oversize_path".to_owned(), oversize_path);
@@ -577,9 +606,11 @@ async fn then_consumer_discards_oversize_frame(world: &mut SubstrateWorld) {
             .write(true)
             .open(&fifo_path)
             .expect("open fifo write end");
-        file.write_all(&oversize_raw).expect("write oversize raw bytes");
+        file.write_all(&oversize_raw)
+            .expect("write oversize raw bytes");
         file.write_all(b"\n").expect("write resync newline");
-        file.write_all(&legitimate_json).expect("write legitimate frame");
+        file.write_all(&legitimate_json)
+            .expect("write legitimate frame");
         file.write_all(b"\n").expect("write legitimate newline");
     })
     .await
@@ -626,13 +657,17 @@ async fn setup_genuine_orphan(world: &mut SubstrateWorld, policy: DisconnectPoli
         !pid_is_alive(stack.supervisor_pid)
     })
     .await;
-    assert!(supervisor_dead, "the supervisor must actually die before the reaper sweep runs");
+    assert!(
+        supervisor_dead,
+        "the supervisor must actually die before the reaper sweep runs"
+    );
     assert!(
         pid_is_alive(stack.child_pid),
         "the child must genuinely outlive its dead supervisor for this to be a real orphan scenario"
     );
 
-    let stacks_root = launch_stacks_root().expect("XDG_STATE_HOME set by spawn_real_detached_stack");
+    let stacks_root =
+        launch_stacks_root().expect("XDG_STATE_HOME set by spawn_real_detached_stack");
     if policy == DisconnectPolicy::Shutdown {
         let stack_dir = only_stack_dir(&stacks_root);
         let mut registry = read_supervisor_registry(&stack_dir)
@@ -644,12 +679,14 @@ async fn setup_genuine_orphan(world: &mut SubstrateWorld, policy: DisconnectPoli
             .expect("rewrite the policy field only");
     }
 
-    world
-        .context
-        .insert("launch_reaper_stacks_root".to_owned(), stacks_root.display().to_string());
-    world
-        .context
-        .insert("launch_reaper_child_pid".to_owned(), stack.child_pid.to_string());
+    world.context.insert(
+        "launch_reaper_stacks_root".to_owned(),
+        stacks_root.display().to_string(),
+    );
+    world.context.insert(
+        "launch_reaper_child_pid".to_owned(),
+        stack.child_pid.to_string(),
+    );
 }
 
 #[given(regex = r#"^a durable registry entry whose child is orphaned and whose policy is detach$"#)]
@@ -657,7 +694,9 @@ async fn given_durable_entry_orphan_detach(world: &mut SubstrateWorld) {
     setup_genuine_orphan(world, DisconnectPolicy::Detach).await;
 }
 
-#[given(regex = r#"^a durable registry entry whose child is orphaned and whose policy is shutdown$"#)]
+#[given(
+    regex = r#"^a durable registry entry whose child is orphaned and whose policy is shutdown$"#
+)]
 async fn given_durable_entry_orphan_shutdown(world: &mut SubstrateWorld) {
     setup_genuine_orphan(world, DisconnectPolicy::Shutdown).await;
 }
@@ -669,21 +708,32 @@ async fn when_new_server_runs_reaper(world: &mut SubstrateWorld) {
         .get("launch_reaper_stacks_root")
         .cloned()
         .expect("Given sets stacks root");
-    let report = reaper::reconcile_sweep(Path::new(&root)).await.expect("reconcile sweep");
-    world
-        .context
-        .insert("launch_reaper_adopted_count".to_owned(), report.adopted.len().to_string());
-    world
-        .context
-        .insert("launch_reaper_reaped_count".to_owned(), report.reaped.len().to_string());
+    let report = reaper::reconcile_sweep(Path::new(&root))
+        .await
+        .expect("reconcile sweep");
+    world.context.insert(
+        "launch_reaper_adopted_count".to_owned(),
+        report.adopted.len().to_string(),
+    );
+    world.context.insert(
+        "launch_reaper_reaped_count".to_owned(),
+        report.reaped.len().to_string(),
+    );
 }
 
 #[then(
     regex = r#"^a supervisor re-establishes ownership of the child tracked by its process group$"#
 )]
 async fn then_supervisor_reestablishes_ownership(world: &mut SubstrateWorld) {
-    let adopted = world.context.get("launch_reaper_adopted_count").cloned().unwrap_or_default();
-    assert_eq!(adopted, "1", "the orphaned child must be classified Adopt, not Reap/Recycled");
+    let adopted = world
+        .context
+        .get("launch_reaper_adopted_count")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        adopted, "1",
+        "the orphaned child must be classified Adopt, not Reap/Recycled"
+    );
     let child_pid: i32 = world
         .context
         .get("launch_reaper_child_pid")
@@ -691,7 +741,10 @@ async fn then_supervisor_reestablishes_ownership(world: &mut SubstrateWorld) {
         .expect("Given sets child pid")
         .parse()
         .expect("valid pid");
-    assert!(pid_is_alive(child_pid), "Adopt never signals its child — it must still be running");
+    assert!(
+        pid_is_alive(child_pid),
+        "Adopt never signals its child — it must still be running"
+    );
 }
 
 #[then(
@@ -701,7 +754,11 @@ async fn then_orphan_adopted_recorded(world: &mut SubstrateWorld) {
     // `reaper.rs::apply_verdict` constructs exactly `LaunchError::OrphanAdopted`
     // for every `Verdict::Adopt` — the count asserted in the previous Then
     // step is that construction site firing.
-    let adopted = world.context.get("launch_reaper_adopted_count").cloned().unwrap_or_default();
+    let adopted = world
+        .context
+        .get("launch_reaper_adopted_count")
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(adopted, "1");
     // Production gap: `reconcile_sweep` does not yet repopulate a live
     // `LaunchRegistry`'s in-memory map from the durable registry it just
@@ -723,7 +780,11 @@ async fn then_orphan_adopted_recorded(world: &mut SubstrateWorld) {
     regex = r#"^the orphaned child's process group is killed with killpg SIGTERM then SIGKILL$"#
 )]
 async fn then_orphan_killpg(world: &mut SubstrateWorld) {
-    let reaped = world.context.get("launch_reaper_reaped_count").cloned().unwrap_or_default();
+    let reaped = world
+        .context
+        .get("launch_reaper_reaped_count")
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(
         reaped, "1",
         "the shutdown-policy orphan must be classified Reap (signal=true), not Adopt"
@@ -745,17 +806,30 @@ async fn then_orphan_killpg(world: &mut SubstrateWorld) {
     );
 }
 
-#[then(
-    regex = r#"^the registry entry is cleared and SUBSTRATE_LAUNCH_ORPHAN_REAPED is recorded$"#
-)]
+#[then(regex = r#"^the registry entry is cleared and SUBSTRATE_LAUNCH_ORPHAN_REAPED is recorded$"#)]
 async fn then_orphan_reaped_recorded(world: &mut SubstrateWorld) {
     // `LaunchError::OrphanReaped` (-32050) is constructed by `apply_verdict`
     // for every `Verdict::Reap` — the count asserted above is that site firing.
-    let reaped = world.context.get("launch_reaper_reaped_count").cloned().unwrap_or_default();
+    let reaped = world
+        .context
+        .get("launch_reaper_reaped_count")
+        .cloned()
+        .unwrap_or_default();
     assert_eq!(reaped, "1");
-    let root = world.context.get("launch_reaper_stacks_root").cloned().expect("Given sets stacks root");
-    let any_dirs = std::fs::read_dir(&root).into_iter().flatten().flatten().count();
-    assert_eq!(any_dirs, 0, "a fully-reaped (zero-survivor) stack has its registry directory removed");
+    let root = world
+        .context
+        .get("launch_reaper_stacks_root")
+        .cloned()
+        .expect("Given sets stacks root");
+    let any_dirs = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .count();
+    assert_eq!(
+        any_dirs, 0,
+        "a fully-reaped (zero-survivor) stack has its registry directory removed"
+    );
 }
 
 // ---- launch-orphan-ttl-expiry-auto-down (REAL) -------------------------------
@@ -768,18 +842,27 @@ async fn given_detached_stack_short_ttl(world: &mut SubstrateWorld) {
     // treats "no client activity" as the absence of any inbound control-FIFO
     // frame since boot; this scenario never sends one, by construction.
     let stack = spawn_real_detached_stack(world, 2).await;
-    world
-        .context
-        .insert("launch_ttl_supervisor_pid".to_owned(), stack.supervisor_pid.to_string());
-    world.context.insert("launch_ttl_child_pid".to_owned(), stack.child_pid.to_string());
-    world
-        .context
-        .insert("launch_ttl_state_home".to_owned(), stack.state_home.display().to_string());
+    world.context.insert(
+        "launch_ttl_supervisor_pid".to_owned(),
+        stack.supervisor_pid.to_string(),
+    );
+    world.context.insert(
+        "launch_ttl_child_pid".to_owned(),
+        stack.child_pid.to_string(),
+    );
+    world.context.insert(
+        "launch_ttl_state_home".to_owned(),
+        stack.state_home.display().to_string(),
+    );
 }
 
 #[when(regex = r#"^the orphan TTL elapses with no client re-attachment$"#)]
 async fn when_orphan_ttl_elapses(world: &mut SubstrateWorld) {
-    let state_home = world.context.get("launch_ttl_state_home").cloned().expect("Given sets state home");
+    let state_home = world
+        .context
+        .get("launch_ttl_state_home")
+        .cloned()
+        .expect("Given sets state home");
     let stacks_root = PathBuf::from(state_home).join("substrate").join("stacks");
     // Wait for `teardown()`'s `clear_registry()` (the LAST action `check_orphan_
     // ttl` takes once the TTL fires) to remove the durable registry directory —
@@ -793,7 +876,12 @@ async fn when_orphan_ttl_elapses(world: &mut SubstrateWorld) {
     // scenario's Then steps (which only assert the Stack's own outcome) don't
     // depend on.
     let down = wait_until(Duration::from_secs(10), Duration::from_millis(200), || {
-        std::fs::read_dir(&stacks_root).into_iter().flatten().flatten().count() == 0
+        std::fs::read_dir(&stacks_root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .count()
+            == 0
     })
     .await;
     assert!(
@@ -816,9 +904,17 @@ async fn then_supervisor_brings_down_clears_entry(world: &mut SubstrateWorld) {
         !pid_is_alive(child_pid),
         "teardown()'s cascade-stop must have killed every child as part of bringing the Stack down"
     );
-    let state_home = world.context.get("launch_ttl_state_home").cloned().expect("Given sets state home");
+    let state_home = world
+        .context
+        .get("launch_ttl_state_home")
+        .cloned()
+        .expect("Given sets state home");
     let stacks_root = PathBuf::from(state_home).join("substrate").join("stacks");
-    let any_dirs = std::fs::read_dir(&stacks_root).into_iter().flatten().flatten().count();
+    let any_dirs = std::fs::read_dir(&stacks_root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .count();
     assert_eq!(
         any_dirs, 0,
         "TTL teardown removes the durable registry directory (detached.rs::clear_registry)"
@@ -872,12 +968,14 @@ async fn given_insecure_control_fifo_or_dir(world: &mut SubstrateWorld) {
     std::fs::set_permissions(&stack_dir, std::fs::Permissions::from_mode(0o755))
         .expect("chmod 0755 (group/world-readable — insecure)");
 
-    world
-        .context
-        .insert("launch_insecure_stack_id".to_owned(), stack_id.to_crockford());
-    world
-        .context
-        .insert("launch_insecure_stack_dir".to_owned(), stack_dir.display().to_string());
+    world.context.insert(
+        "launch_insecure_stack_id".to_owned(),
+        stack_id.to_crockford(),
+    );
+    world.context.insert(
+        "launch_insecure_stack_dir".to_owned(),
+        stack_dir.display().to_string(),
+    );
 }
 
 #[when(regex = r#"^the supervisor starts and fstat-checks the registry$"#)]
@@ -894,9 +992,10 @@ async fn when_supervisor_fstat_checks_registry(world: &mut SubstrateWorld) {
     let err = open_stack_registry(&stack_id)
         .await
         .expect_err("a pre-existing 0755 stack dir must be rejected");
-    world
-        .context
-        .insert("launch_insecure_error_code".to_owned(), err.code().to_owned());
+    world.context.insert(
+        "launch_insecure_error_code".to_owned(),
+        err.code().to_owned(),
+    );
 }
 
 #[then(regex = r#"^startup fails with SUBSTRATE_LAUNCH_REGISTRY_INSECURE$"#)]
@@ -1070,9 +1169,7 @@ async fn then_gap_summary_delivered(world: &mut SubstrateWorld) {
     assert_milestone2_gap(world);
 }
 
-#[then(
-    regex = r#"^only the last N events are replayed in full rather than the entire backlog$"#
-)]
+#[then(regex = r#"^only the last N events are replayed in full rather than the entire backlog$"#)]
 async fn then_only_last_n_replayed(world: &mut SubstrateWorld) {
     assert_milestone2_gap(world);
 }

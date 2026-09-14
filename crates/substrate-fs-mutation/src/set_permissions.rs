@@ -176,7 +176,9 @@ pub async fn handle_fs_set_permissions(
     // pre-dispatch cancellation check is sufficient — racing it via
     // `tokio::select!` would add no value.
     if cancel.is_cancelled() {
-        return Err(SubstrateError::Cancelled { correlation_id: None });
+        return Err(SubstrateError::Cancelled {
+            correlation_id: None,
+        });
     }
 
     // Zone B: blocking chmod via nix.

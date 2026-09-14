@@ -74,7 +74,9 @@ use crate::supervisor::{
     ServiceOutcome, build_request, launch_client_id, outcome_state, spawn_service, stop_service,
     wait_ready,
 };
-use crate::supervisor_registry::{insecure, open_stack_registry, run_blocking, write_supervisor_registry};
+use crate::supervisor_registry::{
+    insecure, open_stack_registry, run_blocking, write_supervisor_registry,
+};
 
 /// Raw POSIX signal bound via `PR_SET_PDEATHSIG` for every spawned child, so the
 /// kernel kills the whole Stack if this supervisor dies (ADR-0068
@@ -129,17 +131,20 @@ pub fn parse_supervise_args(args: &[String]) -> Result<Option<SuperviseArgs>, La
     let Some(idx) = args.iter().position(|a| a == "--supervise") else {
         return Ok(None);
     };
-    let stack_id_raw = args.get(idx + 1).ok_or_else(|| LaunchError::InvalidProfile {
-        msg: "--supervise requires a <stack_id> argument".to_owned(),
-    })?;
+    let stack_id_raw = args
+        .get(idx + 1)
+        .ok_or_else(|| LaunchError::InvalidProfile {
+            msg: "--supervise requires a <stack_id> argument".to_owned(),
+        })?;
     let stack_id = stack_id_raw
         .parse::<StackId>()
         .map_err(|e| LaunchError::InvalidProfile {
             msg: format!("invalid --supervise stack_id '{stack_id_raw}': {e}"),
         })?;
-    let profile_path = flag_value(args, "--profile").ok_or_else(|| LaunchError::InvalidProfile {
-        msg: "--supervise requires a --profile <path> argument".to_owned(),
-    })?;
+    let profile_path =
+        flag_value(args, "--profile").ok_or_else(|| LaunchError::InvalidProfile {
+            msg: "--supervise requires a --profile <path> argument".to_owned(),
+        })?;
     let trust_store_path =
         flag_value(args, "--trust-store").ok_or_else(|| LaunchError::InvalidProfile {
             msg: "--supervise requires a --trust-store <path> argument".to_owned(),
@@ -170,7 +175,9 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 /// Returns the OS error from `setsid(2)` (commonly `EPERM` when the caller is
 /// already a process-group leader).
 pub fn detach_session() -> std::io::Result<()> {
-    nix::unistd::setsid().map(|_| ()).map_err(std::io::Error::from)
+    nix::unistd::setsid()
+        .map(|_| ())
+        .map_err(std::io::Error::from)
 }
 
 // ---- Reactor entry point -----------------------------------------------------
@@ -374,7 +381,12 @@ impl DetachedSupervisor {
     /// `start_epoch` is the child's kernel start-time (the PID-recycle guard the
     /// reaper compares against, ADR-0068), read on the blocking pool right after
     /// spawn; it falls back to the wall clock only when the platform read fails.
-    async fn record_child(&mut self, name: ServiceName, handle: &SubprocessHandle, outcome: ServiceOutcome) {
+    async fn record_child(
+        &mut self,
+        name: ServiceName,
+        handle: &SubprocessHandle,
+        outcome: ServiceOutcome,
+    ) {
         let pid = handle.process_group.pid();
         let start_epoch = probe_start_time(pid).await;
         self.children.insert(
@@ -395,7 +407,10 @@ impl DetachedSupervisor {
     /// child-exit poll) ahead of the periodic TTL and reconcile timers. The
     /// control receiver, signal streams, and timers are loop-local — never actor
     /// fields — so no two `select!` arm futures borrow `self` simultaneously.
-    async fn reactor_loop(mut self, mut control_rx: mpsc::Receiver<ControlFrame>) -> Result<(), LaunchError> {
+    async fn reactor_loop(
+        mut self,
+        mut control_rx: mpsc::Receiver<ControlFrame>,
+    ) -> Result<(), LaunchError> {
         use tokio::signal::unix::{SignalKind, signal};
 
         let mut control_open = true;
@@ -434,7 +449,11 @@ impl DetachedSupervisor {
 
     /// Applies one inbound control frame; returns `true` when the supervisor must
     /// exit (a `down` command). A closed channel disables the control arm.
-    async fn handle_control(&mut self, frame: Option<ControlFrame>, control_open: &mut bool) -> bool {
+    async fn handle_control(
+        &mut self,
+        frame: Option<ControlFrame>,
+        control_open: &mut bool,
+    ) -> bool {
         match frame {
             Some(ControlFrame::Down { .. }) => {
                 self.last_activity_epoch = now_epoch_secs();
@@ -576,7 +595,8 @@ impl DetachedSupervisor {
             service.health_probe.as_ref(),
         )
         .await?;
-        self.record_child(service_name.to_owned(), &handle, outcome).await;
+        self.record_child(service_name.to_owned(), &handle, outcome)
+            .await;
         self.flush_registry().await;
         Ok(())
     }
@@ -858,12 +878,16 @@ mod tests {
     use time::OffsetDateTime;
 
     use substrate_domain::errors::{SubstrateError, SubstrateResult};
-    use substrate_domain::launch::profile::{CommandSpec, DependencyRestartMode, LaunchService, StreamMux};
+    use substrate_domain::launch::profile::{
+        CommandSpec, DependencyRestartMode, LaunchService, StreamMux,
+    };
     use substrate_domain::ports::subprocess::{
         SignalTarget, SubprocessResult, SubprocessSignalName,
     };
     use substrate_domain::subprocess::errors::SubprocessError;
-    use substrate_domain::subprocess::pagination::{SubprocessSearchRequest, SubprocessSearchResult};
+    use substrate_domain::subprocess::pagination::{
+        SubprocessSearchRequest, SubprocessSearchResult,
+    };
     use substrate_domain::subprocess::request::SubprocessRequest;
     use substrate_domain::value_objects::{JobId, ProcessGroup};
 
@@ -914,7 +938,10 @@ mod tests {
             req: SubprocessRequest,
             _cancel: &dyn CancelSignal,
         ) -> Result<SubprocessHandle, SubprocessError> {
-            self.spawn_pdeath.lock().unwrap().push(req.parent_death_signal);
+            self.spawn_pdeath
+                .lock()
+                .unwrap()
+                .push(req.parent_death_signal);
             let pid = {
                 let mut c = self.counter.lock().unwrap();
                 *c += 1;
@@ -1042,7 +1069,11 @@ mod tests {
 
     #[test]
     fn parse_returns_none_without_flag() {
-        let args = vec!["substrate".to_owned(), "--config".to_owned(), "/x".to_owned()];
+        let args = vec![
+            "substrate".to_owned(),
+            "--config".to_owned(),
+            "/x".to_owned(),
+        ];
         assert!(parse_supervise_args(&args).expect("parse").is_none());
     }
 
@@ -1058,10 +1089,15 @@ mod tests {
             "--trust-store".to_owned(),
             "/state/launch-trust.toml".to_owned(),
         ];
-        let parsed = parse_supervise_args(&args).expect("parse").expect("present");
+        let parsed = parse_supervise_args(&args)
+            .expect("parse")
+            .expect("present");
         assert_eq!(parsed.stack_id.to_crockford(), id);
         assert_eq!(parsed.profile_path, PathBuf::from("/proj/.substrate.toml"));
-        assert_eq!(parsed.trust_store_path, PathBuf::from("/state/launch-trust.toml"));
+        assert_eq!(
+            parsed.trust_store_path,
+            PathBuf::from("/state/launch-trust.toml")
+        );
     }
 
     #[test]
@@ -1141,12 +1177,18 @@ mod tests {
         let mut sup = supervisor(port.clone(), dir.path());
         sup.spawn_all().await.expect("spawn_all");
         sup.flush_registry().await;
-        assert!(dir.path().join("supervisor.json").exists(), "registry written");
+        assert!(
+            dir.path().join("supervisor.json").exists(),
+            "registry written"
+        );
 
         sup.teardown().await;
 
         assert_eq!(port.cancels().len(), 2, "every child cancelled on teardown");
-        assert!(!dir.path().exists(), "registry directory cleared on teardown");
+        assert!(
+            !dir.path().exists(),
+            "registry directory cleared on teardown"
+        );
     }
 
     #[tokio::test]
@@ -1176,7 +1218,10 @@ mod tests {
         sup.profile.orphan_ttl_secs = 3600;
         sup.last_activity_epoch = now_epoch_secs();
 
-        assert!(!check_orphan_ttl(&sup).await, "fresh activity keeps the stack up");
+        assert!(
+            !check_orphan_ttl(&sup).await,
+            "fresh activity keeps the stack up"
+        );
     }
 
     #[tokio::test]
@@ -1204,8 +1249,14 @@ mod tests {
         sup.profile.orphan_ttl_secs = 1;
         sup.last_activity_epoch = 0;
 
-        assert!(check_orphan_ttl(&sup).await, "an idle detached stack past its TTL is brought down");
-        assert!(!dir.path().exists(), "TTL teardown clears the registry directory");
+        assert!(
+            check_orphan_ttl(&sup).await,
+            "an idle detached stack past its TTL is brought down"
+        );
+        assert!(
+            !dir.path().exists(),
+            "TTL teardown clears the registry directory"
+        );
     }
 
     #[tokio::test]
@@ -1216,7 +1267,10 @@ mod tests {
         sup.profile.orphan_ttl_secs = 0;
         sup.last_activity_epoch = 0;
 
-        assert!(!check_orphan_ttl(&sup).await, "orphan_ttl_secs == 0 disables detached survival timeout");
+        assert!(
+            !check_orphan_ttl(&sup).await,
+            "orphan_ttl_secs == 0 disables detached survival timeout"
+        );
     }
 
     #[tokio::test]
@@ -1272,9 +1326,18 @@ mod tests {
         let mut sup = supervisor(port.clone(), dir.path());
         sup.spawn_all().await.expect("spawn_all");
 
-        let err = sup.restart_inner("ghost").await.expect_err("unknown service rejected");
-        assert!(matches!(err, LaunchError::InvalidProfile { .. }), "got {err:?}");
-        assert!(port.cancels().is_empty(), "an unknown-service restart must not touch any live child");
+        let err = sup
+            .restart_inner("ghost")
+            .await
+            .expect_err("unknown service rejected");
+        assert!(
+            matches!(err, LaunchError::InvalidProfile { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            port.cancels().is_empty(),
+            "an unknown-service restart must not touch any live child"
+        );
     }
 
     // ---- reload_inner trust re-verification (registry.rs bug fix #3) -------
@@ -1290,15 +1353,21 @@ mod tests {
         // at all: `reload_inner` must hash-re-verify it via `load_trusted`,
         // not blindly trust it via `load_untrusted` as it did before this fix.
         let swapped = dir.path().join("swapped.substrate.toml");
-        tokio::fs::write(&swapped, "version = 1\n\n[services.db]\ncommand = [\"db\"]\n")
-            .await
-            .expect("write swapped profile");
+        tokio::fs::write(
+            &swapped,
+            "version = 1\n\n[services.db]\ncommand = [\"db\"]\n",
+        )
+        .await
+        .expect("write swapped profile");
 
         let err = sup
             .reload_inner(Some(swapped.display().to_string()))
             .await
             .expect_err("an unblessed profile swap must be rejected, not silently trusted");
-        assert!(matches!(err, LaunchError::ProfileNotTrusted { .. }), "got {err:?}");
+        assert!(
+            matches!(err, LaunchError::ProfileNotTrusted { .. }),
+            "got {err:?}"
+        );
         assert_eq!(
             sup.children.len(),
             2,
@@ -1314,10 +1383,15 @@ mod tests {
         sup.spawn_all().await.expect("spawn_all");
 
         let swapped = dir.path().join("swapped.substrate.toml");
-        tokio::fs::write(&swapped, "version = 1\n\n[services.db]\ncommand = [\"db\"]\n")
+        tokio::fs::write(
+            &swapped,
+            "version = 1\n\n[services.db]\ncommand = [\"db\"]\n",
+        )
+        .await
+        .expect("write swapped profile");
+        let canonical = tokio::fs::canonicalize(&swapped)
             .await
-            .expect("write swapped profile");
-        let canonical = tokio::fs::canonicalize(&swapped).await.expect("canonicalize");
+            .expect("canonicalize");
         // Mirrors an operator-scope auto-bless (`LaunchOperatorConfig::auto_bless_paths`):
         // the trust gate genuinely runs and genuinely passes here, rather than
         // being bypassed.
@@ -1327,7 +1401,14 @@ mod tests {
             .await
             .expect("an operator-blessed profile swap must be applied");
 
-        assert_eq!(sup.children.len(), 1, "api dropped from the new profile must be stopped");
-        assert!(sup.children.contains_key("db"), "db (kept in the new profile) survives");
+        assert_eq!(
+            sup.children.len(),
+            1,
+            "api dropped from the new profile must be stopped"
+        );
+        assert!(
+            sup.children.contains_key("db"),
+            "db (kept in the new profile) survives"
+        );
     }
 }

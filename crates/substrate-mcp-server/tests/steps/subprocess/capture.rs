@@ -118,7 +118,8 @@ async fn when_child_writes_to_stdout(world: &mut SubstrateWorld, byte_count: usi
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-        parent_death_signal: None,    };
+        parent_death_signal: None,
+    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match result {
@@ -212,7 +213,8 @@ async fn when_child_writes_to_stderr(world: &mut SubstrateWorld, byte_count: usi
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-        parent_death_signal: None,    };
+        parent_death_signal: None,
+    };
 
     let result = registry.spawn(req, &NoCancel).await;
     match result {
@@ -529,7 +531,8 @@ async fn given_spawn_tmp_file_capture(world: &mut SubstrateWorld, byte_count: us
         restart_policy: None,
         health_probe: None,
         log_rotation: None,
-        parent_death_signal: None,    };
+        parent_death_signal: None,
+    };
 
     let spawn_result = registry.spawn(req, &NoCancel).await;
     match spawn_result {

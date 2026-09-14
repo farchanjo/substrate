@@ -71,15 +71,18 @@ pub async fn load_trust_store(path: &Path) -> Result<Vec<TrustRecord>, LaunchErr
         });
     }
 
-    let bytes = tokio::fs::read(path).await.map_err(|_| LaunchError::TrustStoreInsecure {
-        path: path.display().to_string(),
-    })?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| LaunchError::TrustStoreInsecure {
+            path: path.display().to_string(),
+        })?;
     let text = String::from_utf8(bytes).map_err(|_| LaunchError::InvalidProfile {
         msg: format!("trust store {} is not valid UTF-8", path.display()),
     })?;
-    let parsed: TrustStoreFile = toml::from_str(&text).map_err(|e| LaunchError::InvalidProfile {
-        msg: format!("trust store {} is not valid TOML: {e}", path.display()),
-    })?;
+    let parsed: TrustStoreFile =
+        toml::from_str(&text).map_err(|e| LaunchError::InvalidProfile {
+            msg: format!("trust store {} is not valid TOML: {e}", path.display()),
+        })?;
     Ok(parsed.record)
 }
 
@@ -107,13 +110,17 @@ pub async fn append_bless(path: &Path, rec: TrustRecord) -> Result<(), LaunchErr
     })?;
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    tokio::fs::create_dir_all(parent).await.map_err(|_| insecure())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|_| insecure())?;
     tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(SECURE_DIR_MODE))
         .await
         .map_err(|_| insecure())?;
 
     let tmp = tmp_sibling(path);
-    tokio::fs::write(&tmp, text.as_bytes()).await.map_err(|_| insecure())?;
+    tokio::fs::write(&tmp, text.as_bytes())
+        .await
+        .map_err(|_| insecure())?;
     if tokio::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(SECURE_MODE))
         .await
         .is_err()
@@ -201,7 +208,9 @@ mod tests {
     async fn missing_store_loads_empty() {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join("launch-trust.toml");
-        let records = load_trust_store(&path).await.expect("missing store is empty");
+        let records = load_trust_store(&path)
+            .await
+            .expect("missing store is empty");
         assert!(records.is_empty());
     }
 
@@ -215,7 +224,9 @@ mod tests {
         tokio::fs::set_permissions(&path, Permissions::from_mode(0o644))
             .await
             .expect("chmod");
-        let err = load_trust_store(&path).await.expect_err("0644 must be rejected");
+        let err = load_trust_store(&path)
+            .await
+            .expect_err("0644 must be rejected");
         assert!(matches!(err, LaunchError::TrustStoreInsecure { .. }));
     }
 
@@ -227,7 +238,11 @@ mod tests {
             .await
             .expect("append");
 
-        let mode = tokio::fs::metadata(&path).await.expect("stat").permissions().mode();
+        let mode = tokio::fs::metadata(&path)
+            .await
+            .expect("stat")
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, SECURE_MODE, "appended store must be 0600");
 
         let records = load_trust_store(&path).await.expect("load");
@@ -239,8 +254,12 @@ mod tests {
     async fn append_preserves_existing_records() {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join("launch-trust.toml");
-        append_bless(&path, record("/a/.substrate.toml")).await.expect("first");
-        append_bless(&path, record("/b/.substrate.toml")).await.expect("second");
+        append_bless(&path, record("/a/.substrate.toml"))
+            .await
+            .expect("first");
+        append_bless(&path, record("/b/.substrate.toml"))
+            .await
+            .expect("second");
         let records = load_trust_store(&path).await.expect("load");
         assert_eq!(records.len(), 2);
     }
@@ -261,12 +280,18 @@ mod tests {
         let cfg = LaunchOperatorConfig {
             auto_bless_paths: vec!["/home/dev/projects".to_owned()],
         };
-        assert!(!auto_bless_allows(&cfg, Path::new("/tmp/evil/.substrate.toml")));
+        assert!(!auto_bless_allows(
+            &cfg,
+            Path::new("/tmp/evil/.substrate.toml")
+        ));
     }
 
     #[test]
     fn empty_auto_bless_list_allows_nothing() {
         let cfg = LaunchOperatorConfig::default();
-        assert!(!auto_bless_allows(&cfg, Path::new("/anything/.substrate.toml")));
+        assert!(!auto_bless_allows(
+            &cfg,
+            Path::new("/anything/.substrate.toml")
+        ));
     }
 }
