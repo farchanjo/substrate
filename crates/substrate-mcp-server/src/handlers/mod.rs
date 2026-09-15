@@ -125,6 +125,23 @@ pub(crate) async fn run_stdio_server(rt: RuntimeComponents) -> SubstrateResult<(
     let quit = running.waiting().await;
     tracing::debug!(?quit, "rmcp service loop exited");
 
+    // The transport is closed: the client is gone for good. Terminate every
+    // subprocess this server owns BEFORE draining, mirroring the signal path.
+    //
+    // Without this the children are simply reparented to `launchd` and keep
+    // running with no owner — the stack outlives the server that started it,
+    // and `on_client_disconnect = "shutdown"` degrades into a no-op. A
+    // `detach` Stack is unaffected: its children belong to the detached
+    // supervisor and never enter this registry.
+    #[cfg(feature = "subprocess")]
+    if let Some(ref port) = rt.subprocess_for_shutdown {
+        crate::signal_handlers::terminate_subprocesses_on_shutdown(
+            port,
+            u64::from(rt.config.shutdown_drain_secs),
+        )
+        .await;
+    }
+
     tracing::info!(
         drain_secs = rt.config.shutdown_drain_secs,
         "shutdown token fired — draining in-flight requests"

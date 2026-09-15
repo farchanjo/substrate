@@ -144,8 +144,13 @@ pub(crate) async fn wait_for_shutdown(
 /// Sends SIGTERM to each process group, waits `drain_secs`, then sends SIGKILL
 /// to any survivors. Silently ignores all errors (best-effort; server is
 /// shutting down anyway).
+///
+/// Called from both shutdown paths: the signal handler (SIGTERM/SIGINT) and the
+/// transport-close path in [`crate::handlers::run_stdio_server`]. Without the
+/// latter, a client that simply disappears leaves every child reparented to
+/// `launchd` and running with no owner.
 #[cfg(feature = "subprocess")]
-async fn terminate_subprocesses_on_shutdown(
+pub(crate) async fn terminate_subprocesses_on_shutdown(
     port: &Arc<dyn substrate_domain::ports::subprocess::SubprocessPort>,
     drain_secs: u64,
 ) {
