@@ -26,7 +26,7 @@
 //!
 //! References: ADR-0063, ADR-0065, ADR-0066, ADR-0068.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -52,6 +52,7 @@ use substrate_domain::ports::subprocess::SubprocessPort;
 use substrate_domain::subprocess::state::SubprocessState;
 #[cfg(test)]
 use substrate_domain::subprocess::stream::Stream;
+use substrate_domain::value_objects::pagination::PageSize;
 use substrate_domain::value_objects::stack_id::StackId;
 use substrate_domain::value_objects::{ClientId, JobId};
 
@@ -174,6 +175,29 @@ impl StackEntry {
 }
 
 // ---- Registry ---------------------------------------------------------------
+
+/// Overlays live process states onto a Stack handle snapshot.
+///
+/// A Service recorded in `job_ids` but absent from `live` has exited: its
+/// terminal handle was evicted from the subprocess registry, so the snapshot's
+/// last-known state is stale and the Service is reported `Failed`.
+///
+/// `live = None` means the subprocess port could not be asked, so the snapshot
+/// is returned untouched rather than failing every Service.
+fn reconcile_status(
+    entry: &StackEntry,
+    live: Option<&HashMap<JobId, SubprocessState>>,
+) -> StackHandle {
+    let mut handle = entry.handle.clone();
+    let Some(live) = live else {
+        return handle;
+    };
+    for (service, job) in &entry.job_ids {
+        let state = live.get(job).copied().unwrap_or(SubprocessState::Failed);
+        handle.services.insert(service.clone(), state);
+    }
+    handle
+}
 
 /// Concrete [`LaunchPort`] adapter managing in-session Stacks.
 ///
@@ -506,6 +530,30 @@ impl LaunchRegistry {
             None,
             "stack reloaded via detached supervisor".to_owned(),
         );
+    }
+
+    /// Lists this orchestrator's live jobs as `job_id -> state`.
+    ///
+    /// Returns `None` when the subprocess port cannot be reached, so the caller
+    /// can tell "nothing is alive" from "the question could not be asked".
+    ///
+    /// The listing is unpaged by client — the subprocess registry currently
+    /// ignores the `client_id` filter — so it is asked for the registry's own
+    /// 500-entry ceiling. A smaller page could omit a live Service and have it
+    /// wrongly reported `Failed`.
+    async fn live_service_states(&self) -> Option<HashMap<JobId, SubprocessState>> {
+        let client_id = launch_client_id().ok()?;
+        let (handles, _) = self
+            .subprocess
+            .list(&client_id, None, None, PageSize::new_static(500))
+            .await
+            .ok()?;
+        Some(
+            handles
+                .into_iter()
+                .map(|handle| (handle.job_id, handle.state))
+                .collect(),
+        )
     }
 }
 
@@ -996,17 +1044,29 @@ impl LaunchPort for LaunchRegistry {
     }
 
     async fn status(&self, stack_id: Option<&StackId>) -> SubstrateResult<Vec<StackHandle>> {
+        // Reconcile every Service against the live subprocess registry before
+        // answering. The Stack handle is a snapshot taken at spawn time, so a
+        // Service that has since exited keeps reporting the state it held when
+        // it died: a `Ready` Metatron dead for hours still read `Ready`, and the
+        // operator had no way to tell a live Stack from a corpse.
+        //
+        // A Service whose job is absent from the listing has exited and had its
+        // terminal handle evicted, so it is reported `Failed`. A `None` listing
+        // (the port itself failed) leaves the snapshot untouched rather than
+        // wrongly failing every Service.
+        let live = self.live_service_states().await;
+
         let handles: Vec<StackHandle> = stack_id.map_or_else(
             || {
                 self.stacks
                     .iter()
-                    .map(|e| e.value().handle.clone())
+                    .map(|e| reconcile_status(e.value(), live.as_ref()))
                     .collect()
             },
             |id| {
                 self.stacks
                     .get(id)
-                    .map(|e| e.value().handle.clone())
+                    .map(|e| reconcile_status(e.value(), live.as_ref()))
                     .into_iter()
                     .collect()
             },
@@ -1511,6 +1571,12 @@ mod tests {
 
         fn cancels(&self) -> Vec<String> {
             self.cancel_log.lock().unwrap().clone()
+        }
+
+        /// Drops every recorded handle, as the real registry does once a
+        /// terminal job passes its retention window.
+        fn forget_all(&self) {
+            self.handles.lock().unwrap().clear();
         }
     }
 
@@ -2682,6 +2748,35 @@ mod tests {
         let reg = registry(fake, dir.path());
         let handles = reg.status(None).await.expect("status");
         assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_reports_a_service_whose_job_is_gone_as_failed() {
+        // launch-status-reflects-a-service-that-exited
+        let dir = TempDir::new().expect("tempdir");
+        let fake = FakeSubprocessPort::new();
+        let reg = registry(fake.clone(), dir.path());
+        let profile = write_profile(dir.path(), THREE_TIER).await;
+
+        reg.trust(&profile).await.expect("trust");
+        let handle = reg
+            .up(&profile, None, None, &NeverCancel)
+            .await
+            .expect("up succeeds");
+
+        // While the children live, the reconciled status echoes them.
+        let live = reg.status(Some(&handle.stack_id)).await.expect("status");
+        assert_eq!(live[0].services.get("web"), Some(&SubprocessState::Ready));
+
+        // The children exit and their terminal handles are evicted, exactly as
+        // the real registry does after its retention window. A status that only
+        // echoed the spawn-time snapshot would keep reporting Ready forever.
+        fake.forget_all();
+
+        let after = reg.status(Some(&handle.stack_id)).await.expect("status");
+        assert_eq!(after[0].services.get("web"), Some(&SubprocessState::Failed));
+        assert_eq!(after[0].services.get("db"), Some(&SubprocessState::Failed));
+        assert_eq!(after[0].services.get("api"), Some(&SubprocessState::Failed));
     }
 
     #[tokio::test]
